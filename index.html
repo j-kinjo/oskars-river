@@ -1530,10 +1530,11 @@ const CGM_SOURCES = {
         headers: {'Content-Type':'application/json', 'Accept':'application/json'},
         body: JSON.stringify({ accountName: cfg.username, password: cfg.password, applicationId: appId })
       });
-      if (!r1.ok) const origin = window.location.origin;
-      const onGithub = origin.includes('github.io') || origin.startsWith('https://');
-      if (!onGithub) throw new Error('Dexcom Share requires the app to be hosted on https:// — use Nightscout/Gluroo for local testing, or host on GitHub Pages');
-      throw new Error('Dexcom auth failed — check username/password');
+      if (!r1.ok) {
+        const onGithub = window.location.origin.startsWith('https://');
+        if (!onGithub) throw new Error('Dexcom Share requires https:// hosting — deploy to GitHub Pages first, or use Nightscout/Gluroo instead');
+        throw new Error('Dexcom auth failed — check your username and password');
+      }
       const accountId = await r1.json();
       // Step 2: get sessionId
       const r2 = await fetch(`${base}/General/LoginPublisherAccountById`, {
