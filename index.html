@@ -1411,38 +1411,7 @@ function showToast(msg){
   setTimeout(()=>t.classList.remove('show'),2000);
 }
 
-// ── INIT ─────────────────────────────────────────────────────
-window.addEventListener('load',()=>{
-  viewTime=CGM_END; viewSpan=4*3600000;
-  try{
-    SESSION=JSON.parse(sessionStorage.getItem('rv3')||'[]');
-    SESSION=SESSION.filter(s=>(Date.now()-s.t)<240*60000);
-  }catch(e){}
-  const pal=palette(CGM_END);
-  document.body.style.background=pal.water1;
-  document.getElementById('loading').style.background=pal.water1||'#c8d8d0';
-
-  requestAnimationFrame(ts=>{t0=ts; requestAnimationFrame(frame);});
-  setTimeout(()=>{
-    document.getElementById('loading').classList.add('gone');
-    setTimeout(()=>document.getElementById('loading').style.display='none',700);
-  },1000);
-
-  // CGM source — auto-connect if configured, show setup if not
-  const saved = loadCGMConfig();
-  if (saved && saved.sourceId && saved.sourceId !== 'manual') {
-    // Re-use saved credentials silently
-    setTimeout(()=> startLivePolling(saved.sourceId, saved.fields), 1500);
-  } else if (!saved) {
-    // First run — show setup screen after brief delay
-    setTimeout(()=>{
-      document.body.insertAdjacentHTML('beforeend', buildSetupScreen());
-      _selectedSource = 'nightscout';
-      renderSourceFields('nightscout');
-    }, 1200);
-  }
-  // If saved.sourceId === 'manual', do nothing — demo data stays
-});
+// ── INIT ─────────────────────────────────────────────────────;
 
 // ═══════════════════════════════════════════════════════════════════════════
 //  CGM SOURCE SYSTEM
@@ -1931,6 +1900,39 @@ function openSettings() {
 }
 
 
+
+
+window.addEventListener('load',()=>{
+  viewTime=CGM_END; viewSpan=4*3600000;
+  try{
+    SESSION=JSON.parse(sessionStorage.getItem('rv3')||'[]');
+    SESSION=SESSION.filter(s=>(Date.now()-s.t)<240*60000);
+  }catch(e){}
+  const pal=palette(CGM_END);
+  document.body.style.background=pal.water1;
+  document.getElementById('loading').style.background=pal.water1||'#c8d8d0';
+
+  requestAnimationFrame(ts=>{t0=ts; requestAnimationFrame(frame);});
+  setTimeout(()=>{
+    document.getElementById('loading').classList.add('gone');
+    setTimeout(()=>document.getElementById('loading').style.display='none',700);
+  },1000);
+
+  // CGM source — auto-connect if configured, show setup if not
+  const saved = loadCGMConfig();
+  if (saved && saved.sourceId && saved.sourceId !== 'manual') {
+    // Re-use saved credentials silently
+    setTimeout(()=> startLivePolling(saved.sourceId, saved.fields), 1500);
+  } else if (!saved) {
+    // First run — show setup screen after brief delay
+    setTimeout(()=>{
+      document.body.insertAdjacentHTML('beforeend', buildSetupScreen());
+      _selectedSource = 'nightscout';
+      renderSourceFields('nightscout');
+    }, 1200);
+  }
+  // If saved.sourceId === 'manual', do nothing — demo data stays
+})
 </script>
 </body>
 </html>
