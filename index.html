@@ -1447,20 +1447,12 @@ const CGM_SOURCES = {
     },
     async _get(cfg, path) {
       const base = cfg.url.replace(/\/+$/, '');
-      // Gluroo uses api-secret header auth (from their JSON config format)
+      const sep  = path.includes('?') ? '&' : '?';
+      const url  = base + path + sep + 'token=' + cfg.token;
       let r;
-      try {
-        r = await fetch(base + path, { headers: { 'api-secret': cfg.token } });
-        if (r.ok) return r;
-      } catch(e) { /* fall through to URL token */ }
-      // Fallback: token in URL (standard Nightscout)
-      const sep = path.includes('?') ? '&' : '?';
-      try {
-        r = await fetch(base + path + sep + 'token=' + cfg.token);
-        return r;
-      } catch(e) {
-        throw new Error('Cannot reach ' + base + ' — check the URL is correct');
-      }
+      try { r = await fetch(url); }
+      catch(e) { throw new Error('Cannot reach ' + base + ' — check the URL is correct'); }
+      return r;
     },
     async fetch(cfg, count=1) {
       let r;
