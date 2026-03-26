@@ -1,0 +1,1921 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<title>Oskar's River</title>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,wght@0,200;0,300;1,200;1,300&family=DM+Mono:wght@300;400&display=swap" rel="stylesheet">
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+html,body{width:100%;height:100%;overflow:hidden;background:#c8d8d0;touch-action:none;user-select:none;-webkit-user-select:none}
+#c{position:fixed;top:0;left:0;width:100%;height:100%}
+
+/* ── HUD — minimal, ink-wash feel ── */
+#hud{position:fixed;inset:0;pointer-events:none;z-index:10}
+
+/* BG — top centre, large serif, very light */
+#bg-wrap{
+  position:absolute;
+  top:max(16px,env(safe-area-inset-top,16px));
+  left:50%;transform:translateX(-50%);
+  text-align:center;
+}
+#bg-num{
+  font-family:'Fraunces',serif;font-weight:200;font-size:54px;
+  color:rgba(40,55,50,0.7);letter-spacing:-2px;line-height:1;
+  text-shadow:0 1px 8px rgba(255,255,255,0.5);
+}
+#bg-arrow{font-size:20px;opacity:0.5;margin-left:4px;vertical-align:middle}
+#bg-unit{
+  font-family:'DM Mono',monospace;font-weight:300;font-size:9px;
+  color:rgba(40,55,50,0.4);letter-spacing:2px;text-transform:uppercase;
+  margin-top:1px;
+}
+
+/* Mana indicators — bottom corners, very subtle */
+#mana-carb{
+  position:absolute;
+  bottom:calc(max(16px,env(safe-area-inset-bottom,16px))+60px);
+  left:16px;
+}
+#mana-ins{
+  position:absolute;
+  bottom:calc(max(16px,env(safe-area-inset-bottom,16px))+60px);
+  right:16px;text-align:right;
+}
+.mana-val{
+  font-family:'Fraunces',serif;font-weight:200;font-size:28px;
+  line-height:1;letter-spacing:-1px;
+}
+.mana-label{
+  font-family:'DM Mono',monospace;font-weight:300;font-size:8px;
+  letter-spacing:1.5px;text-transform:uppercase;opacity:0.5;
+  margin-top:2px;
+}
+
+/* Time scrub bar — very thin, bottom */
+#timebar{
+  position:absolute;
+  bottom:max(16px,env(safe-area-inset-bottom,16px));
+  left:20px;right:20px;
+}
+#timetrack{height:1px;background:rgba(40,55,50,0.15);border-radius:1px;position:relative}
+#timenow{
+  position:absolute;top:-4px;
+  width:9px;height:9px;border-radius:50%;
+  background:rgba(40,55,50,0.4);
+  transform:translateX(-50%);
+  box-shadow:0 0 0 2px rgba(255,255,255,0.5);
+}
+#timelabel{
+  font-family:'DM Mono',monospace;font-size:8px;
+  color:rgba(40,55,50,0.3);letter-spacing:1px;
+  text-align:center;margin-top:6px;
+}
+
+/* ── LOG BUTTON — minimal circle ── */
+#logbtn{
+  position:fixed;
+  bottom:calc(max(16px,env(safe-area-inset-bottom,16px))+52px);
+  right:16px;
+  width:44px;height:44px;border-radius:50%;
+  border:1px solid rgba(40,55,50,0.2);
+  background:rgba(255,255,255,0.35);
+  backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px);
+  cursor:pointer;z-index:20;pointer-events:auto;
+  display:flex;align-items:center;justify-content:center;
+  transition:transform .12s,background .12s;
+  box-shadow:0 2px 12px rgba(0,0,0,0.08);
+}
+#logbtn:active{transform:scale(0.9)}
+#logbtn svg{width:20px;height:20px;opacity:0.6}
+
+/* ── LOG SHEET — ink-wash paper ── */
+#overlay{position:fixed;inset:0;z-index:28;display:none}
+#overlay.open{display:block}
+#sheet{
+  position:fixed;bottom:0;left:0;right:0;z-index:30;
+  background:rgba(240,238,228,0.97);
+  backdrop-filter:blur(20px);-webkit-backdrop-filter:blur(20px);
+  border-radius:20px 20px 0 0;
+  border-top:1px solid rgba(40,55,50,0.1);
+  padding:0 0 max(28px,env(safe-area-inset-bottom,28px));
+  transform:translateY(110%);
+  transition:transform .34s cubic-bezier(0.32,0.72,0,1);
+  pointer-events:none;
+}
+#sheet.open{transform:translateY(0);pointer-events:auto}
+.handle{width:32px;height:3px;background:rgba(40,55,50,0.18);border-radius:2px;margin:10px auto}
+.sheet-title{
+  font-family:'Fraunces',serif;font-style:italic;font-weight:200;font-size:22px;
+  color:rgba(40,55,50,0.75);text-align:center;margin:8px 0 2px;letter-spacing:-.3px;
+}
+.sheet-sub{font-family:'DM Mono',monospace;font-size:9px;color:rgba(40,55,50,0.3);
+  text-align:center;letter-spacing:1px;text-transform:uppercase;margin-bottom:18px}
+
+.type-row{display:flex;gap:8px;padding:0 18px;margin-bottom:14px}
+.tbtn{
+  flex:1;padding:12px 6px;border-radius:10px;
+  border:1px solid rgba(40,55,50,0.12);background:transparent;
+  color:rgba(40,55,50,0.4);cursor:pointer;
+  font-family:'DM Mono',monospace;font-size:10px;letter-spacing:.5px;
+  text-align:center;transition:all .15s;text-transform:uppercase;
+}
+.tbtn .ico{font-size:20px;display:block;margin-bottom:5px}
+.tbtn.sel-c{background:rgba(200,130,70,0.12);border-color:rgba(200,130,70,0.4);color:rgba(160,90,30,0.8)}
+.tbtn.sel-b{background:rgba(80,110,90,0.08);border-color:rgba(80,110,90,0.25);color:rgba(50,80,60,0.8)}
+.tbtn.sel-i{background:rgba(70,100,140,0.1);border-color:rgba(70,100,140,0.3);color:rgba(40,70,110,0.8)}
+
+.isec{display:none;padding:0 18px}
+.isec.vis{display:block}
+.irow{display:flex;align-items:center;gap:10px;margin-bottom:10px}
+.idot{width:8px;height:8px;border-radius:50%;flex-shrink:0}
+.ifield{
+  flex:1;background:rgba(255,255,255,0.6);
+  border:1px solid rgba(40,55,50,0.12);border-radius:8px;
+  padding:10px 12px;font-family:'Fraunces',serif;font-weight:200;
+  font-size:26px;color:rgba(40,55,50,0.8);outline:none;text-align:center;
+  transition:border-color .15s;
+}
+.ifield:focus{border-color:rgba(40,55,50,0.3);background:rgba(255,255,255,0.8)}
+.ifield::placeholder{color:rgba(40,55,50,0.2);font-size:16px;font-style:italic}
+.iunit{font-family:'DM Mono',monospace;font-size:10px;color:rgba(40,55,50,0.3);min-width:24px;letter-spacing:.5px}
+
+.bgchips{display:flex;gap:4px;padding:0 18px;margin-bottom:10px}
+.bgchip{
+  flex:1;padding:7px 2px;text-align:center;border-radius:7px;
+  border:1px solid rgba(40,55,50,0.1);background:transparent;
+  font-family:'DM Mono',monospace;font-size:10px;color:rgba(40,55,50,0.35);cursor:pointer;
+  transition:all .12s;
+}
+.bgchip.on{background:rgba(40,55,50,0.08);border-color:rgba(40,55,50,0.25);color:rgba(40,55,50,0.7)}
+
+.sugbox{
+  margin:0 18px 10px;padding:8px 12px;
+  background:rgba(70,100,140,0.06);border:1px solid rgba(70,100,140,0.15);
+  border-radius:8px;text-align:center;display:none;
+}
+.sugval{font-family:'Fraunces',serif;font-weight:200;font-size:24px;color:rgba(40,70,110,0.75)}
+.sugnote{font-family:'DM Mono',monospace;font-size:9px;color:rgba(70,100,140,0.45);margin-top:2px;letter-spacing:.3px}
+
+#dropbtn{
+  display:block;margin:6px 18px 0;width:calc(100% - 36px);padding:14px;
+  border-radius:10px;border:1px solid rgba(40,55,50,0.2);
+  background:rgba(40,55,50,0.08);
+  color:rgba(40,55,50,0.7);font-family:'Fraunces',serif;font-style:italic;
+  font-weight:200;font-size:17px;cursor:pointer;letter-spacing:-.2px;
+  transition:all .12s;
+}
+#dropbtn:not(:disabled):hover{background:rgba(40,55,50,0.13)}
+#dropbtn:disabled{opacity:0.3;cursor:default}
+
+/* Toast */
+#toast{
+  position:fixed;top:50%;left:50%;
+  transform:translate(-50%,-50%) scale(0.9);
+  background:rgba(240,238,228,0.95);backdrop-filter:blur(12px);
+  border:1px solid rgba(40,55,50,0.12);border-radius:12px;
+  padding:10px 20px;font-family:'Fraunces',serif;font-style:italic;font-weight:200;
+  font-size:15px;color:rgba(40,55,50,0.7);z-index:50;
+  opacity:0;pointer-events:none;transition:all .18s;text-align:center;
+}
+#toast.show{opacity:1;transform:translate(-50%,-50%) scale(1)}
+
+/* Loading */
+#loading{
+  position:fixed;inset:0;z-index:100;
+  display:flex;flex-direction:column;align-items:center;justify-content:center;gap:16px;
+  transition:opacity .6s;
+}
+#loading.gone{opacity:0;pointer-events:none}
+.ripwrap{position:relative;width:40px;height:40px}
+.rip{position:absolute;inset:0;border-radius:50%;border:1px solid rgba(40,55,50,0.25);animation:rp 2s ease-out infinite}
+.rip:nth-child(2){animation-delay:.5s}.rip:nth-child(3){animation-delay:1s}
+@keyframes rp{0%{transform:scale(.4);opacity:.8}100%{transform:scale(2.6);opacity:0}}
+.ltitle{font-family:'Fraunces',serif;font-style:italic;font-weight:200;font-size:26px;color:rgba(40,55,50,0.5);margin-top:24px}
+.lsub{font-family:'DM Mono',monospace;font-size:9px;color:rgba(40,55,50,0.25);letter-spacing:2px;text-transform:uppercase}
+</style>
+</head>
+<body>
+
+<div id="loading">
+  <div class="ripwrap"><div class="rip"></div><div class="rip"></div><div class="rip"></div></div>
+  <div class="ltitle">Oskar's River</div>
+  <div class="lsub">finding the current</div>
+</div>
+
+<canvas id="c"></canvas>
+
+<div id="hud">
+  <div id="bg-wrap">
+    <div id="bg-num">—<span id="bg-arrow"></span></div>
+    <div id="bg-unit">mmol/L</div>
+  </div>
+
+  <div id="mana-carb">
+    <div class="mana-val" id="mc-val" style="color:rgba(180,100,40,0.65)">—</div>
+    <div class="mana-label" style="color:rgba(180,100,40,0.5)">g carbs</div>
+  </div>
+
+  <div id="mana-ins">
+    <div class="mana-val" id="mi-val" style="color:rgba(50,80,130,0.65)">—</div>
+    <div class="mana-label" style="color:rgba(50,80,130,0.5)">U insulin</div>
+  </div>
+
+  <div id="timebar">
+    <div id="timetrack"><div id="timenow"></div></div>
+    <div id="timelabel">—</div>
+  </div>
+</div>
+
+<!-- Live indicator dot -->
+<div id="live-dot" style="
+  position:fixed;top:max(20px,env(safe-area-inset-top,20px));left:16px;
+  width:8px;height:8px;border-radius:50%;background:#c87832;opacity:0;
+  transition:background .5s,opacity .5s;z-index:20;pointer-events:none;
+  box-shadow:0 0 6px currentColor" title="CGM status"></div>
+
+<!-- Settings button (bottom-left) -->
+<button onclick="openSettings()" style="
+  position:fixed;
+  bottom:calc(max(16px,env(safe-area-inset-bottom,16px))+52px);
+  left:16px;width:36px;height:36px;border-radius:50%;
+  border:1px solid rgba(40,55,50,0.15);background:rgba(255,255,255,0.25);
+  backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px);
+  cursor:pointer;z-index:20;display:flex;align-items:center;justify-content:center;
+  font-size:15px;opacity:0.5;transition:opacity .15s;pointer-events:auto"
+  title="CGM settings">⚙</button>
+
+<button id="logbtn" onclick="openSheet()">
+  <svg viewBox="0 0 20 20" fill="none">
+    <!-- Water drop -->
+    <path d="M10 3 C10 3 5 9 5 12.5 A5 5 0 0 0 15 12.5 C15 9 10 3 10 3Z"
+      fill="rgba(40,55,50,0.5)"/>
+  </svg>
+</button>
+
+<div id="overlay" onclick="closeSheet()"></div>
+
+<div id="sheet">
+  <div class="handle"></div>
+  <div class="sheet-title">add to the flow</div>
+  <div class="sheet-sub">carbs · bolus · or both</div>
+
+  <div class="type-row">
+    <button class="tbtn" id="tb-c" onclick="selType('c')"><span class="ico">🌾</span>carbs</button>
+    <button class="tbtn" id="tb-b" onclick="selType('b')"><span class="ico">🍃</span>meal</button>
+    <button class="tbtn" id="tb-i" onclick="selType('i')"><span class="ico">💧</span>bolus</button>
+  </div>
+
+  <div class="isec" id="sec-c">
+    <div class="irow">
+      <div class="idot" style="background:rgba(200,130,70,0.7)"></div>
+      <input class="ifield" id="in-c" type="number" inputmode="decimal" placeholder="grams" min="0" max="200" step="1" oninput="onInp()">
+      <span class="iunit">g</span>
+    </div>
+  </div>
+  <div class="isec" id="sec-i">
+    <div class="irow">
+      <div class="idot" style="background:rgba(70,100,140,0.7)"></div>
+      <input class="ifield" id="in-i" type="number" inputmode="decimal" placeholder="units" min="0" max="20" step="0.5" oninput="onInp()">
+      <span class="iunit">U</span>
+    </div>
+  </div>
+  <div class="isec" id="sec-bg">
+    <div class="irow">
+      <div class="idot" style="background:rgba(40,55,50,0.3)"></div>
+      <input class="ifield" id="in-bg" type="number" inputmode="decimal" placeholder="BG now" min="2" max="25" step="0.1" oninput="onInp()">
+      <span class="iunit">mmol</span>
+    </div>
+    <div class="bgchips">
+      <div class="bgchip" onclick="setBG(4)">4.0</div>
+      <div class="bgchip" onclick="setBG(5.5)">5.5</div>
+      <div class="bgchip" onclick="setBG(7)">7.0</div>
+      <div class="bgchip" onclick="setBG(9)">9.0</div>
+      <div class="bgchip" onclick="setBG(12)">12.0</div>
+    </div>
+  </div>
+
+  <div class="sugbox" id="sugbox">
+    <div class="sugval" id="sugval">—</div>
+    <div class="sugnote" id="sugnote"></div>
+  </div>
+  <button id="dropbtn" onclick="commitDrop()" disabled>flow it in</button>
+</div>
+
+<div id="toast"></div>
+
+<script>
+// ═══════════════════════════════════════════════════════════════
+//  OSKAR'S RIVER  v3
+//  Mood: zenful Japanese ink-wash river
+//  Camera: rear-elevated, looking at boat from behind / above
+//  Wake = mana lines (COB warm upper, IOB cool lower)
+//  Banks = lily pads (hyper top, hypo bottom)
+//  Time of day drives full palette shift
+// ═══════════════════════════════════════════════════════════════
+
+// ── DATA PLACEHOLDER (injected at build time) ─────────────────
+const HISTORY_RAW = [{"t":1773507720000,"bg":7.5,"iob":0,"cob":0,"pen":0},{"t":1773508020000,"bg":6.8,"iob":0,"cob":0,"pen":0},{"t":1773508320000,"bg":7.3,"iob":0,"cob":0,"pen":0},{"t":1773508620000,"bg":7.5,"iob":0,"cob":0,"pen":0},{"t":1773508920000,"bg":7.0,"iob":0,"cob":0,"pen":0},{"t":1773509220000,"bg":6.4,"iob":0,"cob":0,"pen":0},{"t":1773509520000,"bg":6.3,"iob":0,"cob":0,"pen":0},{"t":1773509820000,"bg":6.2,"iob":0,"cob":0,"pen":0},{"t":1773510120000,"bg":6.3,"iob":0,"cob":7.8,"pen":0},{"t":1773510420000,"bg":6.5,"iob":0,"cob":7.7,"pen":0},{"t":1773510720000,"bg":7.1,"iob":0,"cob":7.4,"pen":0},{"t":1773511020000,"bg":8.2,"iob":0,"cob":7.0,"pen":0},{"t":1773511320000,"bg":9.3,"iob":0,"cob":6.3,"pen":0},{"t":1773511620000,"bg":9.9,"iob":0,"cob":5.5,"pen":0},{"t":1773511920000,"bg":10.4,"iob":0,"cob":4.6,"pen":0},{"t":1773512220000,"bg":10.6,"iob":0,"cob":3.6,"pen":0},{"t":1773512520000,"bg":10.8,"iob":0,"cob":2.6,"pen":0},{"t":1773512820000,"bg":10.8,"iob":0,"cob":1.8,"pen":0},{"t":1773513120000,"bg":9.7,"iob":0,"cob":1.1,"pen":0},{"t":1773513420000,"bg":8.4,"iob":0,"cob":0.7,"pen":0},{"t":1773513720000,"bg":7.9,"iob":0,"cob":0.4,"pen":0},{"t":1773514020000,"bg":9.1,"iob":0,"cob":0.2,"pen":0},{"t":1773514320000,"bg":9.6,"iob":2.85,"cob":44.2,"pen":0},{"t":1773514620000,"bg":8.8,"iob":2.84,"cob":43.3,"pen":0},{"t":1773514920000,"bg":8.5,"iob":2.83,"cob":41.7,"pen":0},{"t":1773515220000,"bg":8.3,"iob":2.8,"cob":39.2,"pen":0},{"t":1773515520000,"bg":7.8,"iob":2.78,"cob":35.7,"pen":0},{"t":1773515820000,"bg":7.4,"iob":2.73,"cob":31.2,"pen":0},{"t":1773516120000,"bg":7.2,"iob":2.69,"cob":25.9,"pen":0},{"t":1773516420000,"bg":6.8,"iob":2.62,"cob":20.2,"pen":0},{"t":1773516720000,"bg":6.2,"iob":2.56,"cob":14.8,"pen":0},{"t":1773517020000,"bg":6.3,"iob":2.48,"cob":10.1,"pen":0},{"t":1773517620000,"bg":7.3,"iob":2.3,"cob":3.8,"pen":0},{"t":1773518220000,"bg":9.3,"iob":2.09,"cob":1.0,"pen":0},{"t":1773518520000,"bg":10.5,"iob":5.49,"cob":55.5,"pen":0},{"t":1773518820000,"bg":11.3,"iob":5.34,"cob":53.8,"pen":0},{"t":1773519120000,"bg":11.5,"iob":5.23,"cob":51.3,"pen":0},{"t":1773519420000,"bg":12.5,"iob":5.06,"cob":47.6,"pen":0},{"t":1773519720000,"bg":12.8,"iob":4.94,"cob":42.7,"pen":0},{"t":1773520020000,"bg":12.8,"iob":4.75,"cob":36.6,"pen":0},{"t":1773520320000,"bg":12.3,"iob":4.62,"cob":29.7,"pen":0},{"t":1773520620000,"bg":11.8,"iob":4.42,"cob":22.6,"pen":0},{"t":1773520920000,"bg":11.5,"iob":4.28,"cob":16.2,"pen":0},{"t":1773521220000,"bg":11.4,"iob":4.06,"cob":10.7,"pen":0},{"t":1773521520000,"bg":11.4,"iob":3.9,"cob":6.6,"pen":0},{"t":1773521820000,"bg":11.4,"iob":3.67,"cob":3.7,"pen":0},{"t":1773522120000,"bg":10.2,"iob":3.5,"cob":1.9,"pen":0},{"t":1773522420000,"bg":9.1,"iob":3.25,"cob":0.9,"pen":0},{"t":1773522720000,"bg":9.2,"iob":3.08,"cob":0.4,"pen":0},{"t":1773523320000,"bg":9.5,"iob":2.67,"cob":0.1,"pen":0},{"t":1773523920000,"bg":8.7,"iob":2.29,"cob":0.0,"pen":0},{"t":1773524520000,"bg":9.9,"iob":1.94,"cob":0.0,"pen":0},{"t":1773524820000,"bg":9.7,"iob":1.75,"cob":0.0,"pen":0},{"t":1773525120000,"bg":9.9,"iob":1.63,"cob":0.0,"pen":0},{"t":1773525420000,"bg":10.6,"iob":1.45,"cob":0.0,"pen":0},{"t":1773525720000,"bg":10.7,"iob":1.34,"cob":0.0,"pen":0},{"t":1773526020000,"bg":10.7,"iob":1.19,"cob":0.0,"pen":0},{"t":1773526320000,"bg":10.7,"iob":1.09,"cob":0.0,"pen":0},{"t":1773526620000,"bg":10.8,"iob":0.95,"cob":0.0,"pen":0},{"t":1773526920000,"bg":10.9,"iob":0.87,"cob":0.0,"pen":0},{"t":1773527220000,"bg":11.0,"iob":0.75,"cob":0.0,"pen":0},{"t":1773527520000,"bg":11.4,"iob":0.67,"cob":0.0,"pen":0},{"t":1773527820000,"bg":11.4,"iob":0.57,"cob":0.0,"pen":0},{"t":1773528120000,"bg":12.2,"iob":0.51,"cob":0.0,"pen":0},{"t":1773528420000,"bg":12.8,"iob":0.43,"cob":0.0,"pen":0},{"t":1773528720000,"bg":13.7,"iob":0.39,"cob":0.0,"pen":0},{"t":1773529020000,"bg":14.1,"iob":0.77,"cob":0.0,"pen":0},{"t":1773529320000,"bg":14.4,"iob":0.73,"cob":0.0,"pen":0},{"t":1773529620000,"bg":14.8,"iob":0.67,"cob":0.0,"pen":0},{"t":1773529920000,"bg":15.0,"iob":0.63,"cob":0.0,"pen":0},{"t":1773530220000,"bg":15.0,"iob":0.58,"cob":0.0,"pen":0},{"t":1773530520000,"bg":14.2,"iob":0.54,"cob":0.0,"pen":0},{"t":1773530820000,"bg":13.9,"iob":0.5,"cob":0.0,"pen":0},{"t":1773531120000,"bg":13.7,"iob":0.47,"cob":0.0,"pen":0},{"t":1773531420000,"bg":13.8,"iob":0.44,"cob":0.0,"pen":0},{"t":1773531720000,"bg":13.9,"iob":0.41,"cob":0.0,"pen":0},{"t":1773532920000,"bg":14.2,"iob":0.32,"cob":0,"pen":0},{"t":1773533220000,"bg":13.9,"iob":0.31,"cob":0,"pen":0},{"t":1773533520000,"bg":13.4,"iob":0.29,"cob":0,"pen":0},{"t":1773533820000,"bg":13.4,"iob":0.27,"cob":0,"pen":0},{"t":1773534120000,"bg":13.3,"iob":0.25,"cob":0,"pen":0},{"t":1773534420000,"bg":13.2,"iob":0.24,"cob":0,"pen":0},{"t":1773534720000,"bg":12.6,"iob":0.22,"cob":0,"pen":0},{"t":1773535020000,"bg":12.6,"iob":0.21,"cob":0,"pen":0},{"t":1773535320000,"bg":11.8,"iob":0.19,"cob":0,"pen":0},{"t":1773535620000,"bg":11.9,"iob":0.18,"cob":0,"pen":0},{"t":1773535920000,"bg":12.5,"iob":0.16,"cob":0,"pen":0},{"t":1773536220000,"bg":12.3,"iob":0.15,"cob":0,"pen":0},{"t":1773537720000,"bg":12.4,"iob":0.09,"cob":0,"pen":0},{"t":1773538020000,"bg":12.7,"iob":0.08,"cob":0,"pen":0},{"t":1773538320000,"bg":12.8,"iob":0.07,"cob":0,"pen":0},{"t":1773538620000,"bg":12.7,"iob":0.07,"cob":0,"pen":0},{"t":1773538920000,"bg":12.3,"iob":0.06,"cob":0,"pen":0},{"t":1773539220000,"bg":12.1,"iob":0.05,"cob":0,"pen":0},{"t":1773539520000,"bg":12.0,"iob":0.04,"cob":0,"pen":0},{"t":1773539820000,"bg":11.7,"iob":0.04,"cob":0,"pen":0},{"t":1773540120000,"bg":11.5,"iob":0.03,"cob":0,"pen":0},{"t":1773541920000,"bg":9.7,"iob":0.0,"cob":0,"pen":0},{"t":1773542220000,"bg":9.3,"iob":0.0,"cob":0,"pen":0},{"t":1773542520000,"bg":9.4,"iob":0.0,"cob":0,"pen":0},{"t":1773542820000,"bg":9.3,"iob":0.0,"cob":0,"pen":0},{"t":1773543120000,"bg":9.2,"iob":0.0,"cob":0,"pen":0},{"t":1773543420000,"bg":9.3,"iob":0,"cob":0,"pen":0},{"t":1773543720000,"bg":9.0,"iob":0,"cob":0,"pen":0},{"t":1773544020000,"bg":8.9,"iob":0,"cob":0,"pen":0},{"t":1773544320000,"bg":8.7,"iob":0,"cob":0,"pen":0},{"t":1773544620000,"bg":8.2,"iob":0,"cob":0,"pen":0},{"t":1773544920000,"bg":7.3,"iob":0,"cob":0,"pen":0},{"t":1773545520000,"bg":8.0,"iob":0,"cob":0,"pen":0},{"t":1773545820000,"bg":7.6,"iob":0,"cob":0,"pen":0},{"t":1773546720000,"bg":6.9,"iob":0,"cob":0,"pen":0},{"t":1773547020000,"bg":7.2,"iob":0,"cob":0,"pen":0},{"t":1773547320000,"bg":7.4,"iob":0,"cob":0,"pen":0},{"t":1773547620000,"bg":7.4,"iob":0,"cob":0,"pen":0},{"t":1773547920000,"bg":7.3,"iob":0,"cob":0,"pen":0},{"t":1773548220000,"bg":7.2,"iob":0,"cob":0,"pen":0},{"t":1773548520000,"bg":7.0,"iob":0,"cob":0,"pen":0},{"t":1773548820000,"bg":6.8,"iob":0,"cob":0,"pen":0},{"t":1773549120000,"bg":6.7,"iob":0,"cob":0,"pen":0},{"t":1773549420000,"bg":6.1,"iob":0,"cob":0,"pen":0},{"t":1773549720000,"bg":5.5,"iob":0,"cob":0,"pen":0},{"t":1773550020000,"bg":5.4,"iob":0,"cob":0,"pen":0},{"t":1773550320000,"bg":5.4,"iob":0,"cob":0,"pen":0},{"t":1773550620000,"bg":5.4,"iob":0,"cob":0,"pen":0},{"t":1773550920000,"bg":5.4,"iob":0,"cob":0,"pen":0},{"t":1773551220000,"bg":5.4,"iob":0,"cob":0,"pen":0},{"t":1773551520000,"bg":5.4,"iob":0,"cob":0,"pen":0},{"t":1773551820000,"bg":5.4,"iob":0,"cob":0,"pen":0},{"t":1773552120000,"bg":5.4,"iob":0,"cob":0,"pen":0},{"t":1773552420000,"bg":5.4,"iob":0,"cob":0,"pen":0},{"t":1773552720000,"bg":5.4,"iob":0,"cob":0,"pen":0},{"t":1773553020000,"bg":5.4,"iob":0,"cob":0,"pen":0},{"t":1773553320000,"bg":5.4,"iob":0,"cob":0,"pen":0},{"t":1773553620000,"bg":5.6,"iob":0,"cob":0,"pen":0},{"t":1773554520000,"bg":6.6,"iob":0,"cob":0,"pen":0},{"t":1773554820000,"bg":5.8,"iob":0,"cob":0,"pen":0},{"t":1773555120000,"bg":6.1,"iob":0,"cob":0,"pen":0},{"t":1773555420000,"bg":6.6,"iob":0,"cob":0,"pen":0},{"t":1773555720000,"bg":6.9,"iob":0,"cob":0,"pen":0},{"t":1773556320000,"bg":7.0,"iob":0,"cob":0,"pen":0},{"t":1773556620000,"bg":7.3,"iob":0,"cob":0,"pen":0},{"t":1773556920000,"bg":7.9,"iob":0,"cob":0,"pen":0},{"t":1773557220000,"bg":8.8,"iob":0,"cob":0,"pen":0},{"t":1773557520000,"bg":8.4,"iob":0,"cob":0,"pen":0},{"t":1773557820000,"bg":7.4,"iob":0,"cob":0,"pen":0},{"t":1773558120000,"bg":7.4,"iob":0,"cob":0,"pen":0},{"t":1773558420000,"bg":8.4,"iob":0,"cob":0,"pen":0},{"t":1773558720000,"bg":9.0,"iob":0,"cob":0,"pen":0},{"t":1773559020000,"bg":9.7,"iob":0,"cob":0,"pen":0},{"t":1773559320000,"bg":10.0,"iob":0,"cob":0,"pen":0},{"t":1773559620000,"bg":10.4,"iob":0,"cob":0,"pen":0},{"t":1773559920000,"bg":10.6,"iob":0,"cob":0,"pen":0},{"t":1773560220000,"bg":10.9,"iob":0,"cob":0,"pen":0},{"t":1773560520000,"bg":11.0,"iob":2.45,"cob":20.7,"pen":0},{"t":1773560820000,"bg":10.9,"iob":2.45,"cob":20.3,"pen":0},{"t":1773561120000,"bg":11.2,"iob":2.43,"cob":19.6,"pen":0},{"t":1773561420000,"bg":10.6,"iob":2.42,"cob":18.6,"pen":0},{"t":1773561720000,"bg":10.1,"iob":2.39,"cob":17.0,"pen":0},{"t":1773562020000,"bg":10.0,"iob":2.36,"cob":15.0,"pen":0},{"t":1773562320000,"bg":9.6,"iob":2.31,"cob":12.6,"pen":0},{"t":1773562620000,"bg":9.5,"iob":2.27,"cob":10.0,"pen":0},{"t":1773562920000,"bg":10.0,"iob":2.21,"cob":7.4,"pen":0},{"t":1773563220000,"bg":10.4,"iob":2.15,"cob":5.1,"pen":0},{"t":1773563520000,"bg":11.3,"iob":2.07,"cob":3.3,"pen":0},{"t":1773563820000,"bg":11.4,"iob":2.01,"cob":2.0,"pen":0},{"t":1773564120000,"bg":11.3,"iob":1.91,"cob":1.1,"pen":0},{"t":1773564420000,"bg":12.4,"iob":1.83,"cob":0.5,"pen":0},{"t":1773564720000,"bg":13.7,"iob":1.72,"cob":0.2,"pen":0},{"t":1773565020000,"bg":14.6,"iob":1.63,"cob":0.1,"pen":0},{"t":1773565320000,"bg":14.9,"iob":1.52,"cob":0.0,"pen":0},{"t":1773565620000,"bg":13.9,"iob":1.44,"cob":0.0,"pen":0},{"t":1773566220000,"bg":11.6,"iob":1.26,"cob":0.0,"pen":0},{"t":1773566520000,"bg":11.8,"iob":1.16,"cob":0.0,"pen":0},{"t":1773566820000,"bg":12.2,"iob":1.09,"cob":0.0,"pen":0},{"t":1773567120000,"bg":12.5,"iob":1.0,"cob":0.0,"pen":0},{"t":1773567420000,"bg":12.7,"iob":0.94,"cob":0.0,"pen":0},{"t":1773567720000,"bg":12.9,"iob":0.85,"cob":0.0,"pen":0},{"t":1773568020000,"bg":13.4,"iob":0.79,"cob":0.0,"pen":0},{"t":1773568320000,"bg":13.5,"iob":0.71,"cob":0.0,"pen":0},{"t":1773568620000,"bg":13.9,"iob":0.66,"cob":0.0,"pen":0},{"t":1773568920000,"bg":14.0,"iob":0.59,"cob":0.0,"pen":0},{"t":1773569220000,"bg":13.8,"iob":1.64,"cob":9.7,"pen":0},{"t":1773569520000,"bg":15.0,"iob":1.57,"cob":9.5,"pen":0},{"t":1773569820000,"bg":15.7,"iob":1.53,"cob":9.2,"pen":0},{"t":1773570120000,"bg":14.1,"iob":1.46,"cob":8.6,"pen":0},{"t":1773570420000,"bg":12.5,"iob":1.41,"cob":7.9,"pen":0},{"t":1773570720000,"bg":12.8,"iob":1.34,"cob":6.9,"pen":0},{"t":1773571020000,"bg":12.9,"iob":1.29,"cob":5.7,"pen":0},{"t":1773571320000,"bg":12.8,"iob":1.22,"cob":4.5,"pen":0},{"t":1773571620000,"bg":12.9,"iob":1.17,"cob":3.3,"pen":0},{"t":1773571920000,"bg":12.5,"iob":1.1,"cob":2.2,"pen":0},{"t":1773572220000,"bg":12.3,"iob":1.05,"cob":1.4,"pen":0},{"t":1773572520000,"bg":12.0,"iob":0.98,"cob":0.8,"pen":0},{"t":1773572820000,"bg":11.5,"iob":0.93,"cob":0.4,"pen":0},{"t":1773573120000,"bg":11.5,"iob":0.86,"cob":0.2,"pen":0},{"t":1773573420000,"bg":11.0,"iob":0.81,"cob":0.1,"pen":0},{"t":1773573720000,"bg":9.4,"iob":0.74,"cob":0.0,"pen":0},{"t":1773574020000,"bg":8.4,"iob":0.7,"cob":0.0,"pen":0},{"t":1773574320000,"bg":9.5,"iob":0.64,"cob":0.0,"pen":0},{"t":1773574620000,"bg":10.4,"iob":0.6,"cob":0.0,"pen":0},{"t":1773574920000,"bg":10.4,"iob":0.55,"cob":0.0,"pen":0},{"t":1773575220000,"bg":10.2,"iob":3.37,"cob":37.2,"pen":0},{"t":1773575520000,"bg":9.8,"iob":3.31,"cob":36.2,"pen":0},{"t":1773575820000,"bg":9.2,"iob":3.27,"cob":34.6,"pen":0},{"t":1773576120000,"bg":8.1,"iob":3.2,"cob":32.2,"pen":0},{"t":1773576420000,"bg":6.0,"iob":3.14,"cob":28.9,"pen":0},{"t":1773576720000,"bg":4.3,"iob":3.05,"cob":24.7,"pen":0},{"t":1773577020000,"bg":4.5,"iob":2.99,"cob":24.9,"pen":0},{"t":1773577320000,"bg":5.4,"iob":2.88,"cob":20.1,"pen":0},{"t":1773577620000,"bg":6.2,"iob":2.8,"cob":15.5,"pen":0},{"t":1773577920000,"bg":6.5,"iob":2.68,"cob":11.5,"pen":0},{"t":1773578220000,"bg":7.5,"iob":2.59,"cob":8.3,"pen":0},{"t":1773578520000,"bg":8.3,"iob":2.45,"cob":5.9,"pen":0},{"t":1773579120000,"bg":10.8,"iob":2.19,"cob":2.7,"pen":0},{"t":1773579420000,"bg":10.7,"iob":2.08,"cob":1.8,"pen":0},{"t":1773579720000,"bg":10.0,"iob":1.92,"cob":1.1,"pen":0},{"t":1773580020000,"bg":11.5,"iob":1.82,"cob":0.7,"pen":0},{"t":1773580320000,"bg":12.7,"iob":1.67,"cob":0.4,"pen":0},{"t":1773580620000,"bg":13.3,"iob":1.57,"cob":0.2,"pen":0},{"t":1773580920000,"bg":13.8,"iob":1.44,"cob":0.1,"pen":0},{"t":1773581220000,"bg":14.0,"iob":1.45,"cob":0.0,"pen":0},{"t":1773581520000,"bg":15.0,"iob":1.33,"cob":0.0,"pen":0},{"t":1773581820000,"bg":16.1,"iob":1.25,"cob":0.0,"pen":0},{"t":1773582120000,"bg":17.0,"iob":1.14,"cob":0.0,"pen":0},{"t":1773582420000,"bg":17.8,"iob":1.06,"cob":0.0,"pen":0},{"t":1773582720000,"bg":17.2,"iob":0.96,"cob":0.0,"pen":0},{"t":1773583020000,"bg":16.2,"iob":0.9,"cob":0.0,"pen":0},{"t":1773583320000,"bg":15.4,"iob":0.81,"cob":0.0,"pen":0},{"t":1773583620000,"bg":15.9,"iob":0.75,"cob":0.0,"pen":0},{"t":1773583920000,"bg":15.9,"iob":0.67,"cob":0.0,"pen":0},{"t":1773584220000,"bg":16.2,"iob":0.61,"cob":0.0,"pen":0},{"t":1773584520000,"bg":15.4,"iob":0.54,"cob":0.0,"pen":0},{"t":1773584820000,"bg":14.8,"iob":0.49,"cob":0.0,"pen":0},{"t":1773585120000,"bg":14.9,"iob":0.43,"cob":0.0,"pen":0},{"t":1773585720000,"bg":14.5,"iob":0.33,"cob":0.0,"pen":0},{"t":1773586020000,"bg":14.8,"iob":0.29,"cob":0.0,"pen":0},{"t":1773586320000,"bg":13.6,"iob":0.24,"cob":0.0,"pen":0},{"t":1773586620000,"bg":13.3,"iob":0.21,"cob":0.0,"pen":0},{"t":1773586920000,"bg":12.9,"iob":0.17,"cob":0.0,"pen":0},{"t":1773587220000,"bg":11.3,"iob":0.14,"cob":0.0,"pen":0},{"t":1773587520000,"bg":10.3,"iob":0.11,"cob":0.0,"pen":0},{"t":1773587820000,"bg":10.8,"iob":0.09,"cob":0.0,"pen":0},{"t":1773588120000,"bg":11.4,"iob":0.07,"cob":0.0,"pen":0},{"t":1773588420000,"bg":11.8,"iob":0.05,"cob":0.0,"pen":0},{"t":1773588720000,"bg":11.9,"iob":0.04,"cob":0.0,"pen":0},{"t":1773589020000,"bg":12.7,"iob":0.03,"cob":0.0,"pen":0},{"t":1773589320000,"bg":13.9,"iob":0.03,"cob":0.0,"pen":0},{"t":1773589920000,"bg":13.3,"iob":0.02,"cob":0.0,"pen":0},{"t":1773590220000,"bg":13.8,"iob":0.02,"cob":0.0,"pen":0},{"t":1773590520000,"bg":13.8,"iob":0.02,"cob":0.0,"pen":0},{"t":1773590820000,"bg":13.7,"iob":0.02,"cob":0.0,"pen":0},{"t":1773591420000,"bg":11.7,"iob":0.01,"cob":0,"pen":0},{"t":1773591720000,"bg":12.0,"iob":0.01,"cob":0,"pen":0},{"t":1773592020000,"bg":13.0,"iob":0.01,"cob":0,"pen":0},{"t":1773592320000,"bg":14.2,"iob":2.51,"cob":34.5,"pen":0},{"t":1773592620000,"bg":14.4,"iob":2.5,"cob":33.5,"pen":0},{"t":1773592920000,"bg":13.7,"iob":2.49,"cob":32.5,"pen":0},{"t":1773593220000,"bg":13.2,"iob":2.47,"cob":30.9,"pen":0},{"t":1773593520000,"bg":12.7,"iob":2.45,"cob":28.5,"pen":0},{"t":1773593820000,"bg":11.3,"iob":2.41,"cob":25.4,"pen":0},{"t":1773594120000,"bg":10.1,"iob":2.38,"cob":21.5,"pen":0},{"t":1773594420000,"bg":9.3,"iob":2.32,"cob":17.2,"pen":0},{"t":1773594720000,"bg":8.4,"iob":2.27,"cob":13.0,"pen":0},{"t":1773595020000,"bg":7.0,"iob":2.2,"cob":9.1,"pen":0},{"t":1773595320000,"bg":6.2,"iob":2.14,"cob":6.0,"pen":0},{"t":1773595620000,"bg":6.1,"iob":2.05,"cob":3.6,"pen":0},{"t":1773595920000,"bg":6.9,"iob":1.98,"cob":2.0,"pen":0},{"t":1773596220000,"bg":7.7,"iob":1.87,"cob":1.0,"pen":0},{"t":1773596520000,"bg":8.2,"iob":1.79,"cob":0.5,"pen":0},{"t":1773597120000,"bg":9.0,"iob":1.59,"cob":0.1,"pen":0},{"t":1773597420000,"bg":9.0,"iob":1.47,"cob":0.0,"pen":0},{"t":1773597720000,"bg":9.2,"iob":1.4,"cob":0.0,"pen":0},{"t":1773598020000,"bg":9.3,"iob":1.29,"cob":0.0,"pen":0},{"t":1773598320000,"bg":10.5,"iob":1.37,"cob":5.9,"pen":0},{"t":1773598620000,"bg":11.6,"iob":1.27,"cob":5.8,"pen":0},{"t":1773598920000,"bg":13.2,"iob":1.2,"cob":5.6,"pen":0},{"t":1773599220000,"bg":15.6,"iob":1.11,"cob":5.3,"pen":0},{"t":1773599520000,"bg":18.4,"iob":1.04,"cob":4.9,"pen":0},{"t":1773599820000,"bg":18.9,"iob":0.95,"cob":4.3,"pen":0},{"t":1773600720000,"bg":17.8,"iob":0.76,"cob":2.1,"pen":0},{"t":1773601020000,"bg":17.9,"iob":0.68,"cob":1.5,"pen":0},{"t":1773601320000,"bg":17.7,"iob":0.63,"cob":0.9,"pen":0},{"t":1773602220000,"bg":18.7,"iob":1.35,"cob":0.2,"pen":0},{"t":1773602520000,"bg":19.0,"iob":1.3,"cob":0.1,"pen":0},{"t":1773602820000,"bg":18.8,"iob":1.23,"cob":0.0,"pen":0},{"t":1773603120000,"bg":19.1,"iob":1.18,"cob":0.0,"pen":0},{"t":1773603420000,"bg":19.6,"iob":1.12,"cob":0.0,"pen":0},{"t":1773603720000,"bg":19.6,"iob":1.07,"cob":0.0,"pen":0},{"t":1773604020000,"bg":18.6,"iob":1.0,"cob":0.0,"pen":0},{"t":1773604320000,"bg":17.3,"iob":0.96,"cob":0.0,"pen":0},{"t":1773604620000,"bg":17.7,"iob":0.89,"cob":0.0,"pen":0},{"t":1773604920000,"bg":18.5,"iob":0.85,"cob":0.0,"pen":0},{"t":1773605220000,"bg":18.3,"iob":0.78,"cob":0.0,"pen":0},{"t":1773605520000,"bg":18.0,"iob":0.74,"cob":0.0,"pen":0},{"t":1773605820000,"bg":17.5,"iob":0.68,"cob":0.0,"pen":0},{"t":1773606120000,"bg":16.5,"iob":0.64,"cob":0.0,"pen":0},{"t":1773606420000,"bg":14.9,"iob":0.59,"cob":0.0,"pen":0},{"t":1773606720000,"bg":15.7,"iob":0.55,"cob":0.0,"pen":0},{"t":1773607020000,"bg":16.8,"iob":0.51,"cob":0.0,"pen":0},{"t":1773607320000,"bg":17.8,"iob":0.48,"cob":0.0,"pen":0},{"t":1773607620000,"bg":17.2,"iob":0.69,"cob":0.0,"pen":0},{"t":1773607920000,"bg":17.2,"iob":0.66,"cob":0.0,"pen":0},{"t":1773608220000,"bg":17.0,"iob":0.62,"cob":0.0,"pen":0},{"t":1773608520000,"bg":16.4,"iob":0.6,"cob":0.0,"pen":0},{"t":1773608820000,"bg":15.9,"iob":0.56,"cob":0.0,"pen":0},{"t":1773609120000,"bg":16.2,"iob":0.53,"cob":0.0,"pen":0},{"t":1773609420000,"bg":16.8,"iob":4.05,"cob":0.0,"pen":0},{"t":1773610620000,"bg":15.2,"iob":3.82,"cob":0.0,"pen":0},{"t":1773610920000,"bg":14.0,"iob":3.75,"cob":0.0,"pen":0},{"t":1773611220000,"bg":14.0,"iob":3.64,"cob":0.0,"pen":0},{"t":1773611520000,"bg":14.2,"iob":3.56,"cob":0.0,"pen":0},{"t":1773611820000,"bg":14.4,"iob":3.43,"cob":0.0,"pen":0},{"t":1773612120000,"bg":14.4,"iob":3.33,"cob":0.0,"pen":0},{"t":1773612420000,"bg":14.3,"iob":3.18,"cob":0.0,"pen":0},{"t":1773612720000,"bg":14.1,"iob":3.07,"cob":0,"pen":0},{"t":1773613020000,"bg":13.8,"iob":2.89,"cob":0,"pen":0},{"t":1773613320000,"bg":13.7,"iob":2.77,"cob":0,"pen":0},{"t":1773613620000,"bg":13.7,"iob":2.57,"cob":0,"pen":0},{"t":1773614520000,"bg":12.4,"iob":2.14,"cob":0,"pen":0},{"t":1773614820000,"bg":11.6,"iob":1.97,"cob":0,"pen":0},{"t":1773615120000,"bg":11.5,"iob":1.86,"cob":0,"pen":0},{"t":1773615720000,"bg":10.4,"iob":1.6,"cob":0,"pen":0},{"t":1773616020000,"bg":9.5,"iob":1.46,"cob":0,"pen":0},{"t":1773616320000,"bg":9.8,"iob":1.37,"cob":0,"pen":0},{"t":1773616620000,"bg":9.3,"iob":1.24,"cob":0,"pen":0},{"t":1773616920000,"bg":8.8,"iob":1.15,"cob":0,"pen":0},{"t":1773617220000,"bg":8.3,"iob":1.03,"cob":0,"pen":0},{"t":1773617520000,"bg":7.8,"iob":0.96,"cob":0,"pen":0},{"t":1773617820000,"bg":6.9,"iob":0.85,"cob":9.8,"pen":0},{"t":1773618120000,"bg":6.6,"iob":0.78,"cob":9.6,"pen":0},{"t":1773618420000,"bg":7.1,"iob":0.68,"cob":9.2,"pen":0},{"t":1773618720000,"bg":7.8,"iob":0.62,"cob":8.6,"pen":0},{"t":1773619020000,"bg":8.0,"iob":0.53,"cob":7.7,"pen":0},{"t":1773619320000,"bg":8.2,"iob":0.47,"cob":6.7,"pen":0},{"t":1773619620000,"bg":8.0,"iob":0.4,"cob":5.5,"pen":0},{"t":1773619920000,"bg":7.8,"iob":0.35,"cob":4.3,"pen":0},{"t":1773620220000,"bg":7.5,"iob":0.29,"cob":3.1,"pen":0},{"t":1773620520000,"bg":7.0,"iob":0.25,"cob":2.1,"pen":0},{"t":1773620820000,"bg":6.5,"iob":0.19,"cob":1.3,"pen":0},{"t":1773621120000,"bg":6.3,"iob":0.16,"cob":0.7,"pen":0},{"t":1773621420000,"bg":6.1,"iob":0.12,"cob":0.4,"pen":0},{"t":1773621720000,"bg":5.9,"iob":0.09,"cob":0.2,"pen":0},{"t":1773622020000,"bg":5.6,"iob":0.06,"cob":0.1,"pen":0},{"t":1773622320000,"bg":5.2,"iob":0.05,"cob":0.0,"pen":0},{"t":1773622620000,"bg":5.5,"iob":0.03,"cob":0.0,"pen":0},{"t":1773622920000,"bg":5.2,"iob":0.01,"cob":0.0,"pen":0},{"t":1773623220000,"bg":4.8,"iob":0.0,"cob":0.0,"pen":0},{"t":1773623520000,"bg":4.8,"iob":0.0,"cob":0.0,"pen":0},{"t":1773623820000,"bg":4.4,"iob":0,"cob":0.0,"pen":0},{"t":1773624120000,"bg":3.6,"iob":0,"cob":0.0,"pen":0},{"t":1773624420000,"bg":3.5,"iob":0,"cob":0.0,"pen":0},{"t":1773624720000,"bg":4.0,"iob":0,"cob":0.0,"pen":0},{"t":1773625320000,"bg":4.6,"iob":0,"cob":0.0,"pen":0},{"t":1773625620000,"bg":4.5,"iob":0,"cob":0.0,"pen":0},{"t":1773625920000,"bg":4.7,"iob":0,"cob":0.0,"pen":0},{"t":1773626220000,"bg":4.9,"iob":0,"cob":0.0,"pen":0},{"t":1773626520000,"bg":5.6,"iob":0,"cob":0.0,"pen":0},{"t":1773626820000,"bg":6.2,"iob":0,"cob":0.0,"pen":0},{"t":1773627120000,"bg":5.9,"iob":0,"cob":0.0,"pen":0},{"t":1773627420000,"bg":5.4,"iob":0,"cob":0.0,"pen":0},{"t":1773627720000,"bg":5.6,"iob":0,"cob":0.0,"pen":0},{"t":1773628020000,"bg":5.5,"iob":0,"cob":0.0,"pen":0},{"t":1773628320000,"bg":5.1,"iob":0,"cob":0.0,"pen":0},{"t":1773628620000,"bg":5.1,"iob":0,"cob":0.0,"pen":0},{"t":1773628920000,"bg":4.9,"iob":0,"cob":0.0,"pen":0},{"t":1773629220000,"bg":4.9,"iob":0,"cob":0.0,"pen":0},{"t":1773629520000,"bg":5.1,"iob":0,"cob":0.0,"pen":0},{"t":1773629820000,"bg":4.8,"iob":0,"cob":0.0,"pen":0},{"t":1773630120000,"bg":4.6,"iob":0,"cob":0.0,"pen":0},{"t":1773630420000,"bg":4.5,"iob":0,"cob":0.0,"pen":0},{"t":1773630720000,"bg":4.2,"iob":0,"cob":0.0,"pen":0},{"t":1773631020000,"bg":3.8,"iob":0,"cob":0.0,"pen":0},{"t":1773631320000,"bg":3.6,"iob":0,"cob":0.0,"pen":0},{"t":1773631620000,"bg":4.1,"iob":0,"cob":0.0,"pen":0},{"t":1773631920000,"bg":5.8,"iob":0,"cob":0.0,"pen":0},{"t":1773632220000,"bg":7.9,"iob":0,"cob":0,"pen":0},{"t":1773632520000,"bg":9.8,"iob":0,"cob":0,"pen":0},{"t":1773632820000,"bg":11.2,"iob":0,"cob":0,"pen":0},{"t":1773633120000,"bg":12.6,"iob":0,"cob":0,"pen":0},{"t":1773633420000,"bg":12.6,"iob":0,"cob":0,"pen":0},{"t":1773633720000,"bg":12.2,"iob":0,"cob":0,"pen":0},{"t":1773634020000,"bg":12.1,"iob":0,"cob":0,"pen":0},{"t":1773634320000,"bg":12.5,"iob":0,"cob":0,"pen":0},{"t":1773634620000,"bg":12.2,"iob":0,"cob":0,"pen":0},{"t":1773634920000,"bg":11.9,"iob":0,"cob":0,"pen":0},{"t":1773635220000,"bg":11.6,"iob":0,"cob":0,"pen":0},{"t":1773635520000,"bg":11.0,"iob":0,"cob":0,"pen":0},{"t":1773635820000,"bg":11.0,"iob":0,"cob":0,"pen":0},{"t":1773636120000,"bg":11.0,"iob":0,"cob":0,"pen":0},{"t":1773636420000,"bg":10.8,"iob":0,"cob":0,"pen":0},{"t":1773636720000,"bg":10.8,"iob":0,"cob":0,"pen":0},{"t":1773637020000,"bg":10.2,"iob":0,"cob":0,"pen":0},{"t":1773637320000,"bg":10.4,"iob":0,"cob":0,"pen":0},{"t":1773637620000,"bg":10.7,"iob":0,"cob":0,"pen":0},{"t":1773637920000,"bg":10.7,"iob":0,"cob":0,"pen":0},{"t":1773638220000,"bg":10.7,"iob":0,"cob":0,"pen":0},{"t":1773638520000,"bg":10.5,"iob":0,"cob":0,"pen":0},{"t":1773638820000,"bg":10.4,"iob":0,"cob":0,"pen":0},{"t":1773639120000,"bg":10.3,"iob":0,"cob":0,"pen":0},{"t":1773639420000,"bg":9.8,"iob":0,"cob":0,"pen":0},{"t":1773639720000,"bg":10.2,"iob":0,"cob":0,"pen":0},{"t":1773640020000,"bg":9.7,"iob":0,"cob":0,"pen":0},{"t":1773640320000,"bg":9.3,"iob":0,"cob":0,"pen":0},{"t":1773640620000,"bg":9.0,"iob":0,"cob":0,"pen":0},{"t":1773640920000,"bg":8.7,"iob":0,"cob":0,"pen":0},{"t":1773641220000,"bg":8.7,"iob":0,"cob":0,"pen":0},{"t":1773641520000,"bg":8.9,"iob":0,"cob":0,"pen":0},{"t":1773641820000,"bg":8.5,"iob":0,"cob":0,"pen":0},{"t":1773642120000,"bg":8.3,"iob":0,"cob":0,"pen":0},{"t":1773642420000,"bg":7.4,"iob":0,"cob":0,"pen":0},{"t":1773642720000,"bg":6.8,"iob":0,"cob":0,"pen":0},{"t":1773643020000,"bg":6.5,"iob":0,"cob":0,"pen":0},{"t":1773643320000,"bg":6.3,"iob":0,"cob":0,"pen":0},{"t":1773643620000,"bg":6.3,"iob":0,"cob":0,"pen":0},{"t":1773643920000,"bg":5.8,"iob":0,"cob":0,"pen":0},{"t":1773644220000,"bg":5.6,"iob":0,"cob":0,"pen":0},{"t":1773644520000,"bg":5.4,"iob":0,"cob":0,"pen":0},{"t":1773644820000,"bg":5.6,"iob":0,"cob":0,"pen":0},{"t":1773645120000,"bg":5.3,"iob":0,"cob":0,"pen":0},{"t":1773645420000,"bg":4.3,"iob":0,"cob":0,"pen":0},{"t":1773645720000,"bg":4.1,"iob":0,"cob":0,"pen":0},{"t":1773646020000,"bg":4.1,"iob":0,"cob":0,"pen":0},{"t":1773646320000,"bg":3.7,"iob":2.35,"cob":27.4,"pen":0},{"t":1773646620000,"bg":3.9,"iob":2.34,"cob":26.7,"pen":0},{"t":1773646920000,"bg":4.9,"iob":2.33,"cob":25.7,"pen":0},{"t":1773647220000,"bg":6.8,"iob":2.31,"cob":24.0,"pen":0},{"t":1773647520000,"bg":8.7,"iob":2.28,"cob":21.7,"pen":0},{"t":1773647820000,"bg":9.5,"iob":2.25,"cob":18.8,"pen":0},{"t":1773648120000,"bg":10.5,"iob":2.2,"cob":15.4,"pen":0},{"t":1773648420000,"bg":11.2,"iob":2.16,"cob":11.9,"pen":0},{"t":1773648720000,"bg":11.4,"iob":2.09,"cob":8.6,"pen":0},{"t":1773649020000,"bg":11.5,"iob":2.04,"cob":5.8,"pen":0},{"t":1773649320000,"bg":11.2,"iob":1.96,"cob":3.6,"pen":0},{"t":1773649620000,"bg":11.4,"iob":1.9,"cob":2.1,"pen":0},{"t":1773649920000,"bg":11.2,"iob":1.79,"cob":1.1,"pen":0},{"t":1773650220000,"bg":11.0,"iob":1.72,"cob":0.5,"pen":0},{"t":1773650520000,"bg":10.6,"iob":1.61,"cob":0.2,"pen":0},{"t":1773650820000,"bg":10.4,"iob":1.53,"cob":0.1,"pen":0},{"t":1773651120000,"bg":10.4,"iob":1.42,"cob":0.0,"pen":0},{"t":1773651420000,"bg":10.5,"iob":1.35,"cob":0.0,"pen":0},{"t":1773651720000,"bg":10.3,"iob":1.24,"cob":0.0,"pen":1},{"t":1773652020000,"bg":10.4,"iob":1.18,"cob":0.0,"pen":1},{"t":1773652320000,"bg":10.2,"iob":1.08,"cob":0.0,"pen":1},{"t":1773652620000,"bg":10.8,"iob":1.82,"cob":8.0,"pen":1},{"t":1773652920000,"bg":10.9,"iob":1.73,"cob":7.8,"pen":1},{"t":1773653220000,"bg":10.3,"iob":1.67,"cob":7.5,"pen":1},{"t":1773653520000,"bg":9.4,"iob":1.58,"cob":7.2,"pen":1},{"t":1773653820000,"bg":8.4,"iob":1.52,"cob":6.6,"pen":1},{"t":1773654120000,"bg":7.4,"iob":1.43,"cob":5.9,"pen":1},{"t":1773654420000,"bg":7.5,"iob":1.37,"cob":5.0,"pen":1},{"t":1773654720000,"bg":7.7,"iob":1.28,"cob":4.0,"pen":1},{"t":1773655020000,"bg":8.1,"iob":1.23,"cob":3.0,"pen":1},{"t":1773655320000,"bg":8.7,"iob":1.14,"cob":2.1,"pen":1},{"t":1773655620000,"bg":8.8,"iob":1.08,"cob":1.4,"pen":1},{"t":1773655920000,"bg":8.1,"iob":1.0,"cob":0.8,"pen":1},{"t":1773656220000,"bg":7.5,"iob":0.94,"cob":0.5,"pen":1},{"t":1773656520000,"bg":7.7,"iob":0.86,"cob":0.2,"pen":1},{"t":1773656820000,"bg":7.4,"iob":0.8,"cob":0.1,"pen":1},{"t":1773657120000,"bg":6.8,"iob":0.72,"cob":0.0,"pen":1},{"t":1773657420000,"bg":6.4,"iob":0.67,"cob":0.0,"pen":1},{"t":1773657720000,"bg":6.1,"iob":0.6,"cob":0.0,"pen":1},{"t":1773658020000,"bg":5.8,"iob":0.55,"cob":0.0,"pen":1},{"t":1773658320000,"bg":5.3,"iob":0.49,"cob":0.0,"pen":1},{"t":1773658620000,"bg":5.0,"iob":0.45,"cob":11.3,"pen":1},{"t":1773658920000,"bg":4.8,"iob":0.4,"cob":11.0,"pen":1},{"t":1773659220000,"bg":4.6,"iob":0.37,"cob":10.6,"pen":1},{"t":1773659520000,"bg":4.3,"iob":0.32,"cob":10.1,"pen":1},{"t":1773659820000,"bg":3.9,"iob":0.3,"cob":9.3,"pen":1},{"t":1773660120000,"bg":3.8,"iob":0.26,"cob":8.3,"pen":1},{"t":1773660420000,"bg":4.3,"iob":0.24,"cob":7.0,"pen":1},{"t":1773660720000,"bg":6.1,"iob":0.22,"cob":5.7,"pen":1},{"t":1773661020000,"bg":8.7,"iob":0.2,"cob":4.3,"pen":1},{"t":1773661320000,"bg":11.5,"iob":0.18,"cob":3.0,"pen":1},{"t":1773661620000,"bg":13.6,"iob":0.16,"cob":2.0,"pen":1},{"t":1773661920000,"bg":13.2,"iob":0.14,"cob":1.2,"pen":1},{"t":1773662220000,"bg":12.4,"iob":0.13,"cob":0.7,"pen":1},{"t":1773662520000,"bg":11.9,"iob":0.11,"cob":0.3,"pen":1},{"t":1773662820000,"bg":10.5,"iob":0.1,"cob":0.2,"pen":1},{"t":1773663120000,"bg":10.2,"iob":0.08,"cob":0.1,"pen":1},{"t":1773663720000,"bg":10.5,"iob":3.3,"cob":40.6,"pen":1},{"t":1773664020000,"bg":8.9,"iob":3.28,"cob":39.2,"pen":1},{"t":1773664320000,"bg":7.1,"iob":3.23,"cob":36.8,"pen":1},{"t":1773664620000,"bg":7.5,"iob":3.2,"cob":33.5,"pen":1},{"t":1773664920000,"bg":8.8,"iob":3.13,"cob":29.3,"pen":1},{"t":1773665220000,"bg":10.5,"iob":3.08,"cob":24.3,"pen":1},{"t":1773665520000,"bg":11.5,"iob":3.0,"cob":19.0,"pen":1},{"t":1773665820000,"bg":11.8,"iob":2.93,"cob":14.0,"pen":1},{"t":1773666120000,"bg":12.0,"iob":2.83,"cob":9.5,"pen":1},{"t":1773666420000,"bg":12.5,"iob":2.75,"cob":6.0,"pen":1},{"t":1773666720000,"bg":12.2,"iob":2.62,"cob":3.5,"pen":1},{"t":1773667020000,"bg":11.5,"iob":2.53,"cob":1.9,"pen":1},{"t":1773667320000,"bg":12.6,"iob":2.38,"cob":0.9,"pen":1},{"t":1773667620000,"bg":13.1,"iob":2.27,"cob":0.4,"pen":1},{"t":1773667920000,"bg":14.8,"iob":2.12,"cob":0.2,"pen":1},{"t":1773668220000,"bg":14.7,"iob":2.01,"cob":0.1,"pen":1},{"t":1773668520000,"bg":13.1,"iob":1.86,"cob":0.0,"pen":1},{"t":1773668820000,"bg":12.2,"iob":1.77,"cob":0.0,"pen":1},{"t":1773669120000,"bg":11.7,"iob":1.63,"cob":0.0,"pen":1},{"t":1773669420000,"bg":11.4,"iob":1.54,"cob":0.0,"pen":1},{"t":1773669720000,"bg":11.3,"iob":1.41,"cob":0.0,"pen":1},{"t":1773670020000,"bg":11.0,"iob":1.33,"cob":0.0,"pen":1},{"t":1773670320000,"bg":10.7,"iob":1.21,"cob":0.0,"pen":1},{"t":1773670620000,"bg":10.4,"iob":1.13,"cob":0.0,"pen":1},{"t":1773670920000,"bg":11.3,"iob":1.02,"cob":0.0,"pen":1},{"t":1773671220000,"bg":12.1,"iob":0.95,"cob":0.0,"pen":1},{"t":1773671520000,"bg":12.6,"iob":0.85,"cob":0.0,"pen":1},{"t":1773671820000,"bg":12.5,"iob":0.78,"cob":0.0,"pen":1},{"t":1773672120000,"bg":12.0,"iob":0.69,"cob":0.0,"pen":1},{"t":1773672420000,"bg":12.9,"iob":1.08,"cob":0.0,"pen":1},{"t":1773672720000,"bg":12.2,"iob":1.0,"cob":0.0,"pen":1},{"t":1773673020000,"bg":11.8,"iob":0.94,"cob":0.0,"pen":1},{"t":1773673320000,"bg":11.3,"iob":0.87,"cob":0.0,"pen":1},{"t":1773673620000,"bg":11.3,"iob":0.82,"cob":0.0,"pen":1},{"t":1773673920000,"bg":11.3,"iob":0.75,"cob":0.0,"pen":1},{"t":1773674220000,"bg":10.8,"iob":0.7,"cob":0.0,"pen":1},{"t":1773674520000,"bg":10.5,"iob":0.64,"cob":6.4,"pen":1},{"t":1773674820000,"bg":10.2,"iob":0.6,"cob":6.3,"pen":1},{"t":1773675120000,"bg":9.0,"iob":0.54,"cob":6.1,"pen":1},{"t":1773675420000,"bg":9.3,"iob":0.5,"cob":5.7,"pen":1},{"t":1773675720000,"bg":9.7,"iob":0.46,"cob":5.3,"pen":1},{"t":1773676020000,"bg":9.4,"iob":0.42,"cob":4.6,"pen":1},{"t":1773676320000,"bg":8.3,"iob":0.38,"cob":3.9,"pen":1},{"t":1773676620000,"bg":7.8,"iob":0.34,"cob":3.1,"pen":1},{"t":1773676920000,"bg":7.8,"iob":0.31,"cob":2.3,"pen":1},{"t":1773677220000,"bg":7.4,"iob":0.29,"cob":1.6,"pen":1},{"t":1773677520000,"bg":7.6,"iob":0.27,"cob":1.0,"pen":1},{"t":1773677820000,"bg":7.7,"iob":0.24,"cob":0.6,"pen":1},{"t":1773678120000,"bg":7.5,"iob":0.23,"cob":0.3,"pen":1},{"t":1773678420000,"bg":7.5,"iob":0.21,"cob":0.2,"pen":1},{"t":1773678720000,"bg":7.7,"iob":0.2,"cob":0.1,"pen":1},{"t":1773679020000,"bg":7.8,"iob":0.18,"cob":0.0,"pen":1},{"t":1773679320000,"bg":7.3,"iob":0.17,"cob":0.0,"pen":1},{"t":1773679620000,"bg":7.0,"iob":0.16,"cob":0.0,"pen":1},{"t":1773679920000,"bg":6.8,"iob":0.15,"cob":0.0,"pen":1},{"t":1773680220000,"bg":6.5,"iob":0.18,"cob":3.9,"pen":1},{"t":1773680520000,"bg":6.2,"iob":0.17,"cob":3.9,"pen":1},{"t":1773680820000,"bg":5.8,"iob":0.16,"cob":3.7,"pen":1},{"t":1773681120000,"bg":5.8,"iob":0.15,"cob":3.5,"pen":1},{"t":1773681420000,"bg":6.0,"iob":0.14,"cob":3.2,"pen":1},{"t":1773681720000,"bg":5.9,"iob":0.13,"cob":2.9,"pen":1},{"t":1773682020000,"bg":5.9,"iob":0.12,"cob":2.4,"pen":1},{"t":1773682320000,"bg":5.8,"iob":0.11,"cob":1.9,"pen":1},{"t":1773682620000,"bg":5.9,"iob":0.1,"cob":1.4,"pen":1},{"t":1773682920000,"bg":5.7,"iob":0.09,"cob":1.0,"pen":1},{"t":1773683520000,"bg":5.8,"iob":0.07,"cob":0.4,"pen":1},{"t":1773683820000,"bg":5.4,"iob":0.07,"cob":0.2,"pen":1},{"t":1773684120000,"bg":5.7,"iob":0.06,"cob":0.1,"pen":1},{"t":1773684420000,"bg":6.1,"iob":2.35,"cob":35.8,"pen":1},{"t":1773684720000,"bg":6.2,"iob":2.34,"cob":35.1,"pen":1},{"t":1773685020000,"bg":6.7,"iob":2.32,"cob":33.9,"pen":1},{"t":1773685320000,"bg":7.2,"iob":2.31,"cob":32.1,"pen":1},{"t":1773685620000,"bg":7.5,"iob":2.27,"cob":29.4,"pen":1},{"t":1773685920000,"bg":7.9,"iob":2.24,"cob":25.9,"pen":1},{"t":1773686220000,"bg":8.0,"iob":2.19,"cob":21.8,"pen":1},{"t":1773686520000,"bg":8.7,"iob":2.16,"cob":17.2,"pen":1},{"t":1773686820000,"bg":9.6,"iob":2.09,"cob":12.8,"pen":1},{"t":1773687120000,"bg":10.5,"iob":2.04,"cob":8.9,"pen":1},{"t":1773687420000,"bg":11.2,"iob":4.51,"cob":41.1,"pen":1},{"t":1773687720000,"bg":12.7,"iob":4.44,"cob":37.8,"pen":1},{"t":1773688020000,"bg":13.0,"iob":4.33,"cob":34.8,"pen":1},{"t":1773688320000,"bg":13.3,"iob":4.23,"cob":31.5,"pen":1},{"t":1773688620000,"bg":14.1,"iob":4.09,"cob":27.8,"pen":1},{"t":1773688920000,"bg":14.1,"iob":3.97,"cob":23.7,"pen":1},{"t":1773689220000,"bg":13.5,"iob":3.82,"cob":19.1,"pen":1},{"t":1773689520000,"bg":13.8,"iob":3.68,"cob":14.6,"pen":1},{"t":1773689820000,"bg":14.3,"iob":3.53,"cob":10.4,"pen":1},{"t":1773690120000,"bg":14.9,"iob":3.38,"cob":6.9,"pen":1},{"t":1773690420000,"bg":15.3,"iob":3.22,"cob":4.2,"pen":1},{"t":1773690720000,"bg":16.1,"iob":3.05,"cob":2.4,"pen":1},{"t":1773692520000,"bg":18.0,"iob":2.05,"cob":0.0,"pen":1},{"t":1773692820000,"bg":17.7,"iob":1.9,"cob":0.0,"pen":1},{"t":1773693120000,"bg":17.3,"iob":1.75,"cob":0.0,"pen":1},{"t":1773693420000,"bg":17.0,"iob":1.87,"cob":0.0,"pen":1},{"t":1773693720000,"bg":16.8,"iob":1.73,"cob":0.0,"pen":1},{"t":1773694020000,"bg":17.2,"iob":1.61,"cob":0.0,"pen":1},{"t":1773694320000,"bg":17.3,"iob":1.48,"cob":0.0,"pen":1},{"t":1773694620000,"bg":16.5,"iob":1.37,"cob":0.0,"pen":1},{"t":1773694920000,"bg":16.0,"iob":1.25,"cob":0.0,"pen":1},{"t":1773695220000,"bg":15.7,"iob":1.15,"cob":0.0,"pen":1},{"t":1773695520000,"bg":15.5,"iob":1.04,"cob":0.0,"pen":1},{"t":1773695820000,"bg":15.2,"iob":0.95,"cob":0.0,"pen":1},{"t":1773696120000,"bg":14.7,"iob":0.85,"cob":0.0,"pen":1},{"t":1773696420000,"bg":14.7,"iob":0.77,"cob":0.0,"pen":1},{"t":1773696720000,"bg":15.1,"iob":0.68,"cob":0.0,"pen":1},{"t":1773697020000,"bg":15.1,"iob":0.61,"cob":0.0,"pen":1},{"t":1773697320000,"bg":15.3,"iob":0.53,"cob":0.0,"pen":1},{"t":1773697620000,"bg":14.8,"iob":0.47,"cob":0.0,"pen":1},{"t":1773697920000,"bg":14.4,"iob":0.41,"cob":0.0,"pen":1},{"t":1773698220000,"bg":15.0,"iob":0.36,"cob":0.0,"pen":1},{"t":1773698520000,"bg":14.9,"iob":0.31,"cob":0.0,"pen":1},{"t":1773698820000,"bg":14.9,"iob":0.27,"cob":0.0,"pen":1},{"t":1773699120000,"bg":14.8,"iob":0.23,"cob":0.0,"pen":1},{"t":1773699420000,"bg":15.4,"iob":0.2,"cob":0.0,"pen":1},{"t":1773699720000,"bg":15.5,"iob":0.17,"cob":0.0,"pen":1},{"t":1773700020000,"bg":16.0,"iob":0.14,"cob":0.0,"pen":1},{"t":1773700320000,"bg":16.1,"iob":0.12,"cob":0.0,"pen":1},{"t":1773700620000,"bg":16.3,"iob":0.1,"cob":0.0,"pen":1},{"t":1773700920000,"bg":16.3,"iob":0.09,"cob":0.0,"pen":1},{"t":1773701220000,"bg":16.5,"iob":0.07,"cob":0.0,"pen":1},{"t":1773701520000,"bg":16.6,"iob":0.07,"cob":0.0,"pen":1},{"t":1773701820000,"bg":15.6,"iob":0.06,"cob":0,"pen":1},{"t":1773702120000,"bg":16.0,"iob":0.05,"cob":0,"pen":1},{"t":1773702420000,"bg":16.4,"iob":0.05,"cob":0,"pen":1},{"t":1773702720000,"bg":16.8,"iob":0.04,"cob":0,"pen":1},{"t":1773703020000,"bg":16.0,"iob":0.04,"cob":0,"pen":1},{"t":1773703320000,"bg":15.5,"iob":0.03,"cob":0,"pen":1},{"t":1773703620000,"bg":14.9,"iob":0.03,"cob":0,"pen":1},{"t":1773703920000,"bg":14.7,"iob":0.02,"cob":0,"pen":1},{"t":1773704220000,"bg":14.2,"iob":0.02,"cob":0,"pen":1},{"t":1773704520000,"bg":14.7,"iob":0.02,"cob":0,"pen":1},{"t":1773704820000,"bg":15.6,"iob":0.01,"cob":0,"pen":1},{"t":1773705120000,"bg":15.5,"iob":0.01,"cob":0,"pen":1},{"t":1773705420000,"bg":15.4,"iob":0.01,"cob":0,"pen":1},{"t":1773705720000,"bg":15.5,"iob":0.01,"cob":0,"pen":1},{"t":1773706020000,"bg":15.5,"iob":0.3,"cob":0,"pen":1},{"t":1773706320000,"bg":15.0,"iob":0.3,"cob":0,"pen":1},{"t":1773706620000,"bg":14.8,"iob":0.3,"cob":0,"pen":1},{"t":1773706920000,"bg":14.7,"iob":0.29,"cob":0,"pen":1},{"t":1773707220000,"bg":14.9,"iob":0.29,"cob":0,"pen":1},{"t":1773707520000,"bg":15.5,"iob":0.29,"cob":0,"pen":1},{"t":1773707820000,"bg":15.4,"iob":0.28,"cob":0,"pen":1},{"t":1773708120000,"bg":15.1,"iob":0.27,"cob":0,"pen":1},{"t":1773708420000,"bg":15.1,"iob":0.27,"cob":0,"pen":1},{"t":1773708720000,"bg":15.0,"iob":0.26,"cob":0,"pen":1},{"t":1773709020000,"bg":14.9,"iob":0.25,"cob":0,"pen":1},{"t":1773709320000,"bg":14.8,"iob":0.24,"cob":0,"pen":1},{"t":1773709620000,"bg":14.9,"iob":0.23,"cob":0,"pen":1},{"t":1773709920000,"bg":13.8,"iob":0.21,"cob":0,"pen":1},{"t":1773710520000,"bg":14.8,"iob":0.19,"cob":0,"pen":1},{"t":1773710820000,"bg":14.4,"iob":0.18,"cob":0,"pen":1},{"t":1773711120000,"bg":13.8,"iob":0.17,"cob":0,"pen":1},{"t":1773711420000,"bg":12.9,"iob":0.16,"cob":0,"pen":1},{"t":1773711720000,"bg":12.9,"iob":0.15,"cob":0,"pen":1},{"t":1773712020000,"bg":12.8,"iob":0.14,"cob":0,"pen":1},{"t":1773712320000,"bg":12.6,"iob":0.13,"cob":0,"pen":1},{"t":1773712620000,"bg":12.7,"iob":0.12,"cob":0,"pen":1},{"t":1773712920000,"bg":12.1,"iob":0.11,"cob":0,"pen":1},{"t":1773713220000,"bg":11.3,"iob":0.1,"cob":0,"pen":1},{"t":1773713520000,"bg":10.7,"iob":0.09,"cob":0,"pen":1},{"t":1773713820000,"bg":11.1,"iob":0.08,"cob":0,"pen":1},{"t":1773714120000,"bg":10.5,"iob":0.08,"cob":0,"pen":1},{"t":1773714420000,"bg":9.8,"iob":0.07,"cob":0,"pen":1},{"t":1773714720000,"bg":9.4,"iob":0.06,"cob":0,"pen":1},{"t":1773715020000,"bg":9.4,"iob":0.06,"cob":0,"pen":1},{"t":1773715320000,"bg":9.3,"iob":0.05,"cob":0,"pen":1},{"t":1773715620000,"bg":8.7,"iob":0.04,"cob":0,"pen":1},{"t":1773715920000,"bg":8.5,"iob":0.04,"cob":0,"pen":1},{"t":1773716220000,"bg":8.3,"iob":0.03,"cob":0,"pen":1},{"t":1773716520000,"bg":8.4,"iob":0.03,"cob":0,"pen":1},{"t":1773716820000,"bg":7.9,"iob":0.02,"cob":0,"pen":1},{"t":1773717120000,"bg":7.4,"iob":0.02,"cob":0,"pen":1},{"t":1773717420000,"bg":7.1,"iob":0.02,"cob":0,"pen":1},{"t":1773717720000,"bg":6.9,"iob":0.01,"cob":0,"pen":1},{"t":1773718020000,"bg":6.7,"iob":0.01,"cob":0,"pen":1},{"t":1773718320000,"bg":6.7,"iob":0.01,"cob":0,"pen":1},{"t":1773718620000,"bg":6.5,"iob":0.01,"cob":0,"pen":1},{"t":1773718920000,"bg":6.4,"iob":0.0,"cob":0,"pen":1},{"t":1773719220000,"bg":6.3,"iob":0.0,"cob":0,"pen":1},{"t":1773719520000,"bg":6.2,"iob":0.0,"cob":0,"pen":1},{"t":1773719820000,"bg":5.9,"iob":0.0,"cob":0,"pen":1},{"t":1773720120000,"bg":6.1,"iob":0.0,"cob":0,"pen":1},{"t":1773720420000,"bg":5.8,"iob":0,"cob":0,"pen":1},{"t":1773720720000,"bg":5.3,"iob":0,"cob":0,"pen":1},{"t":1773721020000,"bg":4.9,"iob":0,"cob":0,"pen":1},{"t":1773721320000,"bg":4.5,"iob":0,"cob":0,"pen":1},{"t":1773721620000,"bg":4.3,"iob":0,"cob":0,"pen":1},{"t":1773721920000,"bg":4.1,"iob":0,"cob":0,"pen":1},{"t":1773722220000,"bg":3.7,"iob":0,"cob":0,"pen":1},{"t":1773722520000,"bg":4.2,"iob":0,"cob":0,"pen":1},{"t":1773722820000,"bg":4.8,"iob":0,"cob":0,"pen":1},{"t":1773723120000,"bg":5.2,"iob":0,"cob":0,"pen":1},{"t":1773723420000,"bg":6.3,"iob":0,"cob":0,"pen":1},{"t":1773723720000,"bg":7.7,"iob":0,"cob":0,"pen":1},{"t":1773724020000,"bg":7.8,"iob":0,"cob":0,"pen":1},{"t":1773724320000,"bg":8.3,"iob":0,"cob":0,"pen":1},{"t":1773724620000,"bg":7.8,"iob":0,"cob":0,"pen":1},{"t":1773724920000,"bg":7.7,"iob":0,"cob":0,"pen":1},{"t":1773725220000,"bg":7.3,"iob":0,"cob":0,"pen":1},{"t":1773725520000,"bg":7.2,"iob":0,"cob":0,"pen":1},{"t":1773725820000,"bg":6.6,"iob":0,"cob":0,"pen":1},{"t":1773726120000,"bg":6.3,"iob":0,"cob":0,"pen":1},{"t":1773726420000,"bg":6.3,"iob":0,"cob":0,"pen":1},{"t":1773726720000,"bg":6.1,"iob":0,"cob":0,"pen":1},{"t":1773727020000,"bg":5.7,"iob":0,"cob":0,"pen":1},{"t":1773727620000,"bg":4.5,"iob":0,"cob":0,"pen":1},{"t":1773727920000,"bg":4.9,"iob":0,"cob":0,"pen":1},{"t":1773728220000,"bg":5.7,"iob":0,"cob":0,"pen":1},{"t":1773728520000,"bg":5.7,"iob":0,"cob":0,"pen":1},{"t":1773728820000,"bg":6.2,"iob":0,"cob":0,"pen":1},{"t":1773729120000,"bg":6.3,"iob":0,"cob":0,"pen":1},{"t":1773729420000,"bg":6.3,"iob":0,"cob":0,"pen":1},{"t":1773729720000,"bg":6.3,"iob":0,"cob":0,"pen":1},{"t":1773730020000,"bg":6.2,"iob":0,"cob":0,"pen":1},{"t":1773730320000,"bg":6.1,"iob":0,"cob":0,"pen":1},{"t":1773730620000,"bg":6.3,"iob":0,"cob":0,"pen":1},{"t":1773730920000,"bg":6.2,"iob":0,"cob":0,"pen":1},{"t":1773731220000,"bg":6.1,"iob":0,"cob":0,"pen":1},{"t":1773731520000,"bg":6.1,"iob":0,"cob":0,"pen":1},{"t":1773731820000,"bg":6.1,"iob":0,"cob":0,"pen":1},{"t":1773732120000,"bg":5.9,"iob":2.55,"cob":25.1,"pen":1},{"t":1773732720000,"bg":5.9,"iob":2.53,"cob":23.8,"pen":1},{"t":1773733020000,"bg":5.5,"iob":2.52,"cob":22.5,"pen":1},{"t":1773733320000,"bg":5.6,"iob":2.48,"cob":20.7,"pen":1},{"t":1773733620000,"bg":5.9,"iob":2.46,"cob":18.2,"pen":1},{"t":1773733920000,"bg":6.0,"iob":2.4,"cob":15.3,"pen":1},{"t":1773734220000,"bg":7.0,"iob":2.36,"cob":12.1,"pen":1},{"t":1773734520000,"bg":8.0,"iob":2.29,"cob":9.0,"pen":1},{"t":1773734820000,"bg":8.8,"iob":2.24,"cob":6.2,"pen":1},{"t":1773735120000,"bg":10.2,"iob":2.16,"cob":4.0,"pen":1},{"t":1773735420000,"bg":11.2,"iob":2.09,"cob":2.4,"pen":1},{"t":1773735720000,"bg":12.5,"iob":1.99,"cob":1.3,"pen":1},{"t":1773736020000,"bg":13.1,"iob":1.91,"cob":0.7,"pen":1},{"t":1773736320000,"bg":13.3,"iob":1.78,"cob":0.3,"pen":1},{"t":1773736620000,"bg":13.7,"iob":1.7,"cob":0.1,"pen":1},{"t":1773736920000,"bg":14.0,"iob":1.58,"cob":0.0,"pen":1},{"t":1773737220000,"bg":14.5,"iob":1.5,"cob":0.0,"pen":1},{"t":1773737520000,"bg":14.7,"iob":1.39,"cob":0.0,"pen":1},{"t":1773737820000,"bg":14.8,"iob":1.31,"cob":0.0,"pen":1},{"t":1773738120000,"bg":14.9,"iob":1.21,"cob":0.0,"pen":1},{"t":1773738420000,"bg":14.7,"iob":1.14,"cob":0.0,"pen":1},{"t":1773738720000,"bg":14.5,"iob":1.04,"cob":0.0,"pen":1},{"t":1773739020000,"bg":14.7,"iob":0.98,"cob":0.0,"pen":1},{"t":1773739320000,"bg":14.4,"iob":0.89,"cob":0.0,"pen":1},{"t":1773739620000,"bg":14.0,"iob":0.83,"cob":0.0,"pen":1},{"t":1773739920000,"bg":13.5,"iob":0.74,"cob":0.0,"pen":1},{"t":1773740220000,"bg":13.5,"iob":0.69,"cob":0.0,"pen":1},{"t":1773740520000,"bg":13.3,"iob":0.61,"cob":0.0,"pen":1},{"t":1773740820000,"bg":12.7,"iob":0.56,"cob":0.0,"pen":1},{"t":1773741120000,"bg":12.4,"iob":0.5,"cob":0.0,"pen":1},{"t":1773741420000,"bg":11.8,"iob":0.45,"cob":0.0,"pen":1},{"t":1773741720000,"bg":11.3,"iob":0.39,"cob":0.0,"pen":1},{"t":1773742020000,"bg":11.6,"iob":0.35,"cob":0.0,"pen":1},{"t":1773742320000,"bg":11.4,"iob":0.3,"cob":0.0,"pen":1},{"t":1773742620000,"bg":10.6,"iob":0.26,"cob":0.0,"pen":1},{"t":1773742920000,"bg":10.4,"iob":0.22,"cob":0.0,"pen":1},{"t":1773743220000,"bg":9.5,"iob":0.19,"cob":0.0,"pen":1},{"t":1773743520000,"bg":9.4,"iob":0.15,"cob":0.0,"pen":1},{"t":1773743820000,"bg":8.7,"iob":0.43,"cob":17.7,"pen":1},{"t":1773744120000,"bg":8.1,"iob":0.39,"cob":17.4,"pen":1},{"t":1773744420000,"bg":7.2,"iob":0.37,"cob":16.8,"pen":1},{"t":1773744720000,"bg":6.6,"iob":0.35,"cob":15.9,"pen":1},{"t":1773745020000,"bg":6.1,"iob":0.33,"cob":14.6,"pen":1},{"t":1773745320000,"bg":5.8,"iob":0.31,"cob":12.9,"pen":1},{"t":1773745620000,"bg":5.2,"iob":0.3,"cob":10.8,"pen":1},{"t":1773745920000,"bg":5.1,"iob":0.28,"cob":8.5,"pen":1},{"t":1773746220000,"bg":5.1,"iob":0.27,"cob":6.4,"pen":1},{"t":1773746520000,"bg":4.9,"iob":0.26,"cob":4.4,"pen":1},{"t":1773746820000,"bg":4.7,"iob":0.25,"cob":2.8,"pen":1},{"t":1773747120000,"bg":4.8,"iob":0.25,"cob":1.7,"pen":1},{"t":1773747420000,"bg":5.4,"iob":0.23,"cob":0.9,"pen":1},{"t":1773747720000,"bg":5.5,"iob":0.22,"cob":0.5,"pen":1},{"t":1773748020000,"bg":6.0,"iob":0.21,"cob":0.2,"pen":1},{"t":1773748320000,"bg":6.3,"iob":2.8,"cob":34.7,"pen":1},{"t":1773748620000,"bg":5.9,"iob":2.77,"cob":33.7,"pen":1},{"t":1773748920000,"bg":6.6,"iob":2.75,"cob":32.2,"pen":1},{"t":1773749220000,"bg":6.9,"iob":2.71,"cob":29.9,"pen":1},{"t":1773749520000,"bg":7.4,"iob":2.67,"cob":26.8,"pen":1},{"t":1773749820000,"bg":9.0,"iob":2.61,"cob":23.0,"pen":1},{"t":1773750120000,"bg":9.9,"iob":2.57,"cob":18.6,"pen":1},{"t":1773750420000,"bg":10.0,"iob":2.49,"cob":14.2,"pen":1},{"t":1773750720000,"bg":9.7,"iob":2.43,"cob":10.1,"pen":1},{"t":1773751020000,"bg":9.7,"iob":2.33,"cob":6.7,"pen":1},{"t":1773751320000,"bg":10.2,"iob":2.26,"cob":4.1,"pen":1},{"t":1773751620000,"bg":10.3,"iob":2.15,"cob":2.3,"pen":1},{"t":1773751920000,"bg":11.2,"iob":2.07,"cob":1.2,"pen":1},{"t":1773752220000,"bg":11.5,"iob":1.94,"cob":0.6,"pen":1},{"t":1773752520000,"bg":12.0,"iob":1.84,"cob":0.2,"pen":1},{"t":1773752820000,"bg":12.8,"iob":1.71,"cob":0.1,"pen":1},{"t":1773753120000,"bg":13.7,"iob":1.62,"cob":0.0,"pen":1},{"t":1773753420000,"bg":14.2,"iob":1.5,"cob":0.0,"pen":1},{"t":1773753720000,"bg":14.5,"iob":1.42,"cob":0.0,"pen":1},{"t":1773754020000,"bg":15.3,"iob":1.35,"cob":0.0,"pen":1},{"t":1773754320000,"bg":15.5,"iob":1.28,"cob":0.0,"pen":1},{"t":1773754620000,"bg":16.0,"iob":1.17,"cob":0.0,"pen":1},{"t":1773754920000,"bg":16.5,"iob":1.1,"cob":0.0,"pen":1},{"t":1773755220000,"bg":17.2,"iob":1.0,"cob":0.0,"pen":1},{"t":1773755520000,"bg":17.5,"iob":0.93,"cob":0.0,"pen":1},{"t":1773755820000,"bg":17.9,"iob":0.84,"cob":0.0,"pen":1},{"t":1773756120000,"bg":17.9,"iob":0.78,"cob":0.0,"pen":1},{"t":1773756420000,"bg":17.9,"iob":0.7,"cob":0.0,"pen":1},{"t":1773756720000,"bg":17.9,"iob":0.65,"cob":0.0,"pen":1},{"t":1773757020000,"bg":17.9,"iob":0.57,"cob":0.0,"pen":1},{"t":1773757320000,"bg":17.4,"iob":0.52,"cob":0.0,"pen":1},{"t":1773757620000,"bg":16.5,"iob":0.51,"cob":0.0,"pen":1},{"t":1773757920000,"bg":16.6,"iob":0.46,"cob":0.0,"pen":1},{"t":1773758220000,"bg":16.5,"iob":0.4,"cob":0.0,"pen":1},{"t":1773758520000,"bg":16.5,"iob":0.37,"cob":0.0,"pen":1},{"t":1773758820000,"bg":16.2,"iob":0.32,"cob":0.0,"pen":1},{"t":1773759120000,"bg":16.3,"iob":0.28,"cob":0.0,"pen":1},{"t":1773759420000,"bg":14.7,"iob":0.24,"cob":0.0,"pen":1},{"t":1773759720000,"bg":12.8,"iob":0.21,"cob":0.0,"pen":1},{"t":1773760020000,"bg":12.0,"iob":0.17,"cob":0.0,"pen":1},{"t":1773760320000,"bg":10.3,"iob":0.15,"cob":0.0,"pen":1},{"t":1773760620000,"bg":8.6,"iob":0.12,"cob":0.0,"pen":1},{"t":1773760920000,"bg":7.0,"iob":0.1,"cob":11.3,"pen":1},{"t":1773761220000,"bg":6.3,"iob":0.08,"cob":11.0,"pen":1},{"t":1773761520000,"bg":5.6,"iob":0.07,"cob":10.6,"pen":1},{"t":1773761820000,"bg":5.9,"iob":0.06,"cob":10.1,"pen":1},{"t":1773762120000,"bg":6.9,"iob":0.05,"cob":9.3,"pen":1},{"t":1773762420000,"bg":8.5,"iob":0.04,"cob":8.3,"pen":1},{"t":1773762720000,"bg":9.5,"iob":0.04,"cob":7.0,"pen":1},{"t":1773763020000,"bg":10.4,"iob":0.04,"cob":5.6,"pen":1},{"t":1773763320000,"bg":10.5,"iob":0.03,"cob":4.3,"pen":1},{"t":1773763620000,"bg":10.7,"iob":0.03,"cob":3.0,"pen":1},{"t":1773764220000,"bg":10.8,"iob":0.03,"cob":1.2,"pen":1},{"t":1773764520000,"bg":10.5,"iob":0.02,"cob":0.7,"pen":1},{"t":1773764820000,"bg":9.8,"iob":0.02,"cob":0.3,"pen":1},{"t":1773765120000,"bg":9.3,"iob":0.02,"cob":0.2,"pen":1},{"t":1773765420000,"bg":9.2,"iob":0.02,"cob":0.1,"pen":1},{"t":1773766020000,"bg":7.4,"iob":0.01,"cob":0.0,"pen":1}];
+const BOLUS_EVENTS = [{"t":1773760920000,"c":11.3,"u":0.0},{"t":1773757380000,"c":0.0,"u":0.05},{"t":1773753780000,"c":0.0,"u":0.05},{"t":1773748080000,"c":35.5,"u":2.6},{"t":1773743760000,"c":18.0,"u":0.3},{"t":1773732060000,"c":25.5,"u":2.55},{"t":1773705780000,"c":0.0,"u":0.3},{"t":1773693240000,"c":0.0,"u":0.25},{"t":1773687180000,"c":36.3,"u":2.55},{"t":1773684360000,"c":36.3,"u":2.3},{"t":1773680160000,"c":4.0,"u":0.05},{"t":1773674460000,"c":6.5,"u":0.0},{"t":1773672360000,"c":0.0,"u":0.45},{"t":1773663300000,"c":42.3,"u":3.25},{"t":1773658620000,"c":11.3,"u":0.0},{"t":1773652620000,"c":8.0,"u":0.8},{"t":1773646140000,"c":28.0,"u":2.35},{"t":1773617640000,"c":10.0,"u":0.0},{"t":1773609240000,"c":0.0,"u":3.55},{"t":1773607440000,"c":0.0,"u":0.25},{"t":1773601440000,"c":0.0,"u":0.9},{"t":1773598260000,"c":6.0,"u":0.15},{"t":1773592320000,"c":34.5,"u":2.5},{"t":1773581160000,"c":0.0,"u":0.1},{"t":1773576840000,"c":5.0,"u":0.0},{"t":1773574980000,"c":38.2,"u":2.85},{"t":1773569100000,"c":9.9,"u":1.1},{"t":1773560460000,"c":21.0,"u":2.45},{"t":1773528780000,"c":0.0,"u":0.45},{"t":1773518280000,"c":56.5,"u":3.5},{"t":1773514200000,"c":45.0,"u":2.85},{"t":1773510000000,"c":8.0,"u":0.0}];
+const POD_PAUSE_T  = 1773651600000;
+const CGM_START    = HISTORY_RAW[0].t;
+const CGM_END      = HISTORY_RAW[HISTORY_RAW.length-1].t;
+
+// ── CONSTANTS ─────────────────────────────────────────────────
+const BG_LOW  = 3.9, BG_HIGH = 10.0;
+const BG_MIN  = 2.0, BG_MAX  = 18.0;
+const MAX_IOB = 6.0, MAX_COB = 80.0;
+const NOW_X   = 0.62;
+const IOB_PEAK = 70; // "now" position — past to left, future to right
+const HORIZON = 0.38; // horizon line as fraction of canvas height
+
+// Session entries
+let SESSION = [];
+try { SESSION = JSON.parse(sessionStorage.getItem('rv3')||'[]') } catch(e){}
+
+// ── CANVAS ───────────────────────────────────────────────────
+const CV = document.getElementById('c');
+const CX = CV.getContext('2d');
+let W, H;
+function resize() {
+  W = CV.width  = window.innerWidth;
+  H = CV.height = window.innerHeight;
+}
+resize();
+window.addEventListener('resize', resize);
+
+// ── VIEW STATE ───────────────────────────────────────────────
+let viewTime = CGM_END;
+let viewSpan = 4 * 3600000;
+const MIN_SPAN = 20*60000, MAX_SPAN = 72*3600000;
+
+function tX(t) { return NOW_X*W + (t-viewTime)/viewSpan*W; }
+function xT(x) { return viewTime + (x-NOW_X*W)/W*viewSpan; }
+
+// ── HISTORY LOOKUP ───────────────────────────────────────────
+function histAt(t) {
+  if (t <= HISTORY_RAW[0].t) return HISTORY_RAW[0];
+  if (t >= HISTORY_RAW[HISTORY_RAW.length-1].t) return HISTORY_RAW[HISTORY_RAW.length-1];
+  let lo=0, hi=HISTORY_RAW.length-1;
+  while (hi-lo>1) { const m=(lo+hi)>>1; HISTORY_RAW[m].t<=t?lo=m:hi=m; }
+  const a=HISTORY_RAW[lo], b=HISTORY_RAW[hi], f=(t-a.t)/(b.t-a.t);
+  return { bg:a.bg+f*(b.bg-a.bg), iob:a.iob+f*(b.iob-a.iob),
+           cob:a.cob+f*(b.cob-a.cob), pen:a.pen };
+}
+function dataAt(t) {
+  const h = histAt(t);
+  let si=0, sc=0;
+  for (const s of SESSION) {
+    const m=(t-s.t)/60000;
+    if (m<0||m>240) continue;
+    si += (s.u||0)*iobF(m);
+    sc += (s.c||0)*cobF(m);
+  }
+  return { bg:h.bg, iob:h.iob+si, cob:h.cob+sc, pen:h.pen };
+}
+
+function iobF(m) {
+  if (m<=0) return 1; if (m>=240) return 0;
+  let d=0; for(let x=0;x<m;x+=2) d+=(x<=70?x/70:Math.max(0,1-(x-70)/170))*2;
+  return Math.max(0,1-Math.min(1,d/105));
+}
+function cobF(m,gi=60) {
+  if (m<=0) return 1; if (m>=240) return 0;
+  const pk=Math.max(20,95-gi),s=pk/2.2,z=(m-pk)/s;
+  return Math.max(0,1-Math.min(1,0.5*(1+Math.tanh(0.7978845608*(z+0.044715*z*z*z)))));
+}
+
+// ── TIME-OF-DAY PALETTE ──────────────────────────────────────
+// Key palettes at specific hours — interpolated between
+const PALETTES = [
+  { h:0,  sky0:[26,36,56],   sky1:[21,28,44],  sky2:[14,21,32],
+    w0:[28,40,48],  w1:[22,32,40], w2:[16,24,32],
+    sunC:[220,235,255], sunA:0.45, sunR:52,
+    mistC:[40,55,80], mistA:0.68, tree:[30,45,62], name:'night' },
+  { h:5,  sky0:[30,36,56],   sky1:[21,28,44],  sky2:[14,21,32],
+    w0:[28,40,48],  w1:[22,32,40], w2:[16,24,32],
+    sunC:[220,235,255], sunA:0.3, sunR:44,
+    mistC:[40,55,80], mistA:0.65, tree:[30,45,62], name:'night' },
+  { h:5.5,sky0:[230,190,160],sky1:[215,170,140],sky2:[190,150,120],
+    w0:[200,185,175],w1:[185,170,160],w2:[165,152,142],
+    sunC:[255,200,120], sunA:0.5, sunR:65,
+    mistC:[255,242,228], mistA:0.5, tree:[150,135,118], name:'dawn' },
+  { h:7,  sky0:[240,225,200],sky1:[228,210,185],sky2:[210,192,165],
+    w0:[215,205,195],w1:[200,190,180],w2:[182,172,162],
+    sunC:[255,220,140], sunA:0.55, sunR:75,
+    mistC:[255,248,235], mistA:0.52, tree:[145,132,115], name:'dawn' },
+  { h:8.5,sky0:[221,234,228],sky1:[200,221,213],sky2:[184,208,200],
+    w0:[184,206,200],w1:[168,192,184],w2:[152,178,168],
+    sunC:[255,255,235], sunA:0.45, sunR:58,
+    mistC:[238,246,242], mistA:0.48, tree:[100,132,112], name:'day' },
+  { h:14, sky0:[210,228,222],sky1:[192,215,207],sky2:[176,202,194],
+    w0:[176,200,194],w1:[160,186,178],w2:[144,172,162],
+    sunC:[255,255,230], sunA:0.4, sunR:55,
+    mistC:[235,244,240], mistA:0.46, tree:[95,128,108], name:'day' },
+  { h:17, sky0:[215,185,175],sky1:[198,165,152],sky2:[178,142,130],
+    w0:[175,165,168],w1:[158,148,152],w2:[140,130,134],
+    sunC:[255,185,80], sunA:0.7, sunR:72,
+    mistC:[242,225,228], mistA:0.55, tree:[108,85,105], name:'dusk' },
+  { h:19, sky0:[185,130,148],sky1:[165,108,122],sky2:[142,88,100],
+    w0:[148,135,152],w1:[132,118,135],w2:[115,102,118],
+    sunC:[255,150,60], sunA:0.75, sunR:80,
+    mistC:[238,215,222], mistA:0.58, tree:[100,75,100], name:'dusk' },
+  { h:20.5,sky0:[80,65,105], sky1:[58,48,80],  sky2:[40,32,58],
+    w0:[55,68,88],  w1:[44,55,72], w2:[32,42,58],
+    sunC:[200,215,255], sunA:0.35, sunR:55,
+    mistC:[55,68,95], mistA:0.6, tree:[38,50,68], name:'night' },
+  { h:24, sky0:[26,36,56],   sky1:[21,28,44],  sky2:[14,21,32],
+    w0:[28,40,48],  w1:[22,32,40], w2:[16,24,32],
+    sunC:[220,235,255], sunA:0.45, sunR:52,
+    mistC:[40,55,80], mistA:0.68, tree:[30,45,62], name:'night' },
+];
+
+function lerpC(a, b, f) { return a.map((v,i)=>Math.round(v+f*(b[i]-v))); }
+function rgb(c,a=1) { return `rgba(${c[0]},${c[1]},${c[2]},${a.toFixed(2)})`; }
+function hex(c) { return `#${c.map(v=>v.toString(16).padStart(2,'0')).join('')}`; }
+
+function palette(t) {
+  const h = new Date(t).getHours() + new Date(t).getMinutes()/60;
+  // Find surrounding keyframes
+  let lo=PALETTES[0], hi=PALETTES[PALETTES.length-1];
+  for (let i=0; i<PALETTES.length-1; i++) {
+    if (h >= PALETTES[i].h && h < PALETTES[i+1].h) {
+      lo=PALETTES[i]; hi=PALETTES[i+1]; break;
+    }
+  }
+  const f = lo.h===hi.h ? 0 : (h-lo.h)/(hi.h-lo.h);
+  const sky0C=lerpC(lo.sky0,hi.sky0,f), sky1C=lerpC(lo.sky1,hi.sky1,f), sky2C=lerpC(lo.sky2,hi.sky2,f);
+  const w0C=lerpC(lo.w0,hi.w0,f), w1C=lerpC(lo.w1,hi.w1,f), w2C=lerpC(lo.w2,hi.w2,f);
+  const sunC=lerpC(lo.sunC,hi.sunC,f), sunA=lo.sunA+f*(hi.sunA-lo.sunA), sunR=lo.sunR+f*(hi.sunR-lo.sunR);
+  const mistC=lerpC(lo.mistC,hi.mistC,f), mistA=lo.mistA+f*(hi.mistA-lo.mistA);
+  const treeC=lerpC(lo.tree,hi.tree,f);
+  // Name: whichever keyframe is dominant
+  const name = f<0.5 ? lo.name : hi.name;
+  const isNight = name==='night';
+  const lilyR = isNight ? [20,50,40] : name==='dusk' ? [100,80,100] : name==='dawn' ? [120,140,100] : [90,120,80];
+  return {
+    sky0:hex(sky0C), sky1:hex(sky1C), sky2:hex(sky2C),
+    w0:hex(w0C), w1:hex(w1C), w2:hex(w2C),
+    // backwards compat keys
+    water0:hex(w0C), water1:hex(w1C), water2:hex(w2C),
+    sunRGB:sunC, sunA, sunR,
+    sun:rgb(sunC,sunA), // legacy
+    mist:rgb(mistC,mistA),
+    mistC, mistA,
+    treeFar:rgb(treeC,isNight?0.55:0.22),
+    lily:`rgba(${lilyR[0]},${lilyR[1]},${lilyR[2]},`,
+    bgText: isNight ? 'rgba(200,220,230,0.7)' : name==='dusk' ? 'rgba(60,40,55,0.65)' : name==='dawn' ? 'rgba(80,60,40,0.65)' : 'rgba(40,60,50,0.65)',
+    name, isNight,
+    // Sun position: 0=midnight, 0.5=noon, tracks arc across sky
+    sunFrac: (h>=5&&h<19) ? (h-5)/14 : (h>=19 ? (h-19)/10 + 1 : h/5),
+  };
+}
+
+// ── ANIMATION STATE ──────────────────────────────────────────
+let phi=0, t0=0;
+let bgPrev = null;
+
+// Seed for deterministic "random" positions (lily pads, trees)
+function seededRand(seed) {
+  let s = seed;
+  return function() { s=(s*16807+0)%2147483647; return (s-1)/2147483646; };
+}
+
+// ── DRAWING: SKY ─────────────────────────────────────────────
+function drawSky(pal) {
+  const skyH = HORIZON * H;
+
+  // Sky gradient
+  const sg = CX.createLinearGradient(0,0,0,skyH);
+  sg.addColorStop(0,   pal.sky0);
+  sg.addColorStop(0.6, pal.sky1);
+  sg.addColorStop(1,   pal.sky2);
+  CX.fillStyle=sg; CX.fillRect(0,0,W,skyH);
+
+  // Sun / Moon — arc across sky based on hour
+  // sunFrac 0=dawn-edge, 0.5=noon (or midnight), 1=dusk-edge
+  // Arc: rises left, peaks centre, sets right — parabolic path
+  const sf = Math.max(0, Math.min(1, pal.sunFrac||0.5));
+  const sunX = W * (0.1 + sf*0.8);
+  const peakFrac = Math.sin(sf*Math.PI); // 0 at edges, 1 at noon
+  const sunY = skyH*(0.72 - peakFrac*0.55); // low at horizon, high at noon
+  const sunR = pal.sunR || 60;
+
+  // Corona / atmosphere glow (large, soft)
+  const cg = CX.createRadialGradient(sunX,sunY,0,sunX,sunY,Math.max(1,sunR*3.5));
+  const sc = pal.sunRGB||[255,255,200];
+  cg.addColorStop(0,   `rgba(${sc},${(pal.sunA||0.5)*0.4})`);
+  cg.addColorStop(0.3, `rgba(${sc},${(pal.sunA||0.5)*0.15})`);
+  cg.addColorStop(1,   'transparent');
+  CX.fillStyle=cg; CX.beginPath(); CX.arc(sunX,sunY,sunR*3.5,0,Math.PI*2); CX.fill();
+
+  // Disc
+  const dg = CX.createRadialGradient(sunX,sunY,0,sunX,sunY,Math.max(1,sunR));
+  dg.addColorStop(0, `rgba(${sc},${pal.sunA||0.5})`);
+  dg.addColorStop(0.6,`rgba(${sc},${(pal.sunA||0.5)*0.6})`);
+  dg.addColorStop(1,  `rgba(${sc},0)`);
+  CX.fillStyle=dg; CX.beginPath(); CX.arc(sunX,sunY,sunR,0,Math.PI*2); CX.fill();
+
+  // Night: add moon crescent + stars
+  if (pal.isNight) {
+    // Moon crescent — overlay darker circle offset
+    CX.save(); CX.globalAlpha=0.5;
+    CX.fillStyle=`rgb(${pal.sky0.slice(1).match(/../g).map(x=>parseInt(x,16)+8).join(',')})`;
+    CX.beginPath(); CX.arc(sunX+sunR*0.3, sunY-sunR*0.1, sunR*0.82, 0, Math.PI*2); CX.fill();
+    CX.restore();
+    // Stars
+    CX.save();
+    const srng = seededRand(7);
+    for (let i=0;i<60;i++) {
+      const sx=srng()*W, sy=srng()*skyH*0.85;
+      const sr=0.4+srng()*1.2;
+      const sa=0.2+srng()*0.5;
+      const twinkle = 0.7+Math.sin(phi*1.5+i*0.8)*0.3;
+      CX.globalAlpha=sa*twinkle;
+      CX.fillStyle='rgba(220,230,255,1)';
+      CX.beginPath(); CX.arc(sx,sy,sr,0,Math.PI*2); CX.fill();
+    }
+    CX.restore();
+  }
+
+  // Water reflection of sun (vertical shimmer) — moved here from drawWater
+  const refX = NOW_X*W;
+  const refGrad = CX.createLinearGradient(sunX,skyH,refX,H);
+  refGrad.addColorStop(0, `rgba(${sc},${(pal.sunA||0.5)*0.25})`);
+  refGrad.addColorStop(0.5,`rgba(${sc},${(pal.sunA||0.5)*0.08})`);
+  refGrad.addColorStop(1, 'transparent');
+
+  // Ink-wash mountain silhouettes — layered, fading into mist
+  const rng = seededRand(42);
+  for (let layer=3; layer>=0; layer--) {
+    const alpha = 0.08 + layer*0.06;
+    const yBase = skyH*(0.5 + layer*0.12);
+    const yAmp  = skyH*(0.08 + layer*0.04);
+    CX.save();
+    CX.globalAlpha=alpha;
+    CX.fillStyle = pal.treeFar.replace('0.2','1').replace('0.3','1').replace('0.6','1').replace('0.8','1');
+    CX.beginPath();
+    CX.moveTo(0, H);
+    // Build mountain profile
+    let x=0;
+    while (x<=W+80) {
+      const peakW = 60+rng()*120;
+      const peakH = yAmp*(0.3+rng()*0.7);
+      // Left slope
+      CX.lineTo(x, yBase);
+      // Peak with bezier
+      CX.bezierCurveTo(x+peakW*0.3,yBase-peakH*0.8, x+peakW*0.5,yBase-peakH, x+peakW*0.5,yBase-peakH);
+      CX.bezierCurveTo(x+peakW*0.5,yBase-peakH, x+peakW*0.7,yBase-peakH*0.8, x+peakW,yBase);
+      x += peakW;
+    }
+    CX.lineTo(W, H); CX.closePath(); CX.fill();
+    CX.restore();
+  }
+
+  // Pagoda silhouette — distant, very faint
+  const pgX = W*0.82, pgY = skyH*0.6;
+  CX.save(); CX.globalAlpha=0.12;
+  CX.fillStyle = pal.treeFar.replace('0.2','1').replace('0.25','1').replace('0.3','1');
+  drawPagoda(pgX, pgY, 14);
+  CX.restore();
+
+  // Horizon mist band
+  const hg = CX.createLinearGradient(0,skyH-20,0,skyH+30);
+  hg.addColorStop(0,'transparent');
+  hg.addColorStop(0.4,pal.mist);
+  hg.addColorStop(1,'transparent');
+  CX.fillStyle=hg; CX.fillRect(0,skyH-20,W,50);
+}
+
+function drawPagoda(x, y, scale) {
+  // Simple pagoda silhouette — stacked roofs
+  for (let i=0; i<4; i++) {
+    const yw = scale*(0.8-i*0.15);
+    const yh = scale*0.25;
+    const yy = y - i*(scale*0.4);
+    CX.beginPath();
+    CX.moveTo(x-yw, yy); CX.lineTo(x+yw, yy); CX.lineTo(x+yw*0.6, yy-yh);
+    CX.lineTo(x-yw*0.6, yy-yh); CX.closePath(); CX.fill();
+    // Roof upturn
+    CX.beginPath();
+    CX.moveTo(x-yw, yy); CX.bezierCurveTo(x-yw-scale*0.3, yy+scale*0.1, x-yw-scale*0.4, yy+scale*0.15, x-yw-scale*0.2, yy+scale*0.05); CX.fill();
+    CX.beginPath();
+    CX.moveTo(x+yw, yy); CX.bezierCurveTo(x+yw+scale*0.3, yy+scale*0.1, x+yw+scale*0.4, yy+scale*0.15, x+yw+scale*0.2, yy+scale*0.05); CX.fill();
+  }
+  // Spire
+  CX.beginPath(); CX.moveTo(x,y-scale*4); CX.lineTo(x,y-scale*1.5); CX.stroke();
+}
+
+// ── DRAWING: WATER ───────────────────────────────────────────
+function drawWater(pal, d) {
+  const skyH = HORIZON*H;
+
+  // Water base gradient
+  const wg = CX.createLinearGradient(0,skyH,0,H);
+  wg.addColorStop(0, pal.water0);
+  wg.addColorStop(0.4, pal.water1);
+  wg.addColorStop(1, pal.water2);
+  CX.fillStyle=wg; CX.fillRect(0,skyH,W,H-skyH);
+
+  // Sun reflection on water — vertical shimmer streak toward now
+  const nowX = NOW_X*W;
+  const refG = CX.createLinearGradient(nowX-30,skyH,nowX+30,H);
+  refG.addColorStop(0, pal.sun.replace(',0.6','0.12').replace(',0.5','0.1').replace(',0.65','0.1').replace(',0.4','0.08'));
+  refG.addColorStop(0.5, 'transparent');
+  refG.addColorStop(1, 'transparent');
+  CX.save(); CX.globalAlpha=0.4;
+  CX.fillStyle=refG; CX.fillRect(nowX-30,skyH,60,H-skyH);
+  CX.restore();
+
+  // Subtle flow lines — horizontal, very faint, ink-wash feel
+  CX.save(); CX.globalAlpha=0.04;
+  CX.strokeStyle=pal.name==='night'?'rgba(150,180,200,1)':'rgba(40,55,50,1)';
+  CX.lineWidth=0.6;
+  const rng = seededRand(99);
+  for (let i=0; i<18; i++) {
+    const fy = skyH + rng()*( H-skyH)*0.85;
+    const amp = 3+rng()*5;
+    const freq = 0.008+rng()*0.006;
+    CX.beginPath();
+    for (let fx=0; fx<=W; fx+=3) {
+      const wy = fy + Math.sin(fx*freq+phi*(0.3+rng()*0.2))*amp;
+      fx===0 ? CX.moveTo(fx,wy) : CX.lineTo(fx,wy);
+    }
+    CX.stroke();
+  }
+  CX.restore();
+}
+
+// ── DRAWING: LILY PADS ───────────────────────────────────────
+// Hyper zone (top of water) and hypo zone (bottom of water)
+// Density increases as BG approaches danger
+function drawLilyPads(pal, d) {
+  const skyH = HORIZON*H;
+  const wH = H - skyH;
+
+  // How close to danger zones?
+  const hyperProx = Math.max(0, Math.min(1, (d.bg - 8) / (BG_HIGH - 8)));
+  const hypoProx  = Math.max(0, Math.min(1, (BG_LOW + 1.5 - d.bg) / 1.5));
+
+  const rng = seededRand(77);
+  // Lily pad params
+  function drawPad(px, py, r, alpha) {
+    CX.save(); CX.globalAlpha=alpha;
+    CX.fillStyle=pal.lily+'1)';
+    CX.beginPath(); CX.ellipse(px,py,Math.max(0.5,r),Math.max(0.3,r*0.55),rng()*Math.PI,0,Math.PI*2); CX.fill();
+    // Notch
+    CX.globalAlpha=alpha*0.5;
+    const notchA = rng()*Math.PI*2;
+    CX.beginPath();
+    CX.moveTo(px,py);
+    CX.lineTo(px+Math.cos(notchA)*r,py+Math.sin(notchA)*r*0.55);
+    CX.lineTo(px+Math.cos(notchA+0.3)*r,py+Math.sin(notchA+0.3)*r*0.55);
+    CX.closePath();
+    CX.fillStyle=pal.water1; CX.fill();
+    // Vein
+    CX.globalAlpha=alpha*0.3;
+    CX.strokeStyle=pal.lily+'1)'; CX.lineWidth=0.5;
+    CX.beginPath(); CX.moveTo(px,py);
+    CX.lineTo(px+Math.cos(notchA)*r*0.85, py+Math.sin(notchA)*r*0.55*0.85); CX.stroke();
+    CX.restore();
+  }
+
+  // Top lily pads (hyper zone) — denser as BG rises
+  const topBand = wH*0.22; // depth from top of water
+  const topCount = Math.floor(3 + hyperProx*20);
+  const topRng = seededRand(11);
+  for (let i=0; i<topCount; i++) {
+    const px = topRng()*W;
+    const depthF = topRng(); // 0=top, 1=further in
+    const py = skyH + depthF*topBand;
+    const r = 6+topRng()*14;
+    const alpha = (1-depthF)*(0.15+hyperProx*0.35);
+    drawPad(px,py,r,alpha);
+  }
+
+  // Bottom lily pads (hypo zone)
+  const botBand = wH*0.22;
+  const botCount = Math.floor(3 + hypoProx*20);
+  const botRng = seededRand(22);
+  for (let i=0; i<botCount; i++) {
+    const px = botRng()*W;
+    const depthF = botRng();
+    const py = H - depthF*botBand;
+    const r = 6+botRng()*14;
+    const alpha = (1-depthF)*(0.15+hypoProx*0.35);
+    drawPad(px,py,r,alpha);
+  }
+
+  // Static lily pads — always a few near the edges for atmosphere
+  const atmRng = seededRand(55);
+  for (let i=0; i<8; i++) {
+    const side = atmRng()<0.5;
+    const px = side ? atmRng()*W*0.2 : W-atmRng()*W*0.2;
+    const py = skyH+atmRng()*(H-skyH);
+    drawPad(px,py,4+atmRng()*8,0.06+atmRng()*0.06);
+  }
+}
+
+// ── DRAWING: MANA WAKES ──────────────────────────────────────
+// The wake spreads from the boat's stern (nowX) back into the past (left)
+// COB wake rises above the boat's centreline (upper water)
+// IOB wake drops below the boat's centreline (lower water)
+// Both converge to a point at the boat
+
+function buildWakePts(valueKey, yMapFn, futureMinutes) {
+  const nowT  = viewTime;
+  const leftT = Math.max(CGM_START, xT(0));
+  // Past points
+  const n = Math.min(350, Math.max(80, Math.floor(W/1.5)));
+  const pts = [];
+  for (let i=0; i<=n; i++) {
+    const t = leftT + (i/n)*(nowT-leftT);
+    const d = dataAt(t);
+    const x = tX(t);
+    const y = yMapFn(d[valueKey], x, d.bg);
+    pts.push({ x, y, val:d[valueKey], t, future:false });
+  }
+  // Future prediction points (if requested)
+  if (futureMinutes && futureMinutes>0) {
+    const steps = Math.min(60, futureMinutes/5);
+    for (let i=1; i<=steps; i++) {
+      const ft = nowT + i*(futureMinutes/steps)*60000;
+      const fx = tX(ft);
+      if (fx > W+20) break;
+      // Project COB/IOB forward
+      const d0 = dataAt(nowT);
+      // decay from now
+      const minsAhead = i*(futureMinutes/steps);
+      let fval = d0[valueKey];
+      if (valueKey==='cob') fval = d0.cob * cobF(minsAhead);
+      else fval = d0.iob * iobF(minsAhead);
+      // Add pending session entries
+      for (const s of SESSION) {
+        const elapsed = (ft-s.t)/60000;
+        if (elapsed<0||elapsed>240) continue;
+        if (valueKey==='cob') fval += (s.c||0)*cobF(elapsed);
+        else fval += (s.u||0)*iobF(elapsed);
+      }
+      // Pending (uncommitted) sheet entry for preview
+      if (window._pendingDrop) {
+        const pd=window._pendingDrop;
+        const pe=(ft-Date.now())/60000; // future from now
+        if (pe>=0&&pe<240) {
+          if (valueKey==='cob') fval += (pd.c||0)*cobF(pe);
+          else fval += (pd.u||0)*iobF(pe);
+        }
+      }
+      // Predict BG: current + net effect
+      const futureBG = Math.max(2.5,Math.min(18, d0.bg));
+      const fy = yMapFn(Math.max(0,fval), fx, futureBG);
+      pts.push({x:fx, y:fy, val:Math.max(0,fval), t:ft, future:true});
+    }
+  }
+  return pts;
+}
+
+// Y mapping for wake lines
+// The boat sits at horizon*(0.6)+waterCentre-ish — near the middle of water
+// Boat Y computed dynamically from BG
+function boatYfromBG(bg) {
+  const skyH = HORIZON*H;
+  const waterH = H - skyH;
+  // Map BG 2.5–18 → water range (with safe margins from lily pad zones)
+  const safeTop = skyH + waterH*0.08;  // near top lily zone
+  const safeBot = H    - waterH*0.08;  // near bottom lily zone
+  const frac = Math.max(0,Math.min(1,(bg-2.5)/(18-2.5)));
+  return safeBot - frac*(safeBot-safeTop);
+}
+const BOAT_Y_FRAC = HORIZON + (1-HORIZON)*0.42; // fallback only
+function cobY(cob, x, bgAtX) {
+  const by = bgAtX!=null ? boatYfromBG(bgAtX) : BOAT_Y_FRAC*H;
+  const topY = HORIZON*H + (H-HORIZON*H)*0.04;
+  const frac = Math.min(1, cob/MAX_COB);
+  const pX   = Math.max(0.01, x/(NOW_X*W));
+  const spread = 1 + (1-pX)*0.25;
+  return by - frac*(by-topY)*spread;
+}
+function iobY(iob, x, bgAtX) {
+  const by  = bgAtX!=null ? boatYfromBG(bgAtX) : BOAT_Y_FRAC*H;
+  const botY = H - (H-HORIZON*H)*0.04;
+  const frac = Math.min(1, iob/MAX_IOB);
+  const pX   = Math.max(0.01, x/(NOW_X*W));
+  const spread = 1 + (1-pX)*0.25;
+  return by + frac*(botY-by)*spread;
+}
+
+function drawWake(pts, colorRGB, glowHex, maxVal, isUpper, isFuture) {
+  if (pts.length < 2) return;
+
+  const pastPts   = pts.filter(p=>!p.future);
+  const futurePts = pts.filter(p=>p.future);
+  if (pastPts.length < 2 && futurePts.length < 2) return;
+  const tip = pastPts.length>0 ? pastPts[pastPts.length-1] : pts[0];
+
+  CX.save();
+
+  // ── ZONE FILL: coloured water above/below the mana line ──────────────────
+  // The "two rivers meeting" — warm water above carb line, cool below insulin
+  if (pastPts.length>1) {
+    const skyH = HORIZON*H;
+    const edgeY = isUpper ? skyH+1 : H-1;
+    // Build a smoothed path along the mana line
+    const smoothPts = smoothPath(pastPts);
+
+    // Layer 1: deep zone fill, subtle
+    const zg1 = CX.createLinearGradient(pastPts[0].x,0,tip.x,0);
+    zg1.addColorStop(0,   `rgba(${colorRGB},0)`);
+    zg1.addColorStop(0.3, `rgba(${colorRGB},0.03)`);
+    zg1.addColorStop(0.7, `rgba(${colorRGB},0.09)`);
+    zg1.addColorStop(1,   `rgba(${colorRGB},0.16)`);
+    CX.fillStyle=zg1;
+    zoneFill(smoothPts, edgeY); CX.fill();
+
+    // Layer 2: vertical gradient — intensifies near the mana line
+    const nearY = isUpper ? tip.y : tip.y;
+    const farY  = edgeY;
+    const vg = CX.createLinearGradient(0,nearY,0,farY);
+    vg.addColorStop(0,   `rgba(${colorRGB},0.18)`);
+    vg.addColorStop(0.25,`rgba(${colorRGB},0.06)`);
+    vg.addColorStop(1,   `rgba(${colorRGB},0)`);
+    CX.fillStyle=vg;
+    zoneFill(smoothPts, edgeY); CX.fill();
+  }
+
+  // ── SWIRLY MANA STREAM ────────────────────────────────────────────────────
+  // Multiple overlapping passes to create ethereal, flowing feel
+  // Pass 1: Wide soft halo (blurred, wide, low opacity)
+  // Pass 2: Mid ribbon with sinusoidal swirl
+  // Pass 3: Bright core with natural meander
+  // Pass 4: Sparkle highlights along the core
+
+  if (pastPts.length>1) {
+    // Generate swirled versions of the path
+    const coreSwirl   = swirlPath(pastPts, 0,   0.8, 0,   maxVal);    // core — very subtle
+    const midSwirl    = swirlPath(pastPts, 0.5, 1.5, 0.3, maxVal);  // mid — gentle wave
+    const outerSwirl  = swirlPath(pastPts, 1.0, 2.2, 0.7, maxVal);  // outer — broader
+
+    // PASS 1: Soft outer halo
+    CX.globalAlpha=0.0;
+    for (let i=1;i<outerSwirl.length;i++) {
+      const p=outerSwirl[i-1], c=outerSwirl[i];
+      const ageFrac=Math.max(0,Math.min(1,(viewTime-p.t)/(3*3600000)));
+      const vf=Math.min(1,p.val/maxVal);
+      const hw=Math.max(0.5,(2+ageFrac*20)*vf);
+      const alpha=(1-ageFrac)*vf*0.12;
+      if (alpha<0.005) continue;
+      CX.globalAlpha=alpha;
+      CX.strokeStyle=`rgba(${colorRGB},1)`;
+      CX.lineWidth=hw*2;
+      CX.shadowColor=glowHex; CX.shadowBlur=hw*1.5;
+      CX.beginPath(); CX.moveTo(p.x,p.y); CX.lineTo(c.x,c.y); CX.stroke();
+    }
+    CX.shadowBlur=0;
+
+    // PASS 2: Mid ribbon — filled tapered shape with swirl
+    const TOP2=[], BOT2=[];
+    for (let i=0;i<midSwirl.length;i++) {
+      const p=midSwirl[i];
+      const ageFrac=Math.max(0,Math.min(1,(viewTime-p.t)/(2.8*3600000)));
+      const vf=Math.min(1,p.val/maxVal);
+      const hw=Math.max(0.4, (1+ageFrac*14)*vf);
+      const perp=getPerpendicular(midSwirl,i);
+      TOP2.push({x:p.x+perp.nx*hw, y:p.y+perp.ny*hw});
+      BOT2.push({x:p.x-perp.nx*hw, y:p.y-perp.ny*hw});
+    }
+    const rg=CX.createLinearGradient(midSwirl[0].x,0,tip.x,0);
+    rg.addColorStop(0,`rgba(${colorRGB},0)`);
+    rg.addColorStop(0.35,`rgba(${colorRGB},0.06)`);
+    rg.addColorStop(0.7,`rgba(${colorRGB},0.22)`);
+    rg.addColorStop(1,`rgba(${colorRGB},0.5)`);
+    CX.fillStyle=rg; CX.globalAlpha=1;
+    CX.beginPath();
+    CX.moveTo(TOP2[0].x,TOP2[0].y);
+    for (let i=1;i<TOP2.length;i++) {
+      const prev=TOP2[i-1],curr=TOP2[i];
+      CX.quadraticCurveTo(prev.x,prev.y,(prev.x+curr.x)/2,(prev.y+curr.y)/2);
+    }
+    for (let i=BOT2.length-1;i>=0;i--) {
+      const curr=BOT2[i],next=i>0?BOT2[i-1]:BOT2[0];
+      CX.quadraticCurveTo(curr.x,curr.y,(curr.x+next.x)/2,(curr.y+next.y)/2);
+    }
+    CX.closePath(); CX.fill();
+
+    // PASS 3: Bright core line — meanders gently, fades toward past
+    CX.lineJoin='round'; CX.lineCap='round';
+    const segs=16, stepLen=Math.max(1,Math.floor(coreSwirl.length/segs));
+    for (let s=0;s<segs;s++) {
+      const i0=s*stepLen, i1=Math.min(coreSwirl.length-1,(s+1)*stepLen);
+      const frac=1-(s/(segs-1)); // 1=tip (bright), 0=tail (dark)
+      CX.globalAlpha=frac*frac*0.85;
+      CX.strokeStyle=glowHex;
+      CX.lineWidth=Math.max(0.3, 0.6+frac*1.4);
+      CX.shadowColor=glowHex; CX.shadowBlur=frac*10;
+      CX.beginPath(); CX.moveTo(coreSwirl[i0].x,coreSwirl[i0].y);
+      for (let i=i0+1;i<=i1;i++) CX.lineTo(coreSwirl[i].x,coreSwirl[i].y);
+      CX.stroke(); CX.shadowBlur=0;
+    }
+
+    // PASS 4: Shimmer sparkles drifting along the core
+    CX.globalAlpha=0.5;
+    const sparkCount=Math.floor(4+tip.val/maxVal*8);
+    for (let i=0;i<sparkCount;i++) {
+      const idx=Math.floor(coreSwirl.length*(1-i/sparkCount));
+      if (idx<0||idx>=coreSwirl.length) continue;
+      const sp=coreSwirl[idx];
+      const vf=Math.min(1,sp.val/maxVal);
+      const sparkA=vf*(0.3+Math.sin(phi*2+i*1.7)*0.2);
+      if (sparkA<0.05) continue;
+      const sr=Math.max(0.3,0.5+vf*1.5);
+      CX.globalAlpha=sparkA;
+      CX.fillStyle=glowHex;
+      CX.shadowColor=glowHex; CX.shadowBlur=6;
+      CX.beginPath(); CX.arc(sp.x,sp.y,sr,0,Math.PI*2); CX.fill();
+      CX.shadowBlur=0;
+    }
+  }
+
+  // ── FUTURE PREDICTION (dotted, paler, also swirled) ──────────────────────
+  if (futurePts.length>1) {
+    const futSwirl=swirlPath(futurePts, 0.4, 1.2, 1.2, maxVal);
+    CX.globalAlpha=0.3;
+    CX.strokeStyle=glowHex; CX.lineWidth=0.8;
+    CX.setLineDash([3,9]);
+    CX.shadowColor=glowHex; CX.shadowBlur=4;
+    CX.beginPath(); CX.moveTo(tip.x,tip.y);
+    for (const p of futSwirl) CX.lineTo(p.x,p.y);
+    CX.stroke(); CX.setLineDash([]); CX.shadowBlur=0;
+
+    // Future zone fill — very soft
+    const skyH=HORIZON*H, edgeY=isUpper?skyH+1:H-1;
+    const fg=CX.createLinearGradient(tip.x,0,futurePts[futurePts.length-1].x,0);
+    fg.addColorStop(0,`rgba(${colorRGB},0.07)`);
+    fg.addColorStop(1,`rgba(${colorRGB},0.01)`);
+    CX.fillStyle=fg; CX.globalAlpha=0.25;
+    CX.beginPath(); CX.moveTo(tip.x,edgeY); CX.lineTo(tip.x,tip.y);
+    for (const p of futSwirl) CX.lineTo(p.x,p.y);
+    CX.lineTo(futSwirl[futSwirl.length-1].x,edgeY); CX.closePath(); CX.fill();
+  }
+
+  // ── TIP ORB ──────────────────────────────────────────────────────────────
+  const tipFrac=Math.max(0, Math.min(1,tip.val/maxVal));
+  if (tipFrac>0.02) {
+    const r=Math.max(0.5, 3+tipFrac*10);
+    CX.globalAlpha=0.75+tipFrac*0.2;
+    const og=CX.createRadialGradient(tip.x,tip.y,0,tip.x,tip.y,Math.max(0.5,r*3));
+    og.addColorStop(0,glowHex); og.addColorStop(0.4,`rgba(${colorRGB},0.25)`); og.addColorStop(1,'transparent');
+    CX.fillStyle=og; CX.shadowColor=glowHex; CX.shadowBlur=14;
+    CX.beginPath(); CX.arc(tip.x,tip.y,Math.max(0.5,r*3),0,Math.PI*2); CX.fill(); CX.shadowBlur=0;
+    CX.globalAlpha=0.9; CX.fillStyle=glowHex;
+    CX.beginPath(); CX.arc(tip.x,tip.y,Math.max(0.3,r*0.4),0,Math.PI*2); CX.fill();
+  }
+
+  CX.restore();
+}
+
+// ── STREAM HELPERS ────────────────────────────────────────────────────────────
+function zoneFill(smoothPts, edgeY) {
+  if (smoothPts.length<2) return;
+  CX.beginPath(); CX.moveTo(smoothPts[0].x,edgeY);
+  CX.lineTo(smoothPts[0].x,smoothPts[0].y);
+  for (let i=1;i<smoothPts.length;i++) {
+    const p=smoothPts[i-1],c=smoothPts[i];
+    CX.quadraticCurveTo(p.x,p.y,(p.x+c.x)/2,(p.y+c.y)/2);
+  }
+  CX.lineTo(smoothPts[smoothPts.length-1].x,smoothPts[smoothPts.length-1].y);
+  CX.lineTo(smoothPts[smoothPts.length-1].x,edgeY);
+  CX.closePath();
+}
+
+function smoothPath(pts) {
+  // Return smoothed version of pts using rolling average
+  if (pts.length<3) return pts;
+  return pts.map((p,i)=>{
+    if (i===0||i===pts.length-1) return p;
+    const prev=pts[i-1],next=pts[i+1];
+    return {...p, x:(prev.x+p.x*2+next.x)/4, y:(prev.y+p.y*2+next.y)/4};
+  });
+}
+
+function swirlPath(pts, swirlAmp, swirlFreq, phaseOffset, maxVal) {
+  // Add organic sine-based lateral movement perpendicular to path direction
+  if (pts.length<2) return pts;
+  const mv = maxVal || 1;
+  return pts.map((p,i)=>{
+    if (p.val==null) return p;
+    const ageFrac=Math.max(0,Math.min(1,(viewTime-p.t)/(3*3600000)));
+    const vf=Math.min(1,(p.val/mv)||0.5);
+    // Swirl amplitude fades toward tip (newer = more focused) and with spent value
+    const amp=swirlAmp*vf*(0.3+ageFrac*0.7);
+    // Perpendicular direction
+    const perp=getPerpendicular(pts,i);
+    const wave=Math.sin(i*swirlFreq*0.15+phi*(0.3+swirlAmp*0.1)+phaseOffset)*amp;
+    const waveS=Math.sin(i*swirlFreq*0.07+phi*0.2+phaseOffset+2.1)*amp*0.4;
+    return {...p, x:p.x+perp.nx*(wave+waveS), y:p.y+perp.ny*(wave+waveS)};
+  });
+}
+
+function getPerpendicular(pts, i) {
+  // Unit vector perpendicular to path at point i
+  const p0=pts[Math.max(0,i-1)], p1=pts[Math.min(pts.length-1,i+1)];
+  const dx=p1.x-p0.x, dy=p1.y-p0.y;
+  const len=Math.sqrt(dx*dx+dy*dy)||1;
+  return {nx:-dy/len, ny:dx/len}; // rotated 90°
+}
+
+// ── BOLUS MARKERS ────────────────────────────────────────────
+function drawBolusMarkers(pal) {
+  CX.save();
+  const allEvents=[...BOLUS_EVENTS, ...SESSION.map(s=>({t:s.t,c:s.c||0,u:s.u||0}))];
+  for (const b of allEvents) {
+    const x=tX(b.t);
+    if (x<-60||x>W+60) continue;
+    const d=dataAt(b.t);
+    if (b.c>2) {
+      const cy=cobY(d.cob,x,d.bg);
+      const elapsed=(viewTime-b.t)/60000;
+      const pulsePhase=Math.min(1,elapsed/20);
+      const fadeFrac=Math.max(0,1-elapsed/90);
+      if (fadeFrac>0.01) {
+        for (let ring=0;ring<3;ring++) {
+          const rPhase=(pulsePhase+ring*0.22)%1;
+          const r=Math.max(0.5,8+rPhase*28*(Math.min(b.c,60)/40));
+          CX.globalAlpha=fadeFrac*(1-rPhase)*0.4;
+          CX.strokeStyle='#c87832'; CX.lineWidth=1.4-ring*0.4;
+          CX.shadowColor='#e09040'; CX.shadowBlur=3;
+          CX.beginPath(); CX.arc(x,cy,r,0,Math.PI*2); CX.stroke(); CX.shadowBlur=0;
+        }
+        CX.globalAlpha=fadeFrac*0.8; CX.fillStyle='#e09040';
+        CX.shadowColor='#e09040'; CX.shadowBlur=8;
+        CX.beginPath(); CX.arc(x,cy,Math.max(0.5,2.5+fadeFrac*2),0,Math.PI*2); CX.fill(); CX.shadowBlur=0;
+      }
+    }
+    if (b.u>0.1) {
+      const iy=iobY(d.iob,x,d.bg);
+      const delay=15;
+      const elapsed=(viewTime-b.t)/60000-delay;
+      const pulsePhase=elapsed<0?0:Math.min(1,elapsed/(IOB_PEAK-delay));
+      const fadeFrac=Math.max(0,1-Math.max(0,elapsed)/120);
+      if (fadeFrac>0.01&&elapsed>-5) {
+        for (let ring=0;ring<3;ring++) {
+          const rPhase=(pulsePhase+ring*0.25)%1;
+          const r=Math.max(0.5,6+rPhase*22*(Math.min(b.u,5)/3));
+          CX.globalAlpha=fadeFrac*(1-rPhase)*0.35;
+          CX.strokeStyle='#3a6aaa'; CX.lineWidth=1.2-ring*0.3;
+          CX.shadowColor='#5080cc'; CX.shadowBlur=3;
+          CX.beginPath(); CX.arc(x,iy,r,0,Math.PI*2); CX.stroke(); CX.shadowBlur=0;
+        }
+        CX.globalAlpha=fadeFrac*0.75; CX.fillStyle='#5080cc';
+        CX.shadowColor='#5080cc'; CX.shadowBlur=8;
+        CX.beginPath(); CX.arc(x,iy,Math.max(0.5,2+fadeFrac*2),0,Math.PI*2); CX.fill(); CX.shadowBlur=0;
+      }
+    }
+  }
+  CX.restore();
+}
+// ── DRAWING: THE BOAT ────────────────────────────────────────
+function drawBoat(pal, d) {
+  const nowX  = NOW_X*W;
+  const boatY = boatYfromBG(d.bg);
+  const prev  = dataAt(viewTime - 10*60000);
+  const rate  = (d.bg - prev.bg) / (10/60);
+  const tilt  = Math.max(-0.3, Math.min(0.3, rate*0.025));
+  const bob   = Math.sin(phi*1.1)*2.5;
+  const isNight = pal.isNight;
+  const woodDark  = isNight ? '#3a2818' : '#5c3820';
+  const woodLight = isNight ? '#6a4830' : '#8B5E3C';
+  const woodHi    = isNight ? '#8a6848' : '#b8844e';
+
+  CX.save();
+  CX.translate(nowX, boatY+bob);
+  CX.rotate(tilt);
+
+  // NOTE: straight wake lines removed — COB/IOB streams ARE the wake
+  const bW=14, bL=36;
+
+  // Water shadow
+  CX.save(); CX.globalAlpha=0.15;
+  CX.fillStyle='rgba(0,0,0,0.6)';
+  CX.beginPath(); CX.ellipse(0,5,bL*0.85,bW*0.65,0,0,Math.PI*2); CX.fill(); CX.restore();
+
+  // Outer hull
+  const hg=CX.createLinearGradient(0,-bW,0,bW);
+  hg.addColorStop(0,woodDark); hg.addColorStop(0.35,woodLight);
+  hg.addColorStop(0.65,woodLight); hg.addColorStop(1,woodDark);
+  CX.fillStyle=hg;
+  CX.beginPath();
+  CX.moveTo(-bL,-bW*0.55);
+  CX.lineTo(-bL, bW*0.55);
+  CX.bezierCurveTo(-bL+bL*0.3,bW*0.9, bL*0.4,bW*0.65, bL*0.85,bW*0.2);
+  CX.bezierCurveTo(bL*0.95,bW*0.08, bL,0, bL,0);
+  CX.bezierCurveTo(bL*0.95,-bW*0.08, bL*0.85,-bW*0.2, bL*0.7,-bW*0.4);
+  CX.bezierCurveTo(bL*0.4,-bW*0.65, -bL+bL*0.3,-bW*0.9, -bL,-bW*0.55);
+  CX.closePath(); CX.fill();
+
+  // Stern face
+  const sg2=CX.createLinearGradient(-bL,-bW*0.55,-bL+4,bW*0.55);
+  sg2.addColorStop(0,woodHi); sg2.addColorStop(0.5,woodLight); sg2.addColorStop(1,woodDark);
+  CX.fillStyle=sg2;
+  CX.beginPath();
+  CX.moveTo(-bL,-bW*0.55); CX.lineTo(-bL,bW*0.55);
+  CX.lineTo(-bL+5,bW*0.5); CX.lineTo(-bL+5,-bW*0.5); CX.closePath(); CX.fill();
+
+  // Interior hollow
+  const ig=CX.createLinearGradient(0,-bW*0.5,0,bW*0.5);
+  ig.addColorStop(0,'rgba(20,10,4,0.75)'); ig.addColorStop(0.5,'rgba(40,20,8,0.55)');
+  ig.addColorStop(1,'rgba(20,10,4,0.75)');
+  CX.fillStyle=ig;
+  CX.beginPath();
+  CX.moveTo(-bL+10,-bW*0.35);
+  CX.bezierCurveTo(-bL+bL*0.25,-bW*0.65, bL*0.35,bW*0.55*0.7, bL*0.8,bW*0.1);
+  CX.bezierCurveTo(bL*0.9,bW*0.04, bL*0.92,0, bL*0.88,0);
+  CX.bezierCurveTo(bL*0.92,-0.04*bW, bL*0.8,-bW*0.1, bL*0.5,-bW*0.45);
+  CX.bezierCurveTo(bL*0.35,-bW*0.55*0.7, -bL+bL*0.25,bW*0.65*0.5, -bL+10,bW*0.35);
+  CX.closePath(); CX.fill();
+
+  // Plank lines
+  CX.save(); CX.globalAlpha=0.18; CX.strokeStyle=woodDark; CX.lineWidth=0.6;
+  for (const yo of [-bW*0.28,-bW*0.06,bW*0.06,bW*0.28]) {
+    CX.beginPath(); CX.moveTo(-bL+8,yo*0.6);
+    CX.bezierCurveTo(0,yo*0.85, bL*0.5,yo*0.75, bL*0.82,yo*0.2); CX.stroke();
+  }
+  CX.restore();
+
+  // Gunwale highlight
+  CX.save(); CX.globalAlpha=0.4; CX.strokeStyle=woodHi; CX.lineWidth=1.2;
+  CX.beginPath();
+  CX.moveTo(-bL,-bW*0.55);
+  CX.bezierCurveTo(-bL+bL*0.3,-bW*0.9, bL*0.4,-bW*0.65, bL,-0.05*bW);
+  CX.stroke(); CX.restore();
+
+  // Rim glow
+  CX.save(); CX.globalAlpha=0.1+Math.sin(phi)*0.04;
+  CX.strokeStyle='rgba(180,230,190,0.9)'; CX.lineWidth=1;
+  CX.shadowColor='rgba(140,210,155,0.6)'; CX.shadowBlur=5;
+  CX.beginPath();
+  CX.moveTo(-bL,-bW*0.55);
+  CX.bezierCurveTo(-bL+bL*0.3,-bW*0.9, bL*0.4,-bW*0.65, bL*0.85,-bW*0.2);
+  CX.bezierCurveTo(bL*0.95,-bW*0.08, bL,0, bL,0);
+  CX.stroke(); CX.shadowBlur=0; CX.restore();
+
+  CX.restore();
+}
+
+// ── DRAWING: FUTURE MIST ─────────────────────────────────────
+function drawFutureMist(pal) {
+  const nowX = NOW_X*W;
+  const skyH = HORIZON*H;
+  const mg = CX.createLinearGradient(nowX,0,W,0);
+  mg.addColorStop(0,   'rgba(255,255,255,0)');
+  mg.addColorStop(0.08, pal.mist.replace(/[\d.]+\)$/,'0.1)'));
+  mg.addColorStop(0.35, pal.mist);
+  const mistOpaque = pal.mist.replace(/[\d.]+\)$/, v => Math.min(1,parseFloat(v)+0.2)+')');
+  mg.addColorStop(1,   mistOpaque);
+  CX.fillStyle=mg; CX.fillRect(nowX,skyH,W-nowX,H-skyH);
+  // Dashed now-line
+  CX.save(); CX.globalAlpha=0.1;
+  CX.strokeStyle='rgba(40,55,50,0.6)'; CX.lineWidth=0.8;
+  CX.setLineDash([2,8]);
+  CX.beginPath(); CX.moveTo(nowX,skyH+10); CX.lineTo(nowX,H-20); CX.stroke();
+  CX.setLineDash([]); CX.restore();
+}
+
+// ── DRAWING: POD→PEN TRANSITION ──────────────────────────────
+function drawTransition(pal) {
+  const tx = tX(POD_PAUSE_T);
+  if (tx<-40||tx>W+40) return;
+  const skyH = HORIZON*H;
+  const logY = skyH+(H-skyH)*0.5;
+  CX.save();
+  // Ripple rings
+  CX.globalAlpha=0.07;
+  CX.strokeStyle=pal.isNight?'rgba(140,170,200,0.8)':'rgba(40,55,50,0.8)';
+  CX.lineWidth=0.8;
+  for (let r=1;r<=4;r++) {
+    CX.beginPath(); CX.ellipse(tx,logY,Math.max(1,r*14),Math.max(1,r*6),0,0,Math.PI*2); CX.stroke();
+  }
+  // Mossy log
+  CX.globalAlpha=0.5;
+  const lg=CX.createRadialGradient(tx,logY,0,tx,logY,18);
+  lg.addColorStop(0,'#3a4828'); lg.addColorStop(0.6,'#2a3818'); lg.addColorStop(1,'transparent');
+  CX.fillStyle=lg;
+  CX.beginPath(); CX.ellipse(tx,logY,18,8,0,0,Math.PI*2); CX.fill();
+  // Moss dots
+  CX.globalAlpha=0.28;
+  const mrng=seededRand(88);
+  for (let i=0;i<8;i++) {
+    const mx=tx+(mrng()-0.5)*24, my=logY+(mrng()-0.5)*10;
+    CX.fillStyle=`rgba(${60+Math.floor(mrng()*30)},${80+Math.floor(mrng()*30)},${50+Math.floor(mrng()*20)},1)`;
+    CX.beginPath(); CX.arc(mx,my,Math.max(0.5,1.5+mrng()*2),0,Math.PI*2); CX.fill();
+  }
+  // Label
+  CX.globalAlpha=0.22;
+  CX.fillStyle=pal.isNight?'rgba(180,200,220,1)':'rgba(40,55,50,1)';
+  CX.font="italic 9px 'Fraunces',serif";
+  CX.textAlign='center';
+  CX.fillText('pen · 16 mar', tx, skyH+12);
+  CX.restore();
+}
+
+// ── DRAWING: TIME LABELS ─────────────────────────────────────
+const DNAMES=['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
+function drawTimeLabels(pal) {
+  const mspp=viewSpan/W;
+  let tickMs=3600000;
+  if (mspp*W>20*3600000) tickMs=6*3600000;
+  if (mspp*W>48*3600000) tickMs=12*3600000;
+  const nd=new Date(viewTime);
+  const el=document.getElementById('timelabel');
+  if (el) el.textContent=`${DNAMES[nd.getDay()]} ${nd.getHours().toString().padStart(2,'0')}:${nd.getMinutes().toString().padStart(2,'0')}`;
+  const skyH=HORIZON*H, nowX=NOW_X*W;
+  const startT=xT(0), endT=xT(W);
+  const firstT=Math.ceil(startT/tickMs)*tickMs;
+  const textBase=pal.isNight?'220,235,255':'40,60,50';
+  CX.save(); CX.textAlign='center';
+  for (let t=firstT;t<=endT;t+=tickMs) {
+    const x=tX(t);
+    if (x<30||x>W-30) continue;
+    const d=new Date(t);
+    const lbl=d.getHours()===0?DNAMES[d.getDay()]:d.getHours().toString().padStart(2,'0')+':00';
+    const distPx=Math.abs(x-nowX);
+    if (distPx<W*0.04) {
+      CX.globalAlpha=0.6;
+      CX.fillStyle=`rgba(${textBase},1)`;
+      CX.font=`200 40px 'Fraunces',serif`;
+      CX.fillText(lbl,x,skyH-20);
+      CX.globalAlpha=0.1;
+      CX.shadowColor=pal.isNight?'rgba(180,210,255,1)':'rgba(255,255,255,1)';
+      CX.shadowBlur=22; CX.fillText(lbl,x,skyH-20); CX.shadowBlur=0;
+    } else {
+      const distFrac=Math.min(1,distPx/(W*0.45));
+      CX.globalAlpha=Math.max(0.07,0.28*(1-distFrac));
+      CX.fillStyle=`rgba(${textBase},1)`;
+      CX.font=`300 ${Math.max(9,15*(1-distFrac*0.68)).toFixed(0)}px 'Fraunces',serif`;
+      CX.fillText(lbl,x,skyH-7);
+    }
+  }
+  CX.restore();
+}
+
+// ── HUD UPDATE ───────────────────────────────────────────────
+let lastHUD=0;
+function updateHUD(d, pal) {
+  if (Date.now()-lastHUD<300) return; lastHUD=Date.now();
+  const prev15=dataAt(viewTime-15*60000);
+  const delta=d.bg-prev15.bg;
+  const arr=delta>1.5?'↑↑':delta>0.5?'↑':delta<-1.5?'↓↓':delta<-0.5?'↓':'→';
+  const bgEl=document.getElementById('bg-num');
+  const color=d.bg<BG_LOW?'rgba(50,80,160,0.7)':d.bg>BG_HIGH?'rgba(160,80,30,0.7)':pal.bgText;
+  bgEl.innerHTML=d.bg.toFixed(1)+`<span style="font-size:20px;opacity:0.4;margin-left:3px">${arr}</span>`;
+  bgEl.style.color=color;
+  document.getElementById('bg-unit').style.color=(pal.bgText||'rgba(40,60,50,0.65)').replace('0.65','0.35').replace('0.7','0.4');
+  document.getElementById('mc-val').textContent=d.cob.toFixed(0)+'g';
+  document.getElementById('mi-val').textContent=d.iob.toFixed(1)+'U';
+  const prog=(viewTime-CGM_START)/(CGM_END-CGM_START);
+  document.getElementById('timenow').style.left=(Math.max(0,Math.min(1,prog))*100).toFixed(1)+'%';
+}
+
+// ── MAIN FRAME ───────────────────────────────────────────────
+function frame(ts) {
+  const dt=Math.min((ts-t0)/1000, 0.05); t0=ts;
+  phi+=0.4*dt;
+
+  const d   = dataAt(viewTime);
+  const pal = palette(viewTime);
+
+  drawSky(pal);
+  drawWater(pal, d);
+  drawLilyPads(pal, d);
+
+  const cobPts = buildWakePts('cob', cobY, 90);
+  const iobPts = buildWakePts('iob', iobY, 90);
+  drawWake(cobPts, '190,120,55', '#c87832', MAX_COB, true,  false);
+  drawWake(iobPts, '55,90,150',  '#3a6aaa', MAX_IOB, false, false);
+
+  drawBolusMarkers(pal);
+  drawTransition(pal);
+  drawTimeLabels(pal);
+  drawFutureMist(pal);
+  drawBoat(pal, d);
+
+  // Live reading pulse — flashes when new data arrives
+  if (_pulseAlpha > 0.01) {
+    const nowX = NOW_X*W, boatY = boatYfromBG(d.bg);
+    const pr = 20 + (1-_pulseAlpha)*40;
+    CX.save(); CX.globalAlpha = _pulseAlpha * 0.5;
+    CX.strokeStyle = 'rgba(200,240,200,0.8)'; CX.lineWidth = 1.5;
+    CX.shadowColor = '#80e890'; CX.shadowBlur = 10;
+    CX.beginPath(); CX.arc(nowX, boatY, Math.max(0.5, pr), 0, Math.PI*2); CX.stroke();
+    CX.shadowBlur = 0; CX.restore();
+    _pulseAlpha *= 0.94;
+  }
+
+  updateHUD(d, pal);
+
+  requestAnimationFrame(frame);
+}
+
+// ── TOUCH / MOUSE ────────────────────────────────────────────
+let drag={on:false,x0:0,t0:0}, pinch={on:false,d0:0,s0:0};
+CV.addEventListener('touchstart',e=>{
+  if(e.target.closest&&e.target.closest('#sheet,#logbtn')) return;
+  if(e.touches.length===1) drag={on:true,x0:e.touches[0].clientX,t0:viewTime};
+  else if(e.touches.length===2) {
+    const dx=e.touches[0].clientX-e.touches[1].clientX;
+    const dy=e.touches[0].clientY-e.touches[1].clientY;
+    pinch={on:true,d0:Math.hypot(dx,dy),s0:viewSpan};
+  }
+},{passive:true});
+CV.addEventListener('touchmove',e=>{
+  if(e.target.closest&&e.target.closest('#sheet')) return;
+  e.preventDefault();
+  if(drag.on&&e.touches.length===1) {
+    viewTime=Math.max(CGM_START,Math.min(CGM_END,drag.t0-(e.touches[0].clientX-drag.x0)*(viewSpan/W)));
+  } else if(pinch.on&&e.touches.length===2) {
+    const dx=e.touches[0].clientX-e.touches[1].clientX;
+    const dy=e.touches[0].clientY-e.touches[1].clientY;
+    viewSpan=Math.max(MIN_SPAN,Math.min(MAX_SPAN,pinch.s0*(pinch.d0/Math.hypot(dx,dy))));
+  }
+},{passive:false});
+CV.addEventListener('touchend',()=>{drag.on=false;pinch.on=false;},{passive:true});
+let md={on:false,x0:0,t0:0};
+CV.addEventListener('mousedown',e=>{if(!e.target.closest('#sheet,#logbtn'))md={on:true,x0:e.clientX,t0:viewTime}});
+CV.addEventListener('mousemove',e=>{if(md.on)viewTime=Math.max(CGM_START,Math.min(CGM_END,md.t0-(e.clientX-md.x0)*(viewSpan/W)))});
+CV.addEventListener('mouseup',()=>md.on=false);
+CV.addEventListener('wheel',e=>{viewSpan=Math.max(MIN_SPAN,Math.min(MAX_SPAN,viewSpan*(e.deltaY>0?1.1:0.9)));},{passive:true});
+
+// ── LOG SHEET ────────────────────────────────────────────────
+let _st=null;
+function openSheet(){
+  document.getElementById('sheet').classList.add('open');
+  document.getElementById('overlay').classList.add('open');
+  selType('b');
+}
+function closeSheet(){
+  document.getElementById('sheet').classList.remove('open');
+  document.getElementById('overlay').classList.remove('open');
+  window._pendingDrop=null;
+}
+function selType(t){
+  _st=t;
+  ['c','b','i'].forEach(x=>document.getElementById(`tb-${x}`).className='tbtn'+(x===t?` sel-${t}`:''));
+  document.getElementById('sec-c').className='isec'+(['c','b'].includes(t)?' vis':'');
+  document.getElementById('sec-i').className='isec'+(['i','b'].includes(t)?' vis':'');
+  document.getElementById('sec-bg').className='isec'+(['c','b'].includes(t)?' vis':'');
+  onInp();
+}
+function setBG(v){
+  document.getElementById('in-bg').value=v;
+  document.querySelectorAll('.bgchip').forEach(c=>c.classList.toggle('on',parseFloat(c.textContent)===v));
+  onInp();
+}
+function onInp(){
+  const c=parseFloat(document.getElementById('in-c').value)||0;
+  const u=parseFloat(document.getElementById('in-i').value)||0;
+  const bg=parseFloat(document.getElementById('in-bg').value)||0;
+  const btn=document.getElementById('dropbtn');
+  const sug=document.getElementById('sugbox');
+  const has=(_st==='c'&&c>0)||(_st==='i'&&u>0)||(_st==='b'&&(c>0||u>0));
+  window._pendingDrop = has ? {c, u, t:Date.now()} : null;
+  btn.disabled=!has;
+  if(c>0&&bg>0&&['c','b'].includes(_st)){
+    const dose=(c/8.5)+(bg>10?Math.max(0,(bg-6.7)/6):0);
+    const r=Math.round(dose/0.5)*0.5;
+    document.getElementById('sugval').textContent=r.toFixed(1)+'U';
+    document.getElementById('sugnote').textContent=`${c}g ÷ 8.5 I:C${bg>10?' + correction':''}`;
+    sug.style.display='block';
+    if(!document.getElementById('in-i').value&&_st==='b') document.getElementById('in-i').value=r.toFixed(1);
+  } else sug.style.display='none';
+  const pts=[]; if(c>0)pts.push(`${c}g`); if(u>0)pts.push(`${u}U`);
+  btn.textContent=pts.length?`flow · ${pts.join(' + ')}`:'flow it in';
+}
+function commitDrop(){
+  const c=parseFloat(document.getElementById('in-c').value)||0;
+  const u=parseFloat(document.getElementById('in-i').value)||0;
+  if(c>0||u>0){
+    SESSION.push({t:Date.now(),c,u});
+    try{sessionStorage.setItem('rv3',JSON.stringify(SESSION));}catch(e){}
+  }
+  const msg=[]; if(c>0)msg.push(`${c}g carbs`); if(u>0)msg.push(`${u}U insulin`);
+  showToast(msg.join(' · ')+'\nfloating downstream');
+  ['in-c','in-i','in-bg'].forEach(id=>document.getElementById(id).value='');
+  document.getElementById('sugbox').style.display='none';
+  document.getElementById('dropbtn').disabled=true;
+  closeSheet();
+}
+function showToast(msg){
+  const t=document.getElementById('toast');
+  t.innerHTML=msg.replace('\n','<br>');
+  t.classList.add('show');
+  setTimeout(()=>t.classList.remove('show'),2000);
+}
+
+// ── INIT ─────────────────────────────────────────────────────
+window.addEventListener('load',()=>{
+  viewTime=CGM_END; viewSpan=4*3600000;
+  try{
+    SESSION=JSON.parse(sessionStorage.getItem('rv3')||'[]');
+    SESSION=SESSION.filter(s=>(Date.now()-s.t)<240*60000);
+  }catch(e){}
+  const pal=palette(CGM_END);
+  document.body.style.background=pal.water1;
+  document.getElementById('loading').style.background=pal.water1||'#c8d8d0';
+
+  requestAnimationFrame(ts=>{t0=ts; requestAnimationFrame(frame);});
+  setTimeout(()=>{
+    document.getElementById('loading').classList.add('gone');
+    setTimeout(()=>document.getElementById('loading').style.display='none',700);
+  },1000);
+
+  // CGM source — auto-connect if configured, show setup if not
+  const saved = loadCGMConfig();
+  if (saved && saved.sourceId && saved.sourceId !== 'manual') {
+    // Re-use saved credentials silently
+    setTimeout(()=> startLivePolling(saved.sourceId, saved.fields), 1500);
+  } else if (!saved) {
+    // First run — show setup screen after brief delay
+    setTimeout(()=>{
+      document.body.insertAdjacentHTML('beforeend', buildSetupScreen());
+      _selectedSource = 'nightscout';
+      renderSourceFields('nightscout');
+    }, 1200);
+  }
+  // If saved.sourceId === 'manual', do nothing — demo data stays
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+//  CGM SOURCE SYSTEM
+//  Pluggable data sources. Credentials stored in localStorage only.
+//  Never hardcoded. Never sent anywhere except the configured endpoint.
+//
+//  Sources:
+//    nightscout  — Nightscout-compatible URL + token (Gluroo, real NS, xDrip)
+//    dexcom_share — Dexcom Share unofficial API (username + password)
+//    dexcom_oauth — Dexcom official OAuth2 API (future)
+//    libre        — LibreLinkUp (future)
+//    manual       — No live data, manual entry only
+// ═══════════════════════════════════════════════════════════════════════════
+
+const CGM_SOURCES = {
+  nightscout: {
+    name: 'Nightscout / Gluroo',
+    icon: '🌙',
+    description: 'Works with Gluroo, Nightscout, xDrip+, and any Nightscout-compatible backend.',
+    fields: [
+      { key: 'url',   label: 'Nightscout URL',   placeholder: 'https://xxxx.ns.gluroo.com', type: 'url' },
+      { key: 'token', label: 'API Token / Secret', placeholder: 'xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx', type: 'password' },
+    ],
+    async fetch(cfg, count=1) {
+      const base = cfg.url.replace(/\/+$/, '');
+      const url  = `${base}/api/v1/entries.json?count=${count}&token=${cfg.token}`;
+      const r    = await fetch(url);
+      if (!r.ok) throw new Error(`Nightscout ${r.status}`);
+      const data = await r.json();
+      return data.map(e => ({
+        t:     e.date,                                    // ms timestamp
+        bg:    e.sgv ? +(e.sgv / 18).toFixed(1) : e.mbg, // mg/dL → mmol/L
+        trend: e.direction || 'NONE',
+        src:   'nightscout'
+      }));
+    },
+    async fetchRecent(cfg, hours=3) {
+      const base  = cfg.url.replace(/\/+$/, '');
+      const count = hours * 12 + 5; // 5-min readings
+      const url   = `${base}/api/v1/entries.json?count=${count}&token=${cfg.token}`;
+      const r     = await fetch(url);
+      if (!r.ok) throw new Error(`Nightscout ${r.status}`);
+      const data  = await r.json();
+      return data.map(e => ({
+        t:     e.date,
+        bg:    e.sgv ? +(e.sgv / 18).toFixed(1) : e.mbg,
+        trend: e.direction || 'NONE',
+        src:   'nightscout'
+      })).sort((a,b) => a.t - b.t);
+    }
+  },
+
+  dexcom_share: {
+    name: 'Dexcom Share',
+    icon: '📡',
+    description: 'Direct Dexcom Share connection using your Dexcom app credentials. Requires Share to be enabled with at least one follower.',
+    fields: [
+      { key: 'username', label: 'Dexcom Username / Email', placeholder: 'yourname@email.com', type: 'text' },
+      { key: 'password', label: 'Dexcom Password',          placeholder: '••••••••',            type: 'password' },
+      { key: 'region',   label: 'Region',                    placeholder: '',                   type: 'select',
+        options: [{ value:'ous', label:'Outside US (UK, EU, AU...)' }, { value:'us', label:'United States' }] },
+    ],
+    _session: null,
+    _sessionExpiry: 0,
+    async _getSession(cfg) {
+      if (this._session && Date.now() < this._sessionExpiry) return this._session;
+      const base  = cfg.region === 'us'
+        ? 'https://share2.dexcom.com/ShareWebServices/Services'
+        : 'https://shareous1.dexcom.com/ShareWebServices/Services';
+      const appId = 'd89443d2-327c-4a6f-89e5-496bbb0317db';
+      // Step 1: get accountId
+      const r1 = await fetch(`${base}/General/AuthenticatePublisherAccount`, {
+        method: 'POST',
+        headers: {'Content-Type':'application/json', 'Accept':'application/json'},
+        body: JSON.stringify({ accountName: cfg.username, password: cfg.password, applicationId: appId })
+      });
+      if (!r1.ok) throw new Error('Dexcom auth failed — check username/password');
+      const accountId = await r1.json();
+      // Step 2: get sessionId
+      const r2 = await fetch(`${base}/General/LoginPublisherAccountById`, {
+        method: 'POST',
+        headers: {'Content-Type':'application/json', 'Accept':'application/json'},
+        body: JSON.stringify({ accountId, password: cfg.password, applicationId: appId })
+      });
+      if (!r2.ok) throw new Error('Dexcom session failed');
+      this._session = await r2.json();
+      this._sessionExpiry = Date.now() + 55 * 60000; // 55min
+      return this._session;
+    },
+    async fetch(cfg, count=1) {
+      const base = cfg.region === 'us'
+        ? 'https://share2.dexcom.com/ShareWebServices/Services'
+        : 'https://shareous1.dexcom.com/ShareWebServices/Services';
+      const sessionId = await this._getSession(cfg);
+      const r = await fetch(
+        `${base}/Publisher/ReadPublisherLatestGlucoseValues?sessionId=${sessionId}&minutes=1440&maxCount=${count}`
+      );
+      if (!r.ok) { this._session = null; throw new Error(`Dexcom read ${r.status}`); }
+      const data = await r.json();
+      return data.map(e => ({
+        t:     parseInt(e.WT.replace(/[^0-9]/g,'')),
+        bg:    +(e.Value / 18).toFixed(1),
+        trend: e.Trend,
+        src:   'dexcom_share'
+      }));
+    },
+    async fetchRecent(cfg, hours=3) {
+      const base = cfg.region === 'us'
+        ? 'https://share2.dexcom.com/ShareWebServices/Services'
+        : 'https://shareous1.dexcom.com/ShareWebServices/Services';
+      const sessionId = await this._getSession(cfg);
+      const minutes   = hours * 60;
+      const maxCount  = hours * 12 + 5;
+      const r = await fetch(
+        `${base}/Publisher/ReadPublisherLatestGlucoseValues?sessionId=${sessionId}&minutes=${minutes}&maxCount=${maxCount}`
+      );
+      if (!r.ok) { this._session = null; throw new Error(`Dexcom read ${r.status}`); }
+      const data = await r.json();
+      return data.map(e => ({
+        t:     parseInt(e.WT.replace(/[^0-9]/g,'')),
+        bg:    +(e.Value / 18).toFixed(1),
+        trend: e.Trend,
+        src:   'dexcom_share'
+      })).sort((a,b) => a.t - b.t);
+    }
+  },
+
+  manual: {
+    name: 'Manual only',
+    icon: '✏️',
+    description: 'No live CGM connection. Log readings manually using the drop button.',
+    fields: [],
+    async fetch()       { return []; },
+    async fetchRecent() { return []; }
+  }
+};
+
+// ── CREDENTIAL STORAGE ────────────────────────────────────────────────────
+const CRED_KEY = 'river_cgm_cfg';
+
+function saveCGMConfig(sourceId, fields) {
+  try {
+    localStorage.setItem(CRED_KEY, JSON.stringify({ sourceId, fields, savedAt: Date.now() }));
+    return true;
+  } catch(e) { return false; }
+}
+
+function loadCGMConfig() {
+  try { return JSON.parse(localStorage.getItem(CRED_KEY) || 'null'); } catch(e) { return null; }
+}
+
+function clearCGMConfig() {
+  localStorage.removeItem(CRED_KEY);
+}
+
+// ── LIVE POLLING ─────────────────────────────────────────────────────────
+let _pollTimer     = null;
+let _liveConnected = false;
+let _lastReadingT  = 0;
+let _sourceCfg     = null;
+let _sourceId      = null;
+
+async function startLivePolling(sourceId, cfg) {
+  _sourceId  = sourceId;
+  _sourceCfg = cfg;
+  stopLivePolling();
+
+  const source = CGM_SOURCES[sourceId];
+  if (!source || sourceId === 'manual') return;
+
+  // Initial backfill — last 3 hours
+  try {
+    setLiveStatus('connecting', 'Loading history…');
+    const recent = await source.fetchRecent(cfg, 3);
+    if (recent.length > 0) {
+      ingestReadings(recent);
+      setLiveStatus('live', `${recent.length} readings loaded`);
+    }
+  } catch(e) {
+    setLiveStatus('error', e.message);
+    console.warn('CGM backfill failed:', e);
+  }
+
+  // Poll every 5 minutes
+  async function poll() {
+    try {
+      const readings = await source.fetch(_sourceCfg, 2);
+      if (readings.length > 0) {
+        const newest = readings[readings.length-1];
+        if (newest.t > _lastReadingT) {
+          ingestReadings(readings);
+          _liveConnected = true;
+          setLiveStatus('live', formatAge(newest.t));
+          triggerNewReadingPulse();
+        }
+      }
+    } catch(e) {
+      _liveConnected = false;
+      setLiveStatus('error', e.message);
+      console.warn('CGM poll failed:', e);
+    }
+  }
+
+  await poll(); // immediate
+  _pollTimer = setInterval(poll, 5 * 60000);
+}
+
+function stopLivePolling() {
+  if (_pollTimer) { clearInterval(_pollTimer); _pollTimer = null; }
+  _liveConnected = false;
+}
+
+function ingestReadings(readings) {
+  for (const r of readings) {
+    if (!r.t || !r.bg || r.bg < 1 || r.bg > 30) continue;
+    const existing = HISTORY_RAW.findIndex(h => Math.abs(h.t - r.t) < 90000);
+    const entry = { t: r.t, bg: r.bg, iob: 0, cob: 0, pen: 1 };
+    if (existing >= 0) HISTORY_RAW[existing] = { ...HISTORY_RAW[existing], bg: r.bg };
+    else HISTORY_RAW.push(entry);
+    if (r.t > _lastReadingT) _lastReadingT = r.t;
+  }
+  HISTORY_RAW.sort((a,b) => a.t - b.t);
+  // Snap to latest if user is near "now"
+  const latestT = HISTORY_RAW[HISTORY_RAW.length-1].t;
+  if (Math.abs(viewTime - latestT) < 10 * 60000) viewTime = latestT;
+}
+
+function formatAge(t) {
+  const mins = Math.round((Date.now() - t) / 60000);
+  if (mins < 1) return 'just now';
+  if (mins === 1) return '1 min ago';
+  if (mins < 60) return `${mins} mins ago`;
+  return `${Math.round(mins/60)}h ago`;
+}
+
+let _pulseAlpha = 0;
+function triggerNewReadingPulse() { _pulseAlpha = 1.0; }
+
+// ── SETUP SCREEN ────────────────────────────────────────────────────────
+function buildSetupScreen() {
+  const existing = loadCGMConfig();
+  const selId    = existing?.sourceId || 'nightscout';
+
+  return `
+<div id="setup-screen" style="
+  position:fixed;inset:0;z-index:200;
+  background:rgba(240,238,228,0.98);
+  display:flex;flex-direction:column;align-items:center;justify-content:center;
+  font-family:'DM Sans',sans-serif;padding:24px;overflow-y:auto;
+">
+  <div style="max-width:440px;width:100%">
+    <!-- Logo -->
+    <div style="text-align:center;margin-bottom:28px">
+      <div style="font-family:'Fraunces',serif;font-style:italic;font-weight:200;
+        font-size:32px;color:rgba(40,55,50,0.75);letter-spacing:-1px">Oskar's River</div>
+      <div style="font-family:'DM Mono',monospace;font-size:9px;color:rgba(40,55,50,0.3);
+        letter-spacing:2px;text-transform:uppercase;margin-top:4px">connect your cgm</div>
+    </div>
+
+    <!-- Source selector -->
+    <div style="display:flex;gap:8px;margin-bottom:20px" id="source-tabs">
+      ${Object.entries(CGM_SOURCES).map(([id,src]) => `
+        <button onclick="selectSource('${id}')"
+          id="stab-${id}"
+          style="flex:1;padding:10px 6px;border-radius:10px;cursor:pointer;
+            font-family:'DM Sans',sans-serif;font-size:11px;text-align:center;
+            border:1.5px solid ${id===selId?'rgba(40,55,50,0.4)':'rgba(40,55,50,0.12)'};
+            background:${id===selId?'rgba(40,55,50,0.08)':'transparent'};
+            color:${id===selId?'rgba(40,55,50,0.8)':'rgba(40,55,50,0.4)'};
+            transition:all .15s">
+          <div style="font-size:20px;margin-bottom:4px">${src.icon}</div>
+          ${src.name}
+        </button>
+      `).join('')}
+    </div>
+
+    <!-- Source description -->
+    <div id="src-desc" style="font-size:12px;color:rgba(40,55,50,0.45);
+      margin-bottom:16px;line-height:1.5;min-height:36px;text-align:center">
+      ${CGM_SOURCES[selId].description}
+    </div>
+
+    <!-- Fields -->
+    <div id="src-fields" style="display:flex;flex-direction:column;gap:10px;margin-bottom:16px">
+    </div>
+
+    <!-- Status / error -->
+    <div id="setup-status" style="font-size:11px;color:rgba(40,55,50,0.4);
+      text-align:center;margin-bottom:12px;min-height:18px;font-family:'DM Mono',monospace"></div>
+
+    <!-- Connect button -->
+    <button onclick="connectCGM()" id="connect-btn"
+      style="width:100%;padding:14px;border-radius:10px;
+        border:1px solid rgba(40,55,50,0.2);
+        background:rgba(40,55,50,0.08);
+        color:rgba(40,55,50,0.7);font-family:'Fraunces',serif;
+        font-style:italic;font-weight:200;font-size:17px;
+        cursor:pointer;transition:all .12s;letter-spacing:-.2px">
+      begin the flow
+    </button>
+
+    <!-- Skip -->
+    <div style="text-align:center;margin-top:12px">
+      <button onclick="skipSetup()"
+        style="background:none;border:none;cursor:pointer;
+          font-family:'DM Mono',monospace;font-size:9px;letter-spacing:1px;
+          text-transform:uppercase;color:rgba(40,55,50,0.25);padding:4px">
+        skip for now — use demo data
+      </button>
+    </div>
+
+    <!-- Privacy note -->
+    <div style="margin-top:20px;padding:12px;border-radius:8px;
+      background:rgba(40,55,50,0.04);border:1px solid rgba(40,55,50,0.08)">
+      <div style="font-size:10px;color:rgba(40,55,50,0.35);line-height:1.6">
+        🔒 <strong style="color:rgba(40,55,50,0.5)">Your credentials stay on this device.</strong>
+        They're saved to your browser's localStorage and sent only to your CGM provider —
+        never to any third party. This app has no backend.
+      </div>
+    </div>
+  </div>
+</div>`;
+}
+
+let _selectedSource = 'nightscout';
+
+function selectSource(id) {
+  _selectedSource = id;
+  const src = CGM_SOURCES[id];
+  // Update tabs
+  Object.keys(CGM_SOURCES).forEach(sid => {
+    const btn = document.getElementById(`stab-${sid}`);
+    if (!btn) return;
+    const active = sid === id;
+    btn.style.borderColor  = active ? 'rgba(40,55,50,0.4)' : 'rgba(40,55,50,0.12)';
+    btn.style.background   = active ? 'rgba(40,55,50,0.08)' : 'transparent';
+    btn.style.color        = active ? 'rgba(40,55,50,0.8)' : 'rgba(40,55,50,0.4)';
+  });
+  // Update description
+  const desc = document.getElementById('src-desc');
+  if (desc) desc.textContent = src.description;
+  // Update fields
+  renderSourceFields(id);
+  document.getElementById('setup-status').textContent = '';
+}
+
+function renderSourceFields(id) {
+  const src       = CGM_SOURCES[id];
+  const container = document.getElementById('src-fields');
+  if (!container) return;
+  const existing  = loadCGMConfig();
+  const saved     = (existing?.sourceId === id) ? existing.fields : {};
+
+  container.innerHTML = src.fields.map(f => {
+    if (f.type === 'select') {
+      return `<div>
+        <label style="font-family:'DM Mono',monospace;font-size:9px;letter-spacing:1px;
+          text-transform:uppercase;color:rgba(40,55,50,0.4);display:block;margin-bottom:5px">${f.label}</label>
+        <select id="sf-${f.key}"
+          style="width:100%;padding:10px 12px;border-radius:8px;
+            border:1px solid rgba(40,55,50,0.15);background:rgba(255,255,255,0.7);
+            font-family:'DM Sans',sans-serif;font-size:14px;color:rgba(40,55,50,0.8);
+            outline:none;-webkit-appearance:none">
+          ${f.options.map(o => `<option value="${o.value}" ${(saved[f.key]||'ous')===o.value?'selected':''}>${o.label}</option>`).join('')}
+        </select>
+      </div>`;
+    }
+    return `<div>
+      <label style="font-family:'DM Mono',monospace;font-size:9px;letter-spacing:1px;
+        text-transform:uppercase;color:rgba(40,55,50,0.4);display:block;margin-bottom:5px">${f.label}</label>
+      <input id="sf-${f.key}" type="${f.type}" placeholder="${f.placeholder}"
+        value="${saved[f.key]||''}"
+        style="width:100%;padding:11px 14px;border-radius:8px;
+          border:1px solid rgba(40,55,50,0.15);background:rgba(255,255,255,0.7);
+          font-family:'DM Mono',monospace;font-size:13px;color:rgba(40,55,50,0.8);
+          outline:none;box-sizing:border-box"
+        autocomplete="${f.type==='password'?'current-password':'off'}"
+        autocapitalize="none" autocorrect="off" spellcheck="false">
+    </div>`;
+  }).join('');
+}
+
+async function connectCGM() {
+  const src    = CGM_SOURCES[_selectedSource];
+  const status = document.getElementById('setup-status');
+  const btn    = document.getElementById('connect-btn');
+  if (!status || !btn) return;
+
+  // Collect field values
+  const fields = {};
+  for (const f of src.fields) {
+    const el = document.getElementById(`sf-${f.key}`);
+    if (el) fields[f.key] = el.value.trim();
+  }
+
+  // Validate
+  for (const f of src.fields) {
+    if (f.type !== 'select' && !fields[f.key]) {
+      status.textContent = `Please enter your ${f.label.toLowerCase()}`;
+      status.style.color = 'rgba(160,60,30,0.8)';
+      return;
+    }
+  }
+
+  btn.textContent    = 'connecting…';
+  btn.disabled       = true;
+  status.textContent = 'Testing connection…';
+  status.style.color = 'rgba(40,55,50,0.4)';
+
+  try {
+    const readings = await src.fetch(fields, 1);
+    if (readings.length === 0) throw new Error('No readings returned — check credentials');
+
+    const latest = readings[0];
+    const ageMin = Math.round((Date.now() - latest.t) / 60000);
+    status.textContent = `✓ Connected — last reading ${latest.bg} mmol/L, ${ageMin} min ago`;
+    status.style.color = 'rgba(40,120,60,0.8)';
+
+    // Save and launch
+    saveCGMConfig(_selectedSource, fields);
+    setTimeout(() => {
+      dismissSetup();
+      startLivePolling(_selectedSource, fields);
+    }, 1200);
+
+  } catch(e) {
+    status.textContent = `✗ ${e.message}`;
+    status.style.color = 'rgba(160,60,30,0.8)';
+    btn.textContent    = 'try again';
+    btn.disabled       = false;
+  }
+}
+
+function skipSetup() {
+  saveCGMConfig('manual', {});
+  dismissSetup();
+}
+
+function dismissSetup() {
+  const s = document.getElementById('setup-screen');
+  if (s) { s.style.opacity='0'; s.style.transition='opacity .4s'; setTimeout(()=>s.remove(),400); }
+}
+
+// ── LIVE STATUS INDICATOR ────────────────────────────────────────────────
+// Small dot in top-right of the HUD
+function setLiveStatus(state, text) {
+  const dot = document.getElementById('live-dot');
+  if (!dot) return;
+  const colors = { live:'#4a9060', connecting:'#c87832', error:'#c04030' };
+  dot.style.background = colors[state] || colors.connecting;
+  dot.title = text || '';
+  dot.style.opacity = '1';
+}
+
+// ── SETTINGS BUTTON (cog, bottom-left) ──────────────────────────────────
+function openSettings() {
+  // Re-render setup screen on top
+  const existing = document.getElementById('setup-screen');
+  if (existing) existing.remove();
+  document.body.insertAdjacentHTML('beforeend', buildSetupScreen());
+  _selectedSource = loadCGMConfig()?.sourceId || 'nightscout';
+  renderSourceFields(_selectedSource);
+  // Add close button
+  const sc = document.getElementById('setup-screen');
+  if (sc) {
+    sc.querySelector('div').insertAdjacentHTML('afterbegin',
+      `<button onclick="dismissSetup()" style="position:absolute;top:16px;right:16px;
+        background:none;border:none;cursor:pointer;font-size:22px;
+        color:rgba(40,55,50,0.3)">×</button>`);
+  }
+}
+
+
+</script>
+</body>
+</html>
