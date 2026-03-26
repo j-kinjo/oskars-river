@@ -187,7 +187,7 @@ html,body{width:100%;height:100%;overflow:hidden;background:#c8d8d0;touch-action
   <div class="ripwrap"><div class="rip"></div><div class="rip"></div><div class="rip"></div></div>
   <div class="ltitle">Oskar's River</div>
   <div class="lsub">finding the current</div>
-  <div style="font-family:'DM Mono',monospace;font-size:8px;color:rgba(40,55,50,0.2);margin-top:8px;letter-spacing:1px">build 20260326-23</div>
+  <div style="font-family:'DM Mono',monospace;font-size:8px;color:rgba(40,55,50,0.2);margin-top:8px;letter-spacing:1px">build 20260326-25</div>
 </div>
 
 <canvas id="c"></canvas>
@@ -835,94 +835,139 @@ function drawWater(pal, d) {
 // Hyper zone (top of water) and hypo zone (bottom of water)
 // Density increases as BG approaches danger
 function drawLilyPads(pal, d) {
+  // "drawLilyPads" now draws the river BANKS
+  // Banks encroach based on BG proximity to danger zones
   const skyH = HORIZON*H;
   const wH   = H - skyH;
-  const waterTop = skyH;
-  const waterBot = H;
 
-  // How close to danger zones — drives bank intrusion
-  const hyperProx = Math.max(0, Math.min(1, (d.bg - BG_HIGH) / 4.0)); // 0 at 10, 1 at 14
-  const hypoProx  = Math.max(0, Math.min(1, (BG_LOW + 2.0 - d.bg) / 2.0)); // 0 at 5.9, 1 at 3.9
+  const hyperProx = Math.max(0, Math.min(1, (d.bg - BG_HIGH) / 4.0));
+  const hypoProx  = Math.max(0, Math.min(1, (BG_LOW + 2.0 - d.bg) / 2.0));
 
-  // Bank intrusion depth — how far banks encroach into the river
-  // At full danger: bank covers 40% of water height
-  const topIntrude = hyperProx * wH * 0.42; // top bank comes down
-  const botIntrude = hypoProx  * wH * 0.42; // bottom bank comes up
+  const topIntrude = hyperProx * wH * 0.45;
+  const botIntrude = hypoProx  * wH * 0.45;
 
-  const lc = pal.lily || 'rgba(45,90,35,';
+  // Always draw thin base banks (river always has banks)
+  const topH = Math.max(wH * 0.055, topIntrude + wH * 0.03);
+  const botH = Math.max(wH * 0.055, botIntrude + wH * 0.03);
 
-  // ── TOP BANK (hyperglycemia zone) ────────────────────────────────
-  // Dense lily pad zone from top of water down to topIntrude depth
-  // Always has a thin base strip, grows dramatically as BG rises
-  const topZoneH = Math.max(wH*0.06, topIntrude + wH*0.04);
-  drawBank(waterTop, topZoneH, 1, lc, hyperProx, 33);
+  drawBank(skyH, topH, true,  pal, hyperProx);
+  drawBank(H - botH, botH, false, pal, hypoProx);
 
-  // ── BOTTOM BANK (hypoglycemia zone) ──────────────────────────────
-  // Dense lily pad zone from bottom up
-  const botZoneH = Math.max(wH*0.06, botIntrude + wH*0.04);
-  drawBank(waterBot - botZoneH, botZoneH, -1, lc, hypoProx, 44);
-
-  // ── BANK EDGE LINE — sharp visual boundary ────────────────────────
-  // Shows as a clearly defined shoreline that the boat approaches
-  if (topIntrude > 5) {
-    const edgeY = waterTop + topIntrude;
-    CX.save();
-    CX.globalAlpha = 0.15 + hyperProx*0.35;
-    // Wavy edge line
-    CX.strokeStyle = `rgba(${(pal.causticRGB||[80,180,80]).join(',')},1)`;
-    CX.lineWidth = 1.5;
-    CX.beginPath();
-    for (let x=0; x<=W; x+=4) {
-      const wy = edgeY + Math.sin(x*0.04+phi*0.8)*3*(1+hyperProx);
-      x===0 ? CX.moveTo(x,wy) : CX.lineTo(x,wy);
-    }
-    CX.stroke();
-    CX.restore();
-  }
-  if (botIntrude > 5) {
-    const edgeY = waterBot - botIntrude;
-    CX.save();
-    CX.globalAlpha = 0.15 + hypoProx*0.35;
-    CX.strokeStyle = 'rgba(80,130,220,0.9)';
-    CX.lineWidth = 1.5;
-    CX.beginPath();
-    for (let x=0; x<=W; x+=4) {
-      const wy = edgeY + Math.sin(x*0.04+phi*0.8+2)*3*(1+hypoProx);
-      x===0 ? CX.moveTo(x,wy) : CX.lineTo(x,wy);
-    }
-    CX.stroke();
-    CX.restore();
-  }
+  // Wavy water-edge lines — always visible
+  drawShoreEdge(skyH + topH,  pal, hyperProx, false);
+  drawShoreEdge(H   - botH,   pal, hypoProx,  true);
 }
 
-function drawBank(startY, height, dir, lc, danger, seed) {
-  if (height < 4) return;
-  const drift = (treeScrollX * 0.4) % (W * 0.9);
-  const rng   = seededRand(seed);
-  const count = Math.floor(6 + danger*20 + height*0.4);
+function drawBank(startY, height, isTop, pal, danger) {
+  if (height < 2) return;
+  const endY = isTop ? startY + height : startY + height;
+  const earthTop   = isTop ? startY  : startY;
+  const waterEdgeY = isTop ? startY + height : startY;
+  const rng = seededRand(isTop ? 11 : 22);
   CX.save();
-  for (let i=0; i<count; i++) {
-    const px = ((rng()*W*1.5 - drift) % (W*1.5)) - W*0.25;
-    const depthF = Math.pow(rng(), 0.6); // bias toward edge
-    const py = startY + (dir > 0 ? depthF*height : (1-depthF)*height);
-    if (dir < 0 && py < startY) continue;
-    if (dir > 0 && py > startY+height) continue;
-    const r = Math.max(0.5, 6 + rng()*16*(1-depthF*0.3));
-    const a = Math.max(0.05, (1-depthF*0.5)*(0.2 + danger*0.5));
-    // Pad body
-    CX.globalAlpha = a;
-    CX.fillStyle = lc + '1)';
-    CX.beginPath();
-    CX.ellipse(px, py, Math.max(0.5,r), Math.max(0.3,r*0.6), rng()*Math.PI, 0, Math.PI*2);
-    CX.fill();
-    // Highlight
-    CX.globalAlpha = a*0.35;
-    CX.fillStyle = 'rgba(140,210,80,1)';
-    CX.beginPath();
-    CX.ellipse(px-r*0.2, py-r*0.15, Math.max(0.3,r*0.3), Math.max(0.2,r*0.18), 0, 0, Math.PI*2);
-    CX.fill();
+
+  // ── Base earth fill ──
+  const eg = CX.createLinearGradient(0, earthTop, 0, earthTop + (isTop ? height : -height));
+  if (pal.isNight) {
+    eg.addColorStop(0,   `rgba(15,30,20,0.95)`);
+    eg.addColorStop(0.6, `rgba(18,38,25,0.9)`);
+    eg.addColorStop(1,   `rgba(20,45,28,0.7)`);
+  } else if (pal.name==='dawn'||pal.name==='dusk') {
+    eg.addColorStop(0,   `rgba(45,35,20,0.92)`);
+    eg.addColorStop(0.6, `rgba(52,58,28,0.88)`);
+    eg.addColorStop(1,   `rgba(55,72,30,0.7)`);
+  } else {
+    eg.addColorStop(0,   `rgba(30,55,25,0.95)`);
+    eg.addColorStop(0.5, `rgba(38,68,30,0.9)`);
+    eg.addColorStop(1,   `rgba(45,80,32,0.75)`);
   }
+  CX.fillStyle = eg;
+  CX.fillRect(0, startY, W, height);
+
+  // ── Grass texture — small vertical strokes at water edge ──
+  CX.globalAlpha = 0.25 + danger*0.2;
+  const grassCol = pal.isNight ? '#1a4020' : '#3a7830';
+  const drift    = (treeScrollX * 0.6) % (W * 0.5);
+  const grassRng = seededRand(isTop ? 33 : 44);
+  const grassCount = Math.floor(W / 10);
+  for (let i=0;i<grassCount;i++) {
+    const gx = ((i * 13.7 + grassRng()*5 - drift) % W + W) % W;
+    const gh = 4 + grassRng()*9 + danger*8;
+    const gw = 0.8 + grassRng()*0.8;
+    const gy = isTop ? waterEdgeY - gh*0.3 : waterEdgeY - gh*0.7;
+    CX.fillStyle = grassCol;
+    CX.globalAlpha = (0.3 + grassRng()*0.3) * (0.5 + danger*0.5);
+    // Slightly angled grass blade
+    const lean = (grassRng()-0.5)*3;
+    CX.beginPath();
+    CX.moveTo(gx, isTop ? waterEdgeY : waterEdgeY);
+    CX.quadraticCurveTo(gx+lean, isTop ? gy+gh*0.5 : gy-gh*0.5, gx+lean*2, gy);
+    CX.lineWidth = gw; CX.strokeStyle = grassCol; CX.stroke();
+  }
+
+  // ── Reeds at water line ──
+  CX.globalAlpha = 0.35 + danger*0.25;
+  const reedRng = seededRand(isTop ? 55 : 66);
+  for (let i=0;i<Math.floor(W/28);i++) {
+    const rx = ((reedRng()*W - drift*0.8) % W + W) % W;
+    const rh = 14 + reedRng()*20 + danger*12;
+    const ry = isTop ? waterEdgeY - rh*0.1 : waterEdgeY + rh*0.1;
+    const rtop = isTop ? ry - rh : ry + rh;
+    CX.strokeStyle = pal.isNight ? '#1a3520' : '#2d5e28';
+    CX.lineWidth   = 1.2 + reedRng()*0.8;
+    CX.beginPath(); CX.moveTo(rx, ry); CX.lineTo(rx+(reedRng()-0.5)*3, rtop); CX.stroke();
+    // Reed head
+    CX.globalAlpha = 0.4 + danger*0.3;
+    CX.fillStyle   = pal.isNight ? '#2a2010' : '#5a3818';
+    CX.beginPath();
+    CX.ellipse(rx, rtop+(isTop?-2:2), 1.5, 4, 0, 0, Math.PI*2); CX.fill();
+  }
+
+  // ── Danger: rocks/debris appear as bank encroaches ──
+  if (danger > 0.3) {
+    const rockRng = seededRand(isTop ? 77 : 88);
+    const nRocks  = Math.floor(danger * 12);
+    for (let i=0;i<nRocks;i++) {
+      const rkx = ((rockRng()*W - drift*0.4) % W + W) % W;
+      const depF = rockRng();
+      const rky  = isTop ? waterEdgeY - depF*height*0.6 : waterEdgeY + depF*height*0.6;
+      const rkr  = 3 + rockRng()*6 + danger*4;
+      CX.globalAlpha = 0.4 + danger*0.4;
+      CX.fillStyle   = pal.isNight ? 'rgba(40,40,50,0.9)' : 'rgba(80,75,65,0.9)';
+      CX.beginPath();
+      CX.ellipse(rkx, rky, Math.max(1,rkr), Math.max(0.5,rkr*0.55), rockRng()*Math.PI, 0, Math.PI*2);
+      CX.fill();
+    }
+  }
+
+  // ── Boat collision effect: boat at danger edge = ripple + flash ──
+  if (danger > 0.7) {
+    const collisionAlpha = (danger - 0.7) / 0.3;
+    CX.globalAlpha = collisionAlpha * (0.3 + Math.sin(phi*4)*0.2);
+    const cg = CX.createLinearGradient(0, waterEdgeY, 0, waterEdgeY + (isTop?16:-16));
+    cg.addColorStop(0, isTop ? 'rgba(220,80,40,0.8)' : 'rgba(60,100,220,0.8)');
+    cg.addColorStop(1, 'transparent');
+    CX.fillStyle = cg;
+    CX.fillRect(0, isTop ? waterEdgeY-2 : waterEdgeY, W, isTop ? 18 : -18);
+  }
+
   CX.restore();
+}
+
+function drawShoreEdge(edgeY, pal, danger, isBottom) {
+  // Wavy water-meets-bank line
+  CX.save();
+  CX.globalAlpha = 0.2 + danger*0.3;
+  const col = isBottom ? 'rgba(80,130,220,0.9)' : 'rgba(80,200,120,0.9)';
+  CX.strokeStyle = col; CX.lineWidth = 1.2;
+  CX.shadowColor = col; CX.shadowBlur = danger > 0.3 ? 8 : 3;
+  CX.beginPath();
+  for (let x=0; x<=W; x+=3) {
+    const wy = edgeY + Math.sin(x*0.035 + phi*0.9)*2.5*(1+danger*1.5)
+                     + Math.sin(x*0.018 + phi*0.4)*1.5;
+    x===0 ? CX.moveTo(x,wy) : CX.lineTo(x,wy);
+  }
+  CX.stroke(); CX.shadowBlur=0; CX.restore();
 }
 // ── DRAWING: MANA WAKES ──────────────────────────────────────
 // The wake spreads from the boat's stern (nowX) back into the past (left)
@@ -1594,6 +1639,184 @@ function updateHUD(d, pal) {
 }
 
 // ── MAIN FRAME ───────────────────────────────────────────────
+
+// ── SMART ALERT SYSTEM ──────────────────────────────────────────────
+// Hypo: act NOW — urgent, escalating
+// Hyper: only alert when correction window is open (IOB clear, safe gap)
+
+const ALERTS = {
+  _lastAlertT:   {},
+  _audioCtx:     null,
+  _snoozedUntil: {},
+
+  canFire(key, cooldownMs) {
+    const now = Date.now();
+    if (this._snoozedUntil[key] && now < this._snoozedUntil[key]) return false;
+    if (this._lastAlertT[key]   && now - this._lastAlertT[key] < cooldownMs) return false;
+    return true;
+  },
+  fire(key)          { this._lastAlertT[key] = Date.now(); },
+  snooze(key, ms)    { this._snoozedUntil[key] = Date.now() + ms; },
+
+  beep(freq, dur, vol, type) {
+    type = type || 'sine';
+    try {
+      if (!this._audioCtx) this._audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+      const ctx = this._audioCtx;
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.connect(gain); gain.connect(ctx.destination);
+      osc.type = type;
+      osc.frequency.setValueAtTime(freq, ctx.currentTime);
+      gain.gain.setValueAtTime(vol, ctx.currentTime);
+      gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + dur);
+      osc.start(ctx.currentTime);
+      osc.stop(ctx.currentTime + dur);
+    } catch(e) {}
+  },
+
+  hypoAlarm() {
+    var self = this;
+    [0, 180, 360].forEach(function(delay) {
+      setTimeout(function() {
+        self.beep(440, 0.15, 0.6, 'square');
+        setTimeout(function() { self.beep(580, 0.15, 0.6, 'square'); }, 80);
+        setTimeout(function() { self.beep(740, 0.25, 0.6, 'square'); }, 160);
+      }, delay);
+    });
+    if (navigator.vibrate) navigator.vibrate([200,100,200,100,400]);
+  },
+
+  hypoWarning() {
+    this.beep(520, 0.2, 0.35, 'sine');
+    var self = this;
+    setTimeout(function() { self.beep(520, 0.2, 0.35, 'sine'); }, 300);
+    if (navigator.vibrate) navigator.vibrate([150, 100, 150]);
+  },
+
+  correctionNudge() {
+    this.beep(660, 0.3, 0.18, 'sine');
+    var self = this;
+    setTimeout(function() { self.beep(880, 0.4, 0.12, 'sine'); }, 350);
+  }
+};
+
+var _alertState = null;
+var _alertPulse = 0;
+var _bannerTimeout = null;
+
+function showAlertBanner(msg, bgCol, urgent) {
+  var banner = document.getElementById('alert-banner');
+  if (!banner) {
+    banner = document.createElement('div');
+    banner.id = 'alert-banner';
+    banner.style.position = 'fixed';
+    banner.style.top = 'max(60px,env(safe-area-inset-top,60px))';
+    banner.style.left = '50%';
+    banner.style.transform = 'translateX(-50%)';
+    banner.style.zIndex = '50';
+    banner.style.padding = '12px 20px';
+    banner.style.borderRadius = '14px';
+    banner.style.fontFamily = "'DM Mono',monospace";
+    banner.style.fontSize = '12px';
+    banner.style.letterSpacing = '.3px';
+    banner.style.color = 'rgba(255,255,255,0.95)';
+    banner.style.textAlign = 'center';
+    banner.style.backdropFilter = 'blur(12px)';
+    banner.style.border = '1px solid rgba(255,255,255,0.15)';
+    banner.style.cursor = 'pointer';
+    banner.style.maxWidth = '280px';
+    banner.style.lineHeight = '1.4';
+    banner.style.transition = 'opacity .3s';
+    banner.onclick = function() {
+      banner.style.opacity = '0';
+      ALERTS.snooze('corr_nudge', 20*60000);
+      ALERTS.snooze('corr_high',  20*60000);
+    };
+    document.body.appendChild(banner);
+  }
+  banner.textContent = msg;
+  banner.style.background = bgCol;
+  banner.style.opacity = '1';
+  banner.style.boxShadow = urgent ? '0 0 30px rgba(60,100,255,0.4)' : 'none';
+  if (_bannerTimeout) clearTimeout(_bannerTimeout);
+  _bannerTimeout = setTimeout(function() {
+    if (banner) banner.style.opacity = '0';
+  }, urgent ? 20000 : 8000);
+}
+
+function checkAlerts(d) {
+  if (!d || !d.bg) return;
+  var now = Date.now();
+  var lastBol = 0;
+  for (var i=0; i<SESSION.length; i++) {
+    if (SESSION[i].t > lastBol) lastBol = SESSION[i].t;
+  }
+  var minsSinceLastBolus = lastBol > 0 ? (now - lastBol)/60000 : 999;
+
+  // Hypo urgent < 3.9
+  if (d.bg < 3.9) {
+    _alertState = 'hypo_urgent';
+    _alertPulse = Math.min(1, (_alertPulse||0) + 0.05);
+    if (ALERTS.canFire('hypo_urgent', 3*60000)) {
+      ALERTS.hypoAlarm();
+      ALERTS.fire('hypo_urgent');
+      showAlertBanner('HYPO — treat NOW', 'rgba(40,60,200,0.95)', true);
+    }
+    return;
+  }
+
+  // Hypo warning 3.9–4.5
+  if (d.bg < 4.5) {
+    _alertState = 'hypo_warn';
+    _alertPulse = Math.min(0.6, (_alertPulse||0) + 0.02);
+    if (ALERTS.canFire('hypo_warn', 5*60000)) {
+      ALERTS.hypoWarning();
+      ALERTS.fire('hypo_warn');
+      showAlertBanner('Dropping — watch closely', 'rgba(60,90,200,0.85)', false);
+    }
+    return;
+  }
+
+  // Correction window: only alert when you can actually act
+  var iobClear = d.iob < 0.5;
+  var bolusGap = minsSinceLastBolus > 90;
+  var high = d.bg > 10.5;
+  var veryHigh = d.bg > 14;
+
+  if (high && iobClear && bolusGap) {
+    _alertState = 'correction';
+    var key = veryHigh ? 'corr_high' : 'corr_nudge';
+    var cooldown = veryHigh ? 30*60000 : 60*60000;
+    if (ALERTS.canFire(key, cooldown)) {
+      ALERTS.correctionNudge();
+      ALERTS.fire(key);
+      var msg = veryHigh
+        ? ('BG ' + d.bg.toFixed(1) + ' — correction window open')
+        : (d.bg.toFixed(1) + ' mmol — could correct now');
+      showAlertBanner(msg, 'rgba(180,100,30,0.85)', false);
+    }
+    return;
+  }
+
+  // All clear
+  _alertState = null;
+  _alertPulse = Math.max(0, (_alertPulse||0) - 0.03);
+}
+
+function drawHypoPulse(pal) {
+  if (!_alertPulse || _alertPulse < 0.01) return;
+  var isUrgent = (_alertState === 'hypo_urgent');
+  var pulseA   = _alertPulse * (0.12 + Math.sin(phi * (isUrgent ? 5 : 2)) * 0.08);
+  var col      = isUrgent ? 'rgba(40,80,220,' : 'rgba(80,120,200,';
+  var grad     = CX.createRadialGradient(W/2, H, 0, W/2, H, H*0.8);
+  grad.addColorStop(0,   col + (pulseA*1.5).toFixed(3) + ')');
+  grad.addColorStop(0.5, col + pulseA.toFixed(3) + ')');
+  grad.addColorStop(1,   col + '0)');
+  CX.save(); CX.fillStyle=grad; CX.fillRect(0,0,W,H); CX.restore();
+}
+
+
 function returnToNow() {
   viewTime = HISTORY_RAW[HISTORY_RAW.length-1].t;
   viewSpan = 2 * 3600000; // fixed 2h
@@ -1674,6 +1897,8 @@ function frame(ts) {
   CX.fillText(dateStr, nowX, boatY2 - 26);
   CX.restore();
 
+  checkAlerts(d);
+  drawHypoPulse(pal);
   updateHUD(d, pal);
 
   requestAnimationFrame(frame);
@@ -1763,6 +1988,17 @@ function setCarbs(v) {
   onInp();
 }
 
+
+function openSheet(){
+  const sheet = document.getElementById('sheet');
+  const overlay = document.getElementById('overlay');
+  if (!sheet || !overlay) return;
+  sheet.classList.add('open');
+  overlay.classList.add('open');
+  setTimeNow();
+  renderSavedMeals();
+  selType('b');
+}
 
 function closeSheet(){
   document.getElementById('sheet').classList.remove('open');
@@ -2213,7 +2449,7 @@ function buildSetupScreen() {
         never to any third party. This app has no backend.
       </div>
     </div>
-    <div style="text-align:center;margin-top:10px;font-family:'DM Mono',monospace;font-size:8px;color:rgba(40,55,50,0.15);letter-spacing:1px">build 20260326-23</div>
+    <div style="text-align:center;margin-top:10px;font-family:'DM Mono',monospace;font-size:8px;color:rgba(40,55,50,0.15);letter-spacing:1px">build 20260326-25</div>
   </div>
 </div>`;
 }
