@@ -187,7 +187,7 @@ html,body{width:100%;height:100%;overflow:hidden;background:#c8d8d0;touch-action
   <div class="ripwrap"><div class="rip"></div><div class="rip"></div><div class="rip"></div></div>
   <div class="ltitle">Oskar's River</div>
   <div class="lsub">finding the current</div>
-  <div style="font-family:'DM Mono',monospace;font-size:8px;color:rgba(40,55,50,0.2);margin-top:8px;letter-spacing:1px">build 20260326-25</div>
+  <div style="font-family:'DM Mono',monospace;font-size:8px;color:rgba(40,55,50,0.2);margin-top:8px;letter-spacing:1px">build 20260326-26</div>
 </div>
 
 <canvas id="c"></canvas>
@@ -1424,88 +1424,172 @@ function drawBolusMarkers(pal) {
 }
 // ── DRAWING: THE BOAT ────────────────────────────────────────
 function drawBoat(pal, d) {
-  const nowX  = NOW_X*W;
+  const nowX = NOW_X*W;
   const boatY = boatYfromBG(d.bg);
   const prev  = dataAt(viewTime - 10*60000);
   const rate  = (d.bg - prev.bg) / (10/60);
-  const tilt  = Math.max(-0.3, Math.min(0.3, rate*0.025));
-  const bob   = Math.sin(phi*1.1)*2.5;
-  const isNight = pal.isNight;
-  const woodDark  = isNight ? '#3a2818' : '#5c3820';
-  const woodLight = isNight ? '#6a4830' : '#8B5E3C';
-  const woodHi    = isNight ? '#8a6848' : '#b8844e';
+  const tilt  = Math.max(-0.15, Math.min(0.15, rate * 0.016));
+  const bob   = Math.sin(phi * 1.1) * 2.2;
 
   CX.save();
-  CX.translate(nowX, boatY+bob);
+  CX.translate(nowX, boatY + bob);
   CX.rotate(tilt);
 
-  // NOTE: straight wake lines removed — COB/IOB streams ARE the wake
-  const bW=18, bL=46; // bigger, more cartoon
+  const dk = pal.isNight;
+  const wood = [ dk?'#7a4820':'#a86428', dk?'#8a5530':'#be7838', dk?'#6a3c18':'#925220' ];
+  const woodHi = dk?'#a07040':'#d4a060';
+  const endC   = dk?'#3a1c08':'#5c2e10';
+  const ropeC  = dk?'#6a4a10':'#9a6818';
 
-  // Water shadow
-  CX.save(); CX.globalAlpha=0.15;
-  CX.fillStyle='rgba(0,0,0,0.6)';
-  CX.beginPath(); CX.ellipse(0,5,bL*0.85,bW*0.65,0,0,Math.PI*2); CX.fill(); CX.restore();
+  // Shadow
+  CX.save(); CX.globalAlpha=0.2; CX.fillStyle='#061008';
+  CX.beginPath(); CX.ellipse(4, 36, 95, 12, 0, 0, Math.PI*2); CX.fill(); CX.restore();
 
-  // Outer hull
-  const hg=CX.createLinearGradient(0,-bW,0,bW);
-  hg.addColorStop(0,woodDark); hg.addColorStop(0.35,woodLight);
-  hg.addColorStop(0.65,woodLight); hg.addColorStop(1,woodDark);
-  CX.fillStyle=hg;
-  // Rounder cartoon hull - wider belly, more pronounced curve
-  CX.beginPath();
-  CX.moveTo(-bL,-bW*0.45);          // stern port
-  CX.lineTo(-bL, bW*0.45);          // stern starboard
-  CX.bezierCurveTo(-bL+bL*0.25,bW*1.0, bL*0.3,bW*0.85, bL*0.75,bW*0.3);
-  CX.bezierCurveTo(bL*0.9,bW*0.12, bL,0, bL,0);   // bow tip
-  CX.bezierCurveTo(bL*0.9,-bW*0.12, bL*0.75,-bW*0.3, bL*0.3,-bW*0.85);
-  CX.bezierCurveTo(-bL+bL*0.25,-bW*1.0, -bL,-bW*0.45, -bL,-bW*0.45);
-  CX.closePath(); CX.fill();
+  // ── THREE LOGS, SIDE BY SIDE across boat width ──────────────────────
+  // Logs run L→R (along river). Three logs arranged top-to-bottom in screen.
+  // Slightly staggered in X so the raft looks handmade.
+  // Each log: long oval, tapered bow end (right), square stern (left)
 
-  // Stern face
-  const sg2=CX.createLinearGradient(-bL,-bW*0.55,-bL+4,bW*0.55);
-  sg2.addColorStop(0,woodHi); sg2.addColorStop(0.5,woodLight); sg2.addColorStop(1,woodDark);
-  CX.fillStyle=sg2;
-  CX.beginPath();
-  CX.moveTo(-bL,-bW*0.55); CX.lineTo(-bL,bW*0.55);
-  CX.lineTo(-bL+5,bW*0.5); CX.lineTo(-bL+5,-bW*0.5); CX.closePath(); CX.fill();
-
-  // Interior hollow
-  const ig=CX.createLinearGradient(0,-bW*0.5,0,bW*0.5);
-  ig.addColorStop(0,'rgba(20,10,4,0.75)'); ig.addColorStop(0.5,'rgba(40,20,8,0.55)');
-  ig.addColorStop(1,'rgba(20,10,4,0.75)');
-  CX.fillStyle=ig;
-  CX.beginPath();
-  CX.moveTo(-bL+10,-bW*0.35);
-  CX.bezierCurveTo(-bL+bL*0.25,-bW*0.65, bL*0.35,bW*0.55*0.7, bL*0.8,bW*0.1);
-  CX.bezierCurveTo(bL*0.9,bW*0.04, bL*0.92,0, bL*0.88,0);
-  CX.bezierCurveTo(bL*0.92,-0.04*bW, bL*0.8,-bW*0.1, bL*0.5,-bW*0.45);
-  CX.bezierCurveTo(bL*0.35,-bW*0.55*0.7, -bL+bL*0.25,bW*0.65*0.5, -bL+10,bW*0.35);
-  CX.closePath(); CX.fill();
-
-  // Plank lines
-  CX.save(); CX.globalAlpha=0.18; CX.strokeStyle=woodDark; CX.lineWidth=0.6;
-  for (const yo of [-bW*0.28,-bW*0.06,bW*0.06,bW*0.28]) {
-    CX.beginPath(); CX.moveTo(-bL+8,yo*0.6);
-    CX.bezierCurveTo(0,yo*0.85, bL*0.5,yo*0.75, bL*0.82,yo*0.2); CX.stroke();
+  function drawLog(cx, cy, halfLen, ry, woodCol, angleRad) {
+    CX.save(); CX.translate(cx, cy); CX.rotate(angleRad);
+    // Stern end cap (left — square-ish)
+    CX.fillStyle = endC;
+    CX.beginPath(); CX.ellipse(-halfLen, 0, 5, ry*0.9, 0, 0, Math.PI*2); CX.fill();
+    // Bow end cap (right — tapered)
+    CX.beginPath(); CX.ellipse(halfLen, 0, 4, ry*0.65, 0, 0, Math.PI*2); CX.fill();
+    // Log body
+    CX.fillStyle = woodCol;
+    CX.beginPath();
+    CX.moveTo(-halfLen, -ry);
+    CX.bezierCurveTo(-halfLen*0.5, -ry*1.05, halfLen*0.4, -ry*0.9, halfLen, -ry*0.6);
+    CX.lineTo(halfLen, ry*0.6);
+    CX.bezierCurveTo(halfLen*0.4, ry*0.9, -halfLen*0.5, ry*1.05, -halfLen, ry);
+    CX.closePath(); CX.fill();
+    // Grain lines
+    CX.save(); CX.strokeStyle=endC; CX.lineWidth=0.6; CX.globalAlpha=0.3;
+    [-ry*0.45, 0, ry*0.45].forEach(yo=>{
+      CX.beginPath();
+      CX.moveTo(-halfLen+6, yo*0.85);
+      CX.lineTo(halfLen-5, yo*0.65);
+      CX.stroke();
+    });
+    CX.restore();
+    // Top sheen
+    CX.save(); CX.fillStyle=woodHi; CX.globalAlpha=0.13;
+    CX.beginPath();
+    CX.moveTo(-halfLen, -ry);
+    CX.bezierCurveTo(-halfLen*0.5,-ry*1.05, halfLen*0.4,-ry*0.9, halfLen,-ry*0.6);
+    CX.lineTo(halfLen, -ry*0.2);
+    CX.bezierCurveTo(halfLen*0.4,-ry*0.5, -halfLen*0.5,-ry*0.6, -halfLen,-ry*0.5);
+    CX.closePath(); CX.fill();
+    CX.restore();
+    CX.restore();
   }
+
+  // Log positions: cy = -14, 0, +14 (side by side, small gap between)
+  // Slight X offset each for handmade feel. Bow (right) slightly staggered.
+  drawLog(-4, -15, 82, 8,  wood[0], -0.02);  // top log
+  drawLog( 0,   0, 88, 9,  wood[1],  0.00);  // middle log (longest)
+  drawLog(-2,  15, 80, 8,  wood[2],  0.02);  // bottom log
+
+  // ── LASHING ROPES ────────────────────────────────────────────────
+  // Two ropes binding all three logs together, running top↔bottom
+  function drawRope(rx) {
+    CX.save();
+    CX.strokeStyle=ropeC; CX.lineWidth=3.8; CX.lineCap='round';
+    CX.beginPath(); CX.moveTo(rx,-23); CX.lineTo(rx,24); CX.stroke();
+    CX.strokeStyle='#d4a840'; CX.lineWidth=1.3; CX.globalAlpha=0.5;
+    CX.beginPath(); CX.moveTo(rx,-23); CX.lineTo(rx,24); CX.stroke();
+    CX.globalAlpha=1;
+    CX.fillStyle='#5a3c08';
+    CX.beginPath(); CX.ellipse(rx, 1, 5, 4, 0, 0, Math.PI*2); CX.fill();
+    CX.restore();
+  }
+  drawRope(-45);
+  drawRope(42);
+
+  // ── MAST — a wonky twig ───────────────────────────────────────────
+  const mx = -12;
+  CX.save();
+  CX.strokeStyle=dk?'#2a1408':'#4a2808'; CX.lineWidth=5; CX.lineCap='round';
+  CX.beginPath(); CX.moveTo(mx,0); CX.bezierCurveTo(mx+2,-38,mx+4,-76,mx+5,-108); CX.stroke();
+  CX.strokeStyle=dk?'#5a3418':'#8a5828'; CX.lineWidth=2; CX.globalAlpha=0.4;
+  CX.beginPath(); CX.moveTo(mx+1,0); CX.bezierCurveTo(mx+3,-38,mx+5,-76,mx+6,-108); CX.stroke();
+  CX.globalAlpha=1;
+  // Knot bump
+  CX.fillStyle=dk?'#2a1408':'#3a1c08';
+  CX.beginPath(); CX.ellipse(mx+3,-52, 3.5, 2.5, 0, 0, Math.PI*2); CX.fill();
   CX.restore();
 
-  // Gunwale highlight
-  CX.save(); CX.globalAlpha=0.4; CX.strokeStyle=woodHi; CX.lineWidth=1.2;
-  CX.beginPath();
-  CX.moveTo(-bL,-bW*0.55);
-  CX.bezierCurveTo(-bL+bL*0.3,-bW*0.9, bL*0.4,-bW*0.65, bL,-0.05*bW);
-  CX.stroke(); CX.restore();
+  // ── LEAF SAIL ─────────────────────────────────────────────────────
+  const sway = Math.sin(phi*0.55)*3.5;
+  const lx = mx+5, ly=-106;
 
-  // Rim glow
-  CX.save(); CX.globalAlpha=0.1+Math.sin(phi)*0.04;
-  CX.strokeStyle='rgba(180,230,190,0.9)'; CX.lineWidth=1;
-  CX.shadowColor='rgba(140,210,155,0.6)'; CX.shadowBlur=5;
+  const lGreen = dk?'#2a5010':'#4a8a22';
+  const lMid   = dk?'#183808':'#2d6a10';
+  const lHi    = dk?'#3a6518':'#70b035';
+
+  CX.fillStyle=lGreen;
   CX.beginPath();
-  CX.moveTo(-bL,-bW*0.55);
-  CX.bezierCurveTo(-bL+bL*0.3,-bW*0.9, bL*0.4,-bW*0.65, bL*0.85,-bW*0.2);
-  CX.bezierCurveTo(bL*0.95,-bW*0.08, bL,0, bL,0);
+  CX.moveTo(lx, ly);
+  CX.bezierCurveTo(lx+18+sway, ly+14, lx+38+sway, ly+36, lx+34+sway, ly+62);
+  CX.bezierCurveTo(lx+22+sway, ly+82, lx+6, ly+90, lx, ly+94);
+  CX.bezierCurveTo(lx-8, ly+90, lx-20+sway*0.7, ly+74, lx-20+sway*0.7, ly+52);
+  CX.bezierCurveTo(lx-16+sway*0.5, ly+26, lx-5, ly+12, lx, ly);
+  CX.closePath(); CX.fill();
+
+  // Inner lighter zone
+  CX.fillStyle=lHi; CX.globalAlpha=0.4;
+  CX.beginPath();
+  CX.moveTo(lx, ly);
+  CX.bezierCurveTo(lx+8+sway*0.6, ly+16, lx+22+sway*0.7, ly+38, lx+18+sway*0.7, ly+60);
+  CX.bezierCurveTo(lx+10+sway*0.5, ly+78, lx+2, ly+88, lx, ly+92);
+  CX.bezierCurveTo(lx-4, ly+86, lx-8+sway*0.4, ly+68, lx-8+sway*0.4, ly+50);
+  CX.bezierCurveTo(lx-4+sway*0.3, ly+26, lx-2, ly+12, lx, ly);
+  CX.closePath(); CX.fill();
+  CX.globalAlpha=1;
+
+  // Centre vein
+  CX.strokeStyle=lMid; CX.lineWidth=1.3; CX.globalAlpha=0.65; CX.lineCap='round';
+  CX.beginPath();
+  CX.moveTo(lx, ly+94);
+  CX.bezierCurveTo(lx+4+sway*0.3, ly+62, lx+5+sway*0.4, ly+30, lx, ly);
+  CX.stroke();
+
+  // Side veins
+  CX.lineWidth=0.7; CX.globalAlpha=0.45;
+  [
+    [lx+2,ly+74, lx+22+sway*0.6,ly+62],
+    [lx+3,ly+52, lx+28+sway*0.7,ly+42],
+    [lx+2,ly+30, lx+24+sway*0.6,ly+22],
+    [lx+1,ly+16, lx+14+sway*0.4,ly+10],
+    [lx-1,ly+70, lx-18+sway*0.5,ly+60],
+    [lx,  ly+50, lx-18+sway*0.5,ly+40],
+    [lx+1,ly+28, lx-14+sway*0.4,ly+20],
+  ].forEach(([x1,y1,x2,y2])=>{
+    CX.beginPath(); CX.moveTo(x1,y1); CX.lineTo(x2,y2); CX.stroke();
+  });
+  CX.globalAlpha=1;
+
+  // Vine tie at base of leaf to mast
+  CX.strokeStyle=dk?'#3a5010':'#5a7818'; CX.lineWidth=1.5; CX.globalAlpha=0.8;
+  CX.beginPath(); CX.moveTo(mx+3,0); CX.bezierCurveTo(lx-2,ly+96, lx-1,ly+94, lx,ly+94); CX.stroke();
+  CX.globalAlpha=1;
+
+  // ── PEBBLE BALLAST ────────────────────────────────────────────────
+  [[18,4,5,3,-8],[28,-2,4,2.5,12],[10,-6,3.5,2,-5]].forEach(([px,py,rx2,ry2,ang])=>{
+    CX.save(); CX.translate(px,py); CX.rotate(ang*Math.PI/180);
+    CX.fillStyle=dk?'#606060':'#888070'; CX.globalAlpha=0.7;
+    CX.beginPath(); CX.ellipse(0,0,rx2,ry2,0,0,Math.PI*2); CX.fill();
+    CX.restore();
+  });
+
+  // ── RIM GLOW (watery reflection) ──────────────────────────────────
+  CX.save(); CX.globalAlpha=0.08+Math.sin(phi)*0.03;
+  CX.strokeStyle='rgba(140,220,160,0.9)'; CX.lineWidth=1;
+  CX.shadowColor='rgba(100,200,130,0.5)'; CX.shadowBlur=5;
+  CX.beginPath();
+  CX.moveTo(-88,-15); CX.bezierCurveTo(-88*0.5,-16, 82*0.4,-12, 82,-8);
   CX.stroke(); CX.shadowBlur=0; CX.restore();
 
   CX.restore();
@@ -2449,7 +2533,7 @@ function buildSetupScreen() {
         never to any third party. This app has no backend.
       </div>
     </div>
-    <div style="text-align:center;margin-top:10px;font-family:'DM Mono',monospace;font-size:8px;color:rgba(40,55,50,0.15);letter-spacing:1px">build 20260326-25</div>
+    <div style="text-align:center;margin-top:10px;font-family:'DM Mono',monospace;font-size:8px;color:rgba(40,55,50,0.15);letter-spacing:1px">build 20260326-26</div>
   </div>
 </div>`;
 }
