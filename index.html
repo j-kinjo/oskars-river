@@ -202,13 +202,13 @@ html,body{width:100%;height:100%;overflow:hidden;background:#c8d8d0;touch-action
   <div class="ripwrap"><div class="rip"></div><div class="rip"></div><div class="rip"></div></div>
   <div class="ltitle">Oskar's River</div>
   <div class="lsub">finding the current</div>
-  <div style="font-family:'DM Mono',monospace;font-size:8px;color:rgba(40,55,50,0.2);margin-top:8px;letter-spacing:1px">build 20260326-14</div>
+  <div style="font-family:'DM Mono',monospace;font-size:8px;color:rgba(40,55,50,0.2);margin-top:8px;letter-spacing:1px">build 20260326-15</div>
 </div>
 
 <canvas id="c"></canvas>
 
 <div id="hud">
-  <div id="bg-wrap">
+  <div id="bg-wrap" style="margin-top:max(8px,env(safe-area-inset-top,8px))">
     <div id="bg-num">—<span id="bg-arrow"></span></div>
     <div id="bg-unit">mmol/L</div>
   </div>
@@ -229,23 +229,23 @@ html,body{width:100%;height:100%;overflow:hidden;background:#c8d8d0;touch-action
   </div>
 </div>
 
-<!-- Live indicator dot -->
-<div id="live-dot" style="
-  position:fixed;top:max(20px,env(safe-area-inset-top,20px));left:16px;
-  width:8px;height:8px;border-radius:50%;background:#c87832;opacity:0;
-  transition:background .5s,opacity .5s;z-index:20;pointer-events:none;
-  box-shadow:0 0 6px currentColor" title="CGM status"></div>
-
-<!-- Settings button (bottom-left) -->
+<!-- Settings + live dot — bottom left, stacked cleanly -->
 <button onclick="openSettings()" style="
   position:fixed;
-  bottom:calc(max(16px,env(safe-area-inset-bottom,16px))+52px);
-  left:16px;width:36px;height:36px;border-radius:50%;
-  border:1px solid rgba(40,55,50,0.15);background:rgba(255,255,255,0.25);
+  bottom:calc(max(20px,env(safe-area-inset-bottom,20px)));
+  left:16px;width:40px;height:40px;border-radius:50%;
+  border:1px solid rgba(255,255,255,0.15);background:rgba(0,0,0,0.2);
   backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px);
   cursor:pointer;z-index:20;display:flex;align-items:center;justify-content:center;
-  font-size:15px;opacity:0.5;transition:opacity .15s;pointer-events:auto"
+  font-size:16px;opacity:0.6;transition:opacity .15s;pointer-events:auto"
   title="CGM settings">⚙</button>
+<div id="live-dot" style="
+  position:fixed;
+  bottom:calc(max(20px,env(safe-area-inset-bottom,20px))+44px);
+  left:24px;
+  width:8px;height:8px;border-radius:50%;background:#c87832;opacity:0;
+  transition:background .5s,opacity .5s;z-index:20;pointer-events:none;
+  box-shadow:0 0 8px currentColor" title="CGM status"></div>
 
 <button id="logbtn" onclick="openSheet()">
   <svg viewBox="0 0 20 20" fill="none">
@@ -1326,6 +1326,16 @@ function frame(ts) {
 
   const cobPts = buildWakePts('cob', cobY, 90);
   const iobPts = buildWakePts('iob', iobY, 90);
+  // Inject gentle base flow so the river always shows currents
+  // even when COB/IOB are zero (acts as ambient river texture)
+  const boatNowY = boatYfromBG(d.bg);
+  const baseFlow = Math.max(0, Math.sin(phi*0.15)*0.08+0.06); // slow pulse
+  if (cobPts.length>0 && cobPts[cobPts.length-1].val < 1) {
+    cobPts[cobPts.length-1].val = baseFlow * MAX_COB * 0.12;
+  }
+  if (iobPts.length>0 && iobPts[iobPts.length-1].val < 0.1) {
+    iobPts[iobPts.length-1].val = baseFlow * MAX_IOB * 0.15;
+  }
   drawWake(cobPts, '60,180,140', '#3ecfa0', MAX_COB, true,  false);
   drawWake(iobPts, '40,80,180',  '#2855c8', MAX_IOB, false, false);
 
@@ -1638,12 +1648,19 @@ async function startLivePolling(sourceId, cfg) {
   const source = CGM_SOURCES[sourceId];
   if (!source || sourceId === 'manual') return;
 
-  // Initial backfill — last 3 hours
+  // Full backfill — fetch up to 24h of real history to replace static data
   try {
     setLiveStatus('connecting', 'Loading history…');
-    const recent = await source.fetchRecent(cfg, 3);
+    const recent = await source.fetchRecent(cfg, 24);
     if (recent.length > 0) {
-      ingestReadings(recent);
+      // Clear the static embedded data and replace with live history
+      HISTORY_RAW.length = 0;
+      for (const r of recent) {
+        HISTORY_RAW.push({ t:r.t, bg:r.bg, iob:0, cob:0, pen:1 });
+      }
+      HISTORY_RAW.sort((a,b)=>a.t-b.t);
+      viewTime = HISTORY_RAW[HISTORY_RAW.length-1].t;
+      _lastReadingT = viewTime;
       setLiveStatus('live', `${recent.length} readings loaded`);
     }
   } catch(e) {
@@ -1788,7 +1805,7 @@ function buildSetupScreen() {
         never to any third party. This app has no backend.
       </div>
     </div>
-    <div style="text-align:center;margin-top:10px;font-family:'DM Mono',monospace;font-size:8px;color:rgba(40,55,50,0.15);letter-spacing:1px">build 20260326-14</div>
+    <div style="text-align:center;margin-top:10px;font-family:'DM Mono',monospace;font-size:8px;color:rgba(40,55,50,0.15);letter-spacing:1px">build 20260326-15</div>
   </div>
 </div>`;
 }
