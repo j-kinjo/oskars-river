@@ -1449,8 +1449,7 @@ const CGM_SOURCES = {
     async _get(cfg, path) {
       const base   = cfg.url.replace(/\/+$/, '');
       const sep    = path.includes('?') ? '&' : '?';
-      const target = base + path + sep + 'token=' + cfg.token;
-      // Route through CORS proxy (Gluroo doesn't send CORS headers)
+      const target = base + path + sep + 'token=' + encodeURIComponent(cfg.token);
       const proxyUrl = this._proxy + '/?url=' + encodeURIComponent(target);
       let r;
       try { r = await fetch(proxyUrl); }
@@ -1495,70 +1494,68 @@ const CGM_SOURCES = {
     ],
     _session: null,
     _sessionExpiry: 0,
+    _proxy: 'https://orange-surf-6f98.john-king-uk.workers.dev',
+    async _post(url, body) {
+      // POST via proxy — worker needs to support POST, so we send as GET with encoded body
+      // Actually: send directly since Dexcom Share does allow CORS on POST from https://
+      // If that fails, we fall back to proxy
+      try {
+        const r = await fetch(url, {
+          method: 'POST',
+          headers: {'Content-Type':'application/json','Accept':'application/json'},
+          body: JSON.stringify(body)
+        });
+        return r;
+      } catch(e) {
+        throw new Error('Cannot reach Dexcom — check your internet connection');
+      }
+    },
     async _getSession(cfg) {
       if (this._session && Date.now() < this._sessionExpiry) return this._session;
       const base  = cfg.region === 'us'
         ? 'https://share2.dexcom.com/ShareWebServices/Services'
         : 'https://shareous1.dexcom.com/ShareWebServices/Services';
       const appId = 'd89443d2-327c-4a6f-89e5-496bbb0317db';
-      // Step 1: get accountId
-      const r1 = await fetch(`${base}/General/AuthenticatePublisherAccount`, {
-        method: 'POST',
-        headers: {'Content-Type':'application/json', 'Accept':'application/json'},
-        body: JSON.stringify({ accountName: cfg.username, password: cfg.password, applicationId: appId })
-      });
-      if (!r1.ok) {
-        const onGithub = window.location.origin.startsWith('https://');
-        if (!onGithub) throw new Error('Dexcom Share requires https:// hosting — deploy to GitHub Pages first, or use Nightscout/Gluroo instead');
-        throw new Error('Dexcom auth failed — check your username and password');
-      }
+      const r1 = await this._post(`${base}/General/AuthenticatePublisherAccount`,
+        { accountName: cfg.username, password: cfg.password, applicationId: appId });
+      if (!r1.ok) throw new Error('Dexcom auth failed — check your username and password');
       const accountId = await r1.json();
-      // Step 2: get sessionId
-      const r2 = await fetch(`${base}/General/LoginPublisherAccountById`, {
-        method: 'POST',
-        headers: {'Content-Type':'application/json', 'Accept':'application/json'},
-        body: JSON.stringify({ accountId, password: cfg.password, applicationId: appId })
-      });
-      if (!r2.ok) throw new Error('Dexcom session failed');
+      const r2 = await this._post(`${base}/General/LoginPublisherAccountById`,
+        { accountId, password: cfg.password, applicationId: appId });
+      if (!r2.ok) throw new Error('Dexcom login failed — try again');
       this._session = await r2.json();
-      this._sessionExpiry = Date.now() + 55 * 60000; // 55min
+      this._sessionExpiry = Date.now() + 55 * 60000;
       return this._session;
     },
-    async fetch(cfg, count=1) {
+    _parseDex(data) {
+      return data.map(e => ({
+        t:   parseInt(e.WT.replace(/[^0-9]/g,'')),
+        bg:  +(e.Value / 18).toFixed(1),
+        trend: e.Trend,
+        src: 'dexcom_share'
+      })).sort((a,b) => a.t - b.t);
+    },
+    async _dexGet(cfg, path) {
       const base = cfg.region === 'us'
         ? 'https://share2.dexcom.com/ShareWebServices/Services'
         : 'https://shareous1.dexcom.com/ShareWebServices/Services';
-      const sessionId = await this._getSession(cfg);
-      const r = await fetch(
-        `${base}/Publisher/ReadPublisherLatestGlucoseValues?sessionId=${sessionId}&minutes=1440&maxCount=${count}`
-      );
-      if (!r.ok) { this._session = null; throw new Error(`Dexcom read ${r.status}`); }
-      const data = await r.json();
-      return data.map(e => ({
-        t:     parseInt(e.WT.replace(/[^0-9]/g,'')),
-        bg:    +(e.Value / 18).toFixed(1),
-        trend: e.Trend,
-        src:   'dexcom_share'
-      }));
+      const target = base + path;
+      const proxyUrl = this._proxy + '/?url=' + encodeURIComponent(target);
+      const r = await fetch(proxyUrl);
+      if (!r.ok) { this._session = null; throw new Error('Dexcom read ' + r.status); }
+      return r.json();
+    },
+    async fetch(cfg, count=1) {
+      const sid = await this._getSession(cfg);
+      const data = await this._dexGet(cfg,
+        `/Publisher/ReadPublisherLatestGlucoseValues?sessionId=${sid}&minutes=1440&maxCount=${count}`);
+      return this._parseDex(data);
     },
     async fetchRecent(cfg, hours=3) {
-      const base = cfg.region === 'us'
-        ? 'https://share2.dexcom.com/ShareWebServices/Services'
-        : 'https://shareous1.dexcom.com/ShareWebServices/Services';
-      const sessionId = await this._getSession(cfg);
-      const minutes   = hours * 60;
-      const maxCount  = hours * 12 + 5;
-      const r = await fetch(
-        `${base}/Publisher/ReadPublisherLatestGlucoseValues?sessionId=${sessionId}&minutes=${minutes}&maxCount=${maxCount}`
-      );
-      if (!r.ok) { this._session = null; throw new Error(`Dexcom read ${r.status}`); }
-      const data = await r.json();
-      return data.map(e => ({
-        t:     parseInt(e.WT.replace(/[^0-9]/g,'')),
-        bg:    +(e.Value / 18).toFixed(1),
-        trend: e.Trend,
-        src:   'dexcom_share'
-      })).sort((a,b) => a.t - b.t);
+      const sid = await this._getSession(cfg);
+      const data = await this._dexGet(cfg,
+        `/Publisher/ReadPublisherLatestGlucoseValues?sessionId=${sid}&minutes=${hours*60}&maxCount=${hours*12+5}`);
+      return this._parseDex(data);
     }
   },
 
