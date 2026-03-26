@@ -202,7 +202,7 @@ html,body{width:100%;height:100%;overflow:hidden;background:#c8d8d0;touch-action
   <div class="ripwrap"><div class="rip"></div><div class="rip"></div><div class="rip"></div></div>
   <div class="ltitle">Oskar's River</div>
   <div class="lsub">finding the current</div>
-  <div style="font-family:'DM Mono',monospace;font-size:8px;color:rgba(40,55,50,0.2);margin-top:8px;letter-spacing:1px">build 20260326-11</div>
+  <div style="font-family:'DM Mono',monospace;font-size:8px;color:rgba(40,55,50,0.2);margin-top:8px;letter-spacing:1px">build 20260326-13</div>
 </div>
 
 <canvas id="c"></canvas>
@@ -388,91 +388,128 @@ function cobF(m,gi=60) {
 }
 
 // ── TIME-OF-DAY PALETTE ──────────────────────────────────────
-// Key palettes at specific hours — interpolated between
+// Key palettes — rich saturated colours from mood board
+// boat_and_wake: cream bg, paper-cut teal→indigo wake
+// lily_pad_banks: deep jewel-green water, bright caustic streaks
 const PALETTES = [
-  { h:0,  sky0:[26,36,56],   sky1:[21,28,44],  sky2:[14,21,32],
-    w0:[28,40,48],  w1:[22,32,40], w2:[16,24,32],
-    sunC:[220,235,255], sunA:0.45, sunR:52,
-    mistC:[40,55,80], mistA:0.68, tree:[30,45,62], name:'night' },
-  { h:5,  sky0:[30,36,56],   sky1:[21,28,44],  sky2:[14,21,32],
-    w0:[28,40,48],  w1:[22,32,40], w2:[16,24,32],
-    sunC:[220,235,255], sunA:0.3, sunR:44,
-    mistC:[40,55,80], mistA:0.65, tree:[30,45,62], name:'night' },
-  { h:5.5,sky0:[230,190,160],sky1:[215,170,140],sky2:[190,150,120],
-    w0:[200,185,175],w1:[185,170,160],w2:[165,152,142],
-    sunC:[255,200,120], sunA:0.5, sunR:65,
-    mistC:[255,242,228], mistA:0.5, tree:[150,135,118], name:'dawn' },
-  { h:7,  sky0:[240,225,200],sky1:[228,210,185],sky2:[210,192,165],
-    w0:[215,205,195],w1:[200,190,180],w2:[182,172,162],
-    sunC:[255,220,140], sunA:0.55, sunR:75,
-    mistC:[255,248,235], mistA:0.52, tree:[145,132,115], name:'dawn' },
-  { h:8.5,sky0:[221,234,228],sky1:[200,221,213],sky2:[184,208,200],
-    w0:[184,206,200],w1:[168,192,184],w2:[152,178,168],
-    sunC:[255,255,235], sunA:0.45, sunR:58,
-    mistC:[238,246,242], mistA:0.48, tree:[100,132,112], name:'day' },
-  { h:14, sky0:[210,228,222],sky1:[192,215,207],sky2:[176,202,194],
-    w0:[176,200,194],w1:[160,186,178],w2:[144,172,162],
-    sunC:[255,255,230], sunA:0.4, sunR:55,
-    mistC:[235,244,240], mistA:0.46, tree:[95,128,108], name:'day' },
-  { h:17, sky0:[215,185,175],sky1:[198,165,152],sky2:[178,142,130],
-    w0:[175,165,168],w1:[158,148,152],w2:[140,130,134],
-    sunC:[255,185,80], sunA:0.7, sunR:72,
-    mistC:[242,225,228], mistA:0.55, tree:[108,85,105], name:'dusk' },
-  { h:19, sky0:[185,130,148],sky1:[165,108,122],sky2:[142,88,100],
-    w0:[148,135,152],w1:[132,118,135],w2:[115,102,118],
-    sunC:[255,150,60], sunA:0.75, sunR:80,
-    mistC:[238,215,222], mistA:0.58, tree:[100,75,100], name:'dusk' },
-  { h:20.5,sky0:[80,65,105], sky1:[58,48,80],  sky2:[40,32,58],
-    w0:[55,68,88],  w1:[44,55,72], w2:[32,42,58],
-    sunC:[200,215,255], sunA:0.35, sunR:55,
-    mistC:[55,68,95], mistA:0.6, tree:[38,50,68], name:'night' },
-  { h:24, sky0:[26,36,56],   sky1:[21,28,44],  sky2:[14,21,32],
-    w0:[28,40,48],  w1:[22,32,40], w2:[16,24,32],
-    sunC:[220,235,255], sunA:0.45, sunR:52,
-    mistC:[40,55,80], mistA:0.68, tree:[30,45,62], name:'night' },
+  // Night 00:00
+  { h:0,
+    sky0:[8,18,30],    sky1:[12,24,40],   sky2:[6,14,24],
+    w0:[8,22,32],      w1:[10,28,42],     w2:[6,18,28],
+    caustic:[40,120,180], causticA:0.12,
+    sunC:[210,230,255], sunA:0.4, sunR:50,
+    mistC:[15,25,45],  mistA:0.7,
+    tree:[15,35,50],   lily:[10,40,20],   name:'night' },
+  // Pre-dawn 05:00
+  { h:5,
+    sky0:[20,30,50],   sky1:[30,45,70],   sky2:[15,25,40],
+    w0:[10,28,38],     w1:[12,35,48],     w2:[8,22,32],
+    caustic:[40,140,180], causticA:0.1,
+    sunC:[210,230,255], sunA:0.25, sunR:42,
+    mistC:[20,35,60],  mistA:0.65,
+    tree:[20,40,55],   lily:[12,45,22],   name:'night' },
+  // Dawn 05:30
+  { h:5.5,
+    sky0:[180,120,80], sky1:[220,160,100],sky2:[160,100,60],
+    w0:[20,70,50],     w1:[25,85,60],     w2:[15,55,40],
+    caustic:[80,200,120], causticA:0.18,
+    sunC:[255,200,120], sunA:0.6, sunR:70,
+    mistC:[240,200,160], mistA:0.45,
+    tree:[40,70,30],   lily:[25,80,35],   name:'dawn' },
+  // Morning 08:00
+  { h:8,
+    sky0:[140,210,240],sky1:[180,230,248],sky2:[110,190,225],
+    w0:[25,90,55],     w1:[30,108,65],    w2:[20,72,45],
+    caustic:[90,210,130], causticA:0.22,
+    sunC:[255,248,220], sunA:0.5, sunR:60,
+    mistC:[200,240,230], mistA:0.3,
+    tree:[35,95,45],   lily:[30,100,40],  name:'day' },
+  // Midday 13:00
+  { h:13,
+    sky0:[100,190,230],sky1:[140,210,242],sky2:[80,170,215],
+    w0:[22,88,52],     w1:[28,105,62],    w2:[18,70,42],
+    caustic:[100,220,140], causticA:0.25,
+    sunC:[255,255,230], sunA:0.45, sunR:55,
+    mistC:[190,235,225], mistA:0.28,
+    tree:[30,90,40],   lily:[28,95,38],   name:'day' },
+  // Late afternoon 16:00
+  { h:16,
+    sky0:[200,170,120],sky1:[220,190,140],sky2:[180,145,95],
+    w0:[28,85,48],     w1:[35,100,58],    w2:[22,68,38],
+    caustic:[120,200,100], causticA:0.2,
+    sunC:[255,200,100], sunA:0.65, sunR:68,
+    mistC:[235,210,180], mistA:0.38,
+    tree:[50,80,25],   lily:[35,88,30],   name:'day' },
+  // Dusk 18:00
+  { h:18,
+    sky0:[200,100,60], sky1:[220,130,80], sky2:[170,80,45],
+    w0:[30,60,55],     w1:[38,75,65],     w2:[22,48,42],
+    caustic:[200,150,80], causticA:0.18,
+    sunC:[255,160,60],  sunA:0.75, sunR:78,
+    mistC:[230,180,150], mistA:0.5,
+    tree:[60,50,25],   lily:[40,70,25],   name:'dusk' },
+  // Evening 20:00
+  { h:20,
+    sky0:[50,30,80],   sky1:[70,45,100],  sky2:[35,20,60],
+    w0:[15,40,50],     w1:[18,50,62],     w2:[12,32,40],
+    caustic:[80,100,180], causticA:0.14,
+    sunC:[200,180,255], sunA:0.45, sunR:58,
+    mistC:[60,40,90],  mistA:0.6,
+    tree:[30,25,55],   lily:[18,45,30],   name:'dusk' },
+  // Night 22:00
+  { h:22,
+    sky0:[8,18,30],    sky1:[12,24,40],   sky2:[6,14,24],
+    w0:[8,22,32],      w1:[10,28,42],     w2:[6,18,28],
+    caustic:[40,120,180], causticA:0.12,
+    sunC:[210,230,255], sunA:0.4, sunR:50,
+    mistC:[15,25,45],  mistA:0.7,
+    tree:[15,35,50],   lily:[10,40,20],   name:'night' },
+  // Night 24:00
+  { h:24,
+    sky0:[8,18,30],    sky1:[12,24,40],   sky2:[6,14,24],
+    w0:[8,22,32],      w1:[10,28,42],     w2:[6,18,28],
+    caustic:[40,120,180], causticA:0.12,
+    sunC:[210,230,255], sunA:0.4, sunR:50,
+    mistC:[15,25,45],  mistA:0.7,
+    tree:[15,35,50],   lily:[10,40,20],   name:'night' },
 ];
-
 function lerpC(a, b, f) { return a.map((v,i)=>Math.round(v+f*(b[i]-v))); }
 function rgb(c,a=1) { return `rgba(${c[0]},${c[1]},${c[2]},${a.toFixed(2)})`; }
 function hex(c) { return `#${c.map(v=>v.toString(16).padStart(2,'0')).join('')}`; }
 
 function palette(t) {
   const h = new Date(t).getHours() + new Date(t).getMinutes()/60;
-  // Find surrounding keyframes
   let lo=PALETTES[0], hi=PALETTES[PALETTES.length-1];
   for (let i=0; i<PALETTES.length-1; i++) {
-    if (h >= PALETTES[i].h && h < PALETTES[i+1].h) {
-      lo=PALETTES[i]; hi=PALETTES[i+1]; break;
-    }
+    if (h >= PALETTES[i].h && h < PALETTES[i+1].h) { lo=PALETTES[i]; hi=PALETTES[i+1]; break; }
   }
   const f = lo.h===hi.h ? 0 : (h-lo.h)/(hi.h-lo.h);
   const sky0C=lerpC(lo.sky0,hi.sky0,f), sky1C=lerpC(lo.sky1,hi.sky1,f), sky2C=lerpC(lo.sky2,hi.sky2,f);
   const w0C=lerpC(lo.w0,hi.w0,f), w1C=lerpC(lo.w1,hi.w1,f), w2C=lerpC(lo.w2,hi.w2,f);
-  const sunC=lerpC(lo.sunC,hi.sunC,f), sunA=lo.sunA+f*(hi.sunA-lo.sunA), sunR=lo.sunR+f*(hi.sunR-lo.sunR);
+  const sunC=lerpC(lo.sunC,hi.sunC,f);
+  const sunA=lo.sunA+f*(hi.sunA-lo.sunA), sunR=lo.sunR+f*(hi.sunR-lo.sunR);
   const mistC=lerpC(lo.mistC,hi.mistC,f), mistA=lo.mistA+f*(hi.mistA-lo.mistA);
   const treeC=lerpC(lo.tree,hi.tree,f);
-  // Name: whichever keyframe is dominant
+  const lilyC=lerpC(lo.lily,hi.lily,f);
+  const causticC=lerpC(lo.caustic,hi.caustic,f);
+  const causticA=lo.causticA+f*(hi.causticA-lo.causticA);
   const name = f<0.5 ? lo.name : hi.name;
   const isNight = name==='night';
-  const lilyR = isNight ? [20,50,40] : name==='dusk' ? [100,80,100] : name==='dawn' ? [120,140,100] : [90,120,80];
   return {
     sky0:hex(sky0C), sky1:hex(sky1C), sky2:hex(sky2C),
-    w0:hex(w0C), w1:hex(w1C), w2:hex(w2C),
-    // backwards compat keys
     water0:hex(w0C), water1:hex(w1C), water2:hex(w2C),
+    w0:hex(w0C), w1:hex(w1C), w2:hex(w2C),
     sunRGB:sunC, sunA, sunR,
-    sun:rgb(sunC,sunA), // legacy
-    mist:rgb(mistC,mistA),
-    mistC, mistA,
-    treeFar:rgb(treeC,isNight?0.55:0.22),
-    lily:`rgba(${lilyR[0]},${lilyR[1]},${lilyR[2]},`,
-    bgText: isNight ? 'rgba(200,220,230,0.7)' : name==='dusk' ? 'rgba(60,40,55,0.65)' : name==='dawn' ? 'rgba(80,60,40,0.65)' : 'rgba(40,60,50,0.65)',
+    sun:rgb(sunC,sunA),
+    mist:rgb(mistC,mistA), mistC, mistA,
+    treeFar:rgb(treeC, isNight?0.7:0.35),
+    lily:`rgba(${lilyC[0]},${lilyC[1]},${lilyC[2]},`,
+    causticRGB:causticC, causticA,
+    bgText: isNight ? 'rgba(200,225,255,0.75)' : name==='dusk' ? 'rgba(255,220,180,0.8)' : name==='dawn' ? 'rgba(255,200,140,0.8)' : 'rgba(240,255,245,0.85)',
     name, isNight,
-    // Sun position: 0=midnight, 0.5=noon, tracks arc across sky
-    sunFrac: (h>=5&&h<19) ? (h-5)/14 : (h>=19 ? (h-19)/10 + 1 : h/5),
+    sunFrac: (h>=5&&h<19) ? (h-5)/14 : (h>=19 ? (h-19)/10+1 : h/5),
   };
 }
-
 // ── ANIMATION STATE ──────────────────────────────────────────
 let phi=0, t0=0;
 let bgPrev = null;
@@ -612,112 +649,147 @@ function drawPagoda(x, y, scale) {
 function drawWater(pal, d) {
   const skyH = HORIZON*H;
 
-  // Water base gradient
-  const wg = CX.createLinearGradient(0,skyH,0,H);
-  wg.addColorStop(0, pal.water0);
-  wg.addColorStop(0.4, pal.water1);
-  wg.addColorStop(1, pal.water2);
-  CX.fillStyle=wg; CX.fillRect(0,skyH,W,H-skyH);
+  // Base water — deep jewel green (lily pad banks palette)
+  const wg = CV.getContext('2d').createLinearGradient ? null : null; // unused
+  const wgrad = CX.createLinearGradient(0,skyH,0,H);
+  wgrad.addColorStop(0,   pal.water0);
+  wgrad.addColorStop(0.4, pal.water1);
+  wgrad.addColorStop(0.85,pal.water2);
+  wgrad.addColorStop(1,   pal.water2);
+  CX.fillStyle=wgrad; CX.fillRect(0,skyH,W,H-skyH);
 
-  // Sun reflection on water — vertical shimmer streak toward now
-  const nowX = NOW_X*W;
-  const refG = CX.createLinearGradient(nowX-30,skyH,nowX+30,H);
-  refG.addColorStop(0, pal.sun.replace(',0.6','0.12').replace(',0.5','0.1').replace(',0.65','0.1').replace(',0.4','0.08'));
-  refG.addColorStop(0.5, 'transparent');
-  refG.addColorStop(1, 'transparent');
-  CX.save(); CX.globalAlpha=0.4;
-  CX.fillStyle=refG; CX.fillRect(nowX-30,skyH,60,H-skyH);
-  CX.restore();
+  // ── ANIMATED CAUSTIC LIGHT STREAKS ──────────────────────────────────────
+  // Like the bright lime-green light shafts in lily_pad_banks
+  CX.save();
+  const cc = pal.causticRGB || [80,200,120];
+  const ca = pal.causticA || 0.2;
+  const rng = seededRand(5);
+  for (let i=0; i<16; i++) {
+    // Each streak drifts leftward (river current) over time
+    const baseX = (rng()*W - (phi * 18) % W + W*2) % W;
+    const baseY = skyH + rng()*(H-skyH)*0.9;
+    const len   = 30 + rng()*120;
+    const angle = -0.15 + rng()*0.3 + Math.sin(phi*0.3+i)*0.05;
+    const width = 1.5 + rng()*4;
+    const alpha = ca * (0.5 + Math.sin(phi*0.8+i*0.7+rng()*3)*0.5);
 
-  // Subtle flow lines — horizontal, very faint, ink-wash feel
-  CX.save(); CX.globalAlpha=0.04;
-  CX.strokeStyle=pal.name==='night'?'rgba(150,180,200,1)':'rgba(40,55,50,1)';
-  CX.lineWidth=0.6;
-  const rng = seededRand(99);
-  for (let i=0; i<18; i++) {
-    const fy = skyH + rng()*( H-skyH)*0.85;
-    const amp = 3+rng()*5;
-    const freq = 0.008+rng()*0.006;
+    CX.globalAlpha = Math.max(0, alpha);
+    const sg = CX.createLinearGradient(baseX,baseY,
+      baseX+Math.cos(angle)*len, baseY+Math.sin(angle)*len);
+    sg.addColorStop(0, `rgba(${cc},0)`);
+    sg.addColorStop(0.3,`rgba(${cc},${alpha*1.5})`);
+    sg.addColorStop(0.7,`rgba(${cc},${alpha})`);
+    sg.addColorStop(1,  `rgba(${cc},0)`);
+    CX.strokeStyle=sg; CX.lineWidth=width;
+    CX.lineCap='round';
     CX.beginPath();
-    for (let fx=0; fx<=W; fx+=3) {
-      const wy = fy + Math.sin(fx*freq+phi*(0.3+rng()*0.2))*amp;
-      fx===0 ? CX.moveTo(fx,wy) : CX.lineTo(fx,wy);
-    }
+    CX.moveTo(baseX, baseY);
+    CX.lineTo(baseX+Math.cos(angle)*len, baseY+Math.sin(angle)*len);
     CX.stroke();
   }
+  CX.globalAlpha=1;
+
+  // Night: star reflections
+  if (pal.isNight) {
+    const srng=seededRand(13);
+    for (let i=0;i<25;i++) {
+      const sx=srng()*W, sy=skyH+srng()*(H-skyH)*0.5;
+      const twinkle=0.5+Math.sin(phi*1.4+i*1.3)*0.5;
+      CX.globalAlpha=(0.05+srng()*0.12)*twinkle;
+      CX.fillStyle='rgba(200,220,255,1)';
+      CX.beginPath(); CX.arc(sx,sy,0.6+srng()*1.2,0,Math.PI*2); CX.fill();
+    }
+  }
+
+  // Sun reflection shimmer
+  const nowX=NOW_X*W;
+  const sc=pal.sunRGB||[255,255,200];
+  const refG=CX.createLinearGradient(nowX-15,skyH,nowX+15,H);
+  refG.addColorStop(0,`rgba(${sc},${(pal.sunA||0.4)*0.3})`);
+  refG.addColorStop(0.4,`rgba(${sc},${(pal.sunA||0.4)*0.1})`);
+  refG.addColorStop(1,'transparent');
+  CX.globalAlpha=0.6;
+  CX.fillStyle=refG; CX.fillRect(nowX-15,skyH,30,H-skyH);
+  CX.globalAlpha=1;
   CX.restore();
 }
-
 // ── DRAWING: LILY PADS ───────────────────────────────────────
 // Hyper zone (top of water) and hypo zone (bottom of water)
 // Density increases as BG approaches danger
 function drawLilyPads(pal, d) {
   const skyH = HORIZON*H;
-  const wH = H - skyH;
+  const wH   = H - skyH;
 
-  // How close to danger zones?
-  const hyperProx = Math.max(0, Math.min(1, (d.bg - 8) / (BG_HIGH - 8)));
-  const hypoProx  = Math.max(0, Math.min(1, (BG_LOW + 1.5 - d.bg) / 1.5));
+  // Danger proximity
+  const hyperProx = Math.max(0, Math.min(1, (d.bg - 8.5) / (BG_HIGH-8.5)));
+  const hypoProx  = Math.max(0, Math.min(1, (BG_LOW+1.5-d.bg) / 1.5));
 
-  const rng = seededRand(77);
-  // Lily pad params
-  function drawPad(px, py, r, alpha) {
+  // Lily pad colour from palette
+  const lc = pal.lily || 'rgba(45,90,35,';
+
+  function drawPad(px, py, r, alpha, phase) {
+    if (alpha < 0.02) return;
+    const rot = phase * Math.PI * 2;
     CX.save(); CX.globalAlpha=alpha;
-    CX.fillStyle=pal.lily+'1)';
-    CX.beginPath(); CX.ellipse(px,py,Math.max(0.5,r),Math.max(0.3,r*0.55),rng()*Math.PI,0,Math.PI*2); CX.fill();
+    // Pad body
+    CX.fillStyle = lc + '1)';
+    CX.beginPath(); CX.ellipse(px,py,Math.max(0.5,r),Math.max(0.3,r*0.6),rot,0,Math.PI*2); CX.fill();
+    // Highlight
+    CX.globalAlpha=alpha*0.4;
+    CX.fillStyle = lc.replace('rgba(','rgba(').replace(/,\s*$/, ',') + '1)';
+    CX.fillStyle = `rgba(140,200,80,1)`;
+    CX.beginPath(); CX.ellipse(px-r*0.2,py-r*0.2,Math.max(0.3,r*0.35),Math.max(0.2,r*0.2),rot-0.5,0,Math.PI*2); CX.fill();
     // Notch
-    CX.globalAlpha=alpha*0.5;
-    const notchA = rng()*Math.PI*2;
+    CX.globalAlpha=alpha*0.7;
+    CX.fillStyle=pal.water1;
     CX.beginPath();
     CX.moveTo(px,py);
-    CX.lineTo(px+Math.cos(notchA)*r,py+Math.sin(notchA)*r*0.55);
-    CX.lineTo(px+Math.cos(notchA+0.3)*r,py+Math.sin(notchA+0.3)*r*0.55);
-    CX.closePath();
-    CX.fillStyle=pal.water1; CX.fill();
-    // Vein
-    CX.globalAlpha=alpha*0.3;
-    CX.strokeStyle=pal.lily+'1)'; CX.lineWidth=0.5;
-    CX.beginPath(); CX.moveTo(px,py);
-    CX.lineTo(px+Math.cos(notchA)*r*0.85, py+Math.sin(notchA)*r*0.55*0.85); CX.stroke();
+    CX.lineTo(px+Math.cos(rot)*r, py+Math.sin(rot)*r*0.6);
+    CX.lineTo(px+Math.cos(rot+0.35)*r, py+Math.sin(rot+0.35)*r*0.6);
+    CX.closePath(); CX.fill();
     CX.restore();
   }
 
-  // Top lily pads (hyper zone) — denser as BG rises
-  const topBand = wH*0.22; // depth from top of water
-  const topCount = Math.floor(3 + hyperProx*20);
-  const topRng = seededRand(11);
-  for (let i=0; i<topCount; i++) {
-    const px = topRng()*W;
-    const depthF = topRng(); // 0=top, 1=further in
-    const py = skyH + depthF*topBand;
-    const r = 6+topRng()*14;
-    const alpha = (1-depthF)*(0.15+hyperProx*0.35);
-    drawPad(px,py,r,alpha);
+  // Scrolling lily pads — drift left with river current (treeScrollX)
+  const drift = (treeScrollX * 0.5) % (W * 0.8);
+
+  // Top band (hyper zone) — from mood board: dense green border
+  const topBand = wH * 0.25;
+  const topBase = Math.floor(8 + hyperProx * 24);
+  const trng = seededRand(33);
+  for (let i=0; i<topBase; i++) {
+    const px = ((trng()*W*1.4 - drift) % (W*1.4)) - W*0.2;
+    const depthF = Math.pow(trng(), 0.7);
+    const py = skyH + depthF * topBand;
+    const r  = 8+trng()*18;
+    const alpha = (1-depthF*0.6) * (0.25 + hyperProx*0.55);
+    drawPad(px, py, r, alpha, trng());
   }
 
-  // Bottom lily pads (hypo zone)
-  const botBand = wH*0.22;
-  const botCount = Math.floor(3 + hypoProx*20);
-  const botRng = seededRand(22);
-  for (let i=0; i<botCount; i++) {
-    const px = botRng()*W;
-    const depthF = botRng();
-    const py = H - depthF*botBand;
-    const r = 6+botRng()*14;
-    const alpha = (1-depthF)*(0.15+hypoProx*0.35);
-    drawPad(px,py,r,alpha);
+  // Bottom band (hypo zone)
+  const botBand = wH * 0.25;
+  const botBase = Math.floor(8 + hypoProx * 24);
+  const brng = seededRand(44);
+  for (let i=0; i<botBase; i++) {
+    const px = ((brng()*W*1.4 - drift*0.8) % (W*1.4)) - W*0.2;
+    const depthF = Math.pow(brng(), 0.7);
+    const py = H - depthF * botBand;
+    const r  = 8+brng()*18;
+    const alpha = (1-depthF*0.6) * (0.25 + hypoProx*0.55);
+    drawPad(px, py, r, alpha, brng());
   }
 
-  // Static lily pads — always a few near the edges for atmosphere
-  const atmRng = seededRand(55);
-  for (let i=0; i<8; i++) {
-    const side = atmRng()<0.5;
-    const px = side ? atmRng()*W*0.2 : W-atmRng()*W*0.2;
-    const py = skyH+atmRng()*(H-skyH);
-    drawPad(px,py,4+atmRng()*8,0.06+atmRng()*0.06);
+  // Atmospheric edge pads — always a few, parallax drift
+  const arp = seededRand(55);
+  for (let i=0; i<12; i++) {
+    const side = arp()<0.5;
+    const px = side
+      ? ((arp()*W*0.18 - drift*0.3) % (W*0.3))
+      : W - ((arp()*W*0.18 - drift*0.3+W*0.1) % (W*0.3));
+    const py = skyH + arp()*(H-skyH);
+    drawPad(px, py, 5+arp()*12, 0.08+arp()*0.1, arp());
   }
 }
-
 // ── DRAWING: MANA WAKES ──────────────────────────────────────
 // The wake spreads from the boat's stern (nowX) back into the past (left)
 // COB wake rises above the boat's centreline (upper water)
@@ -813,168 +885,130 @@ function drawWake(pts, colorRGB, glowHex, maxVal, isUpper, isFuture) {
   const futurePts = pts.filter(p=>p.future);
   if (pastPts.length < 2 && futurePts.length < 2) return;
   const tip = pastPts.length>0 ? pastPts[pastPts.length-1] : pts[0];
+  const tipFrac = Math.max(0, Math.min(1, tip.val/maxVal));
 
   CX.save();
 
-  // ── ZONE FILL: coloured water above/below the mana line ──────────────────
-  // The "two rivers meeting" — warm water above carb line, cool below insulin
-  if (pastPts.length>1) {
-    const skyH = HORIZON*H;
-    const edgeY = isUpper ? skyH+1 : H-1;
-    // Build a smoothed path along the mana line
-    const smoothPts = smoothPath(pastPts);
+  // ── PAPER-CUT WAKE BANDS (inspired by boat_and_wake mood board) ──────────
+  // Draw 4 distinct tinted bands from the wake path, each slightly wider/older
+  // giving the layered paper-cut look
+  if (pastPts.length > 3) {
+    const numBands = 5;
+    for (let band=numBands; band>=1; band--) {
+      const bandFrac  = band / numBands;        // 1=outermost, 0.2=innermost
+      const ageCutoff = bandFrac * 2.5 * 3600000; // older pts = outer band
+      const bandPts   = pastPts.filter(p => (viewTime - p.t) <= ageCutoff);
+      if (bandPts.length < 2) continue;
 
-    // Layer 1: deep zone fill, subtle
-    const zg1 = CX.createLinearGradient(pastPts[0].x,0,tip.x,0);
-    zg1.addColorStop(0,   `rgba(${colorRGB},0)`);
-    zg1.addColorStop(0.3, `rgba(${colorRGB},0.03)`);
-    zg1.addColorStop(0.7, `rgba(${colorRGB},0.09)`);
-    zg1.addColorStop(1,   `rgba(${colorRGB},0.16)`);
-    CX.fillStyle=zg1;
-    zoneFill(smoothPts, edgeY); CX.fill();
+      // Band width grows toward outer bands
+      const halfW = (2 + band * 12) * Math.min(1, tipFrac + 0.1);
+      // Opacity: inner bands brighter, outer fainter
+      const alpha = (0.55 - band * 0.08) * tipFrac;
+      if (alpha <= 0) continue;
 
-    // Layer 2: vertical gradient — intensifies near the mana line
-    const nearY = isUpper ? tip.y : tip.y;
-    const farY  = edgeY;
-    const vg = CX.createLinearGradient(0,nearY,0,farY);
-    vg.addColorStop(0,   `rgba(${colorRGB},0.18)`);
-    vg.addColorStop(0.25,`rgba(${colorRGB},0.06)`);
-    vg.addColorStop(1,   `rgba(${colorRGB},0)`);
-    CX.fillStyle=vg;
-    zoneFill(smoothPts, edgeY); CX.fill();
+      // Build TOP and BOTTOM edges of band using perpendicular normals
+      const TOP=[], BOT=[];
+      for (let i=0; i<bandPts.length; i++) {
+        const p    = bandPts[i];
+        const perp = getPerpendicular(bandPts, i);
+        const swirlW = halfW + Math.sin(i*0.12+phi*(0.4+band*0.1))*halfW*0.25;
+        TOP.push({x: p.x + perp.nx*swirlW, y: p.y + perp.ny*swirlW});
+        BOT.push({x: p.x - perp.nx*swirlW, y: p.y - perp.ny*swirlW});
+      }
+
+      // Draw filled band
+      CX.globalAlpha = alpha;
+      CX.fillStyle   = glowHex;
+      CX.beginPath();
+      CX.moveTo(TOP[0].x, TOP[0].y);
+      for (let i=1;i<TOP.length;i++) {
+        const prev=TOP[i-1], curr=TOP[i];
+        CX.quadraticCurveTo(prev.x,prev.y,(prev.x+curr.x)/2,(prev.y+curr.y)/2);
+      }
+      CX.lineTo(TOP[TOP.length-1].x, TOP[TOP.length-1].y);
+      for (let i=BOT.length-1;i>=0;i--) {
+        const curr=BOT[i], next=i>0?BOT[i-1]:BOT[0];
+        CX.quadraticCurveTo(curr.x,curr.y,(curr.x+next.x)/2,(curr.y+next.y)/2);
+      }
+      CX.closePath();
+      CX.fill();
+    }
   }
 
-  // ── SWIRLY MANA STREAM ────────────────────────────────────────────────────
-  // Multiple overlapping passes to create ethereal, flowing feel
-  // Pass 1: Wide soft halo (blurred, wide, low opacity)
-  // Pass 2: Mid ribbon with sinusoidal swirl
-  // Pass 3: Bright core with natural meander
-  // Pass 4: Sparkle highlights along the core
+  // ── ZONE FILL: coloured water above/below the mana line ──────────────────
+  if (pastPts.length > 1) {
+    const skyH  = HORIZON*H;
+    const edgeY = isUpper ? skyH+1 : H-1;
+    const smoothed = smoothPath(pastPts);
 
-  if (pastPts.length>1) {
-    // Generate swirled versions of the path
-    const coreSwirl   = swirlPath(pastPts, 0,   0.8, 0,   maxVal);    // core — very subtle
-    const midSwirl    = swirlPath(pastPts, 0.5, 1.5, 0.3, maxVal);  // mid — gentle wave
-    const outerSwirl  = swirlPath(pastPts, 1.0, 2.2, 0.7, maxVal);  // outer — broader
+    const zg = CX.createLinearGradient(pastPts[0].x, 0, tip.x, 0);
+    zg.addColorStop(0,    `rgba(${colorRGB},0)`);
+    zg.addColorStop(0.3,  `rgba(${colorRGB},0.04)`);
+    zg.addColorStop(0.7,  `rgba(${colorRGB},0.12)`);
+    zg.addColorStop(1,    `rgba(${colorRGB},0.22)`);
+    CX.globalAlpha = 1;
+    CX.fillStyle = zg;
+    zoneFill(smoothed, edgeY); CX.fill();
+  }
 
-    // PASS 1: Soft outer halo
-    CX.globalAlpha=0.0;
-    for (let i=1;i<outerSwirl.length;i++) {
-      const p=outerSwirl[i-1], c=outerSwirl[i];
-      const ageFrac=Math.max(0,Math.min(1,(viewTime-p.t)/(3*3600000)));
-      const vf=Math.min(1,p.val/maxVal);
-      const hw=Math.max(0.5,(2+ageFrac*20)*vf);
-      const alpha=(1-ageFrac)*vf*0.12;
-      if (alpha<0.005) continue;
-      CX.globalAlpha=alpha;
-      CX.strokeStyle=`rgba(${colorRGB},1)`;
-      CX.lineWidth=hw*2;
-      CX.shadowColor=glowHex; CX.shadowBlur=hw*1.5;
-      CX.beginPath(); CX.moveTo(p.x,p.y); CX.lineTo(c.x,c.y); CX.stroke();
-    }
-    CX.shadowBlur=0;
-
-    // PASS 2: Mid ribbon — filled tapered shape with swirl
-    const TOP2=[], BOT2=[];
-    for (let i=0;i<midSwirl.length;i++) {
-      const p=midSwirl[i];
-      const ageFrac=Math.max(0,Math.min(1,(viewTime-p.t)/(2.8*3600000)));
-      const vf=Math.min(1,p.val/maxVal);
-      const hw=Math.max(0.4, (1+ageFrac*14)*vf);
-      const perp=getPerpendicular(midSwirl,i);
-      TOP2.push({x:p.x+perp.nx*hw, y:p.y+perp.ny*hw});
-      BOT2.push({x:p.x-perp.nx*hw, y:p.y-perp.ny*hw});
-    }
-    const rg=CX.createLinearGradient(midSwirl[0].x,0,tip.x,0);
-    rg.addColorStop(0,`rgba(${colorRGB},0)`);
-    rg.addColorStop(0.35,`rgba(${colorRGB},0.06)`);
-    rg.addColorStop(0.7,`rgba(${colorRGB},0.22)`);
-    rg.addColorStop(1,`rgba(${colorRGB},0.5)`);
-    CX.fillStyle=rg; CX.globalAlpha=1;
-    CX.beginPath();
-    CX.moveTo(TOP2[0].x,TOP2[0].y);
-    for (let i=1;i<TOP2.length;i++) {
-      const prev=TOP2[i-1],curr=TOP2[i];
-      CX.quadraticCurveTo(prev.x,prev.y,(prev.x+curr.x)/2,(prev.y+curr.y)/2);
-    }
-    for (let i=BOT2.length-1;i>=0;i--) {
-      const curr=BOT2[i],next=i>0?BOT2[i-1]:BOT2[0];
-      CX.quadraticCurveTo(curr.x,curr.y,(curr.x+next.x)/2,(curr.y+next.y)/2);
-    }
-    CX.closePath(); CX.fill();
-
-    // PASS 3: Bright core line — meanders gently, fades toward past
+  // ── GLOWING CORE LINE ────────────────────────────────────────────────────
+  if (pastPts.length > 1) {
+    const coreSwirl = swirlPath(pastPts, 0.4, 0.8, 0, maxVal);
     CX.lineJoin='round'; CX.lineCap='round';
-    const segs=16, stepLen=Math.max(1,Math.floor(coreSwirl.length/segs));
-    for (let s=0;s<segs;s++) {
-      const i0=s*stepLen, i1=Math.min(coreSwirl.length-1,(s+1)*stepLen);
-      const frac=1-(s/(segs-1)); // 1=tip (bright), 0=tail (dark)
-      CX.globalAlpha=frac*frac*0.85;
-      CX.strokeStyle=glowHex;
-      CX.lineWidth=Math.max(0.3, 0.6+frac*1.4);
-      CX.shadowColor=glowHex; CX.shadowBlur=frac*10;
-      CX.beginPath(); CX.moveTo(coreSwirl[i0].x,coreSwirl[i0].y);
-      for (let i=i0+1;i<=i1;i++) CX.lineTo(coreSwirl[i].x,coreSwirl[i].y);
+    const seg = 12, step = Math.max(1, Math.floor(coreSwirl.length/seg));
+    for (let s=0; s<seg; s++) {
+      const i0=s*step, i1=Math.min(coreSwirl.length-1,(s+1)*step);
+      const frac = 1-(s/(seg-1));
+      CX.globalAlpha   = frac*frac*0.9 * tipFrac;
+      CX.strokeStyle   = glowHex;
+      CX.lineWidth     = Math.max(0.3, 0.8+frac*2);
+      CX.shadowColor   = glowHex;
+      CX.shadowBlur    = frac < 0.3 ? 12 : 0;
+      CX.beginPath();
+      CX.moveTo(coreSwirl[i0].x, coreSwirl[i0].y);
+      for (let i=i0+1;i<=i1;i++) CX.lineTo(coreSwirl[i].x, coreSwirl[i].y);
       CX.stroke(); CX.shadowBlur=0;
     }
-
-    // PASS 4: Shimmer sparkles drifting along the core
-    CX.globalAlpha=0.5;
-    const sparkCount=Math.floor(4+tip.val/maxVal*8);
-    for (let i=0;i<sparkCount;i++) {
-      const idx=Math.floor(coreSwirl.length*(1-i/sparkCount));
-      if (idx<0||idx>=coreSwirl.length) continue;
-      const sp=coreSwirl[idx];
-      const vf=Math.min(1,sp.val/maxVal);
-      const sparkA=vf*(0.3+Math.sin(phi*2+i*1.7)*0.2);
-      if (sparkA<0.05) continue;
-      const sr=Math.max(0.3,0.5+vf*1.5);
-      CX.globalAlpha=sparkA;
-      CX.fillStyle=glowHex;
-      CX.shadowColor=glowHex; CX.shadowBlur=6;
-      CX.beginPath(); CX.arc(sp.x,sp.y,sr,0,Math.PI*2); CX.fill();
-      CX.shadowBlur=0;
-    }
   }
 
-  // ── FUTURE PREDICTION (dotted, paler, also swirled) ──────────────────────
-  if (futurePts.length>1) {
-    const futSwirl=swirlPath(futurePts, 0.4, 1.2, 1.2, maxVal);
-    CX.globalAlpha=0.3;
-    CX.strokeStyle=glowHex; CX.lineWidth=0.8;
+  // ── FUTURE PREDICTION ────────────────────────────────────────────────────
+  if (futurePts.length > 1) {
+    const futSwirl = swirlPath(futurePts, 0.3, 0.8, 1.2, maxVal);
+    CX.globalAlpha = 0.3 * tipFrac;
+    CX.strokeStyle = glowHex; CX.lineWidth=1;
     CX.setLineDash([3,9]);
-    CX.shadowColor=glowHex; CX.shadowBlur=4;
-    CX.beginPath(); CX.moveTo(tip.x,tip.y);
-    for (const p of futSwirl) CX.lineTo(p.x,p.y);
-    CX.stroke(); CX.setLineDash([]); CX.shadowBlur=0;
+    CX.beginPath(); CX.moveTo(tip.x, tip.y);
+    for (const p of futSwirl) CX.lineTo(p.x, p.y);
+    CX.stroke(); CX.setLineDash([]);
 
-    // Future zone fill — very soft
-    const skyH=HORIZON*H, edgeY=isUpper?skyH+1:H-1;
-    const fg=CX.createLinearGradient(tip.x,0,futurePts[futurePts.length-1].x,0);
-    fg.addColorStop(0,`rgba(${colorRGB},0.07)`);
+    // Future zone
+    const edgeY = isUpper ? HORIZON*H+1 : H-1;
+    const fg = CX.createLinearGradient(tip.x,0,futurePts[futurePts.length-1].x,0);
+    fg.addColorStop(0,`rgba(${colorRGB},0.08)`);
     fg.addColorStop(1,`rgba(${colorRGB},0.01)`);
-    CX.fillStyle=fg; CX.globalAlpha=0.25;
+    CX.fillStyle=fg; CX.globalAlpha=0.2*tipFrac;
     CX.beginPath(); CX.moveTo(tip.x,edgeY); CX.lineTo(tip.x,tip.y);
     for (const p of futSwirl) CX.lineTo(p.x,p.y);
     CX.lineTo(futSwirl[futSwirl.length-1].x,edgeY); CX.closePath(); CX.fill();
   }
 
   // ── TIP ORB ──────────────────────────────────────────────────────────────
-  const tipFrac=Math.max(0, Math.min(1,tip.val/maxVal));
-  if (tipFrac>0.02) {
-    const r=Math.max(0.5, 3+tipFrac*10);
-    CX.globalAlpha=0.75+tipFrac*0.2;
+  if (tipFrac > 0.02) {
+    const r = Math.max(0.5, 4 + tipFrac*12);
+    CX.globalAlpha = 0.8+tipFrac*0.2;
     const og=CX.createRadialGradient(tip.x,tip.y,0,tip.x,tip.y,Math.max(0.5,r*3));
-    og.addColorStop(0,glowHex); og.addColorStop(0.4,`rgba(${colorRGB},0.25)`); og.addColorStop(1,'transparent');
-    CX.fillStyle=og; CX.shadowColor=glowHex; CX.shadowBlur=14;
-    CX.beginPath(); CX.arc(tip.x,tip.y,Math.max(0.5,r*3),0,Math.PI*2); CX.fill(); CX.shadowBlur=0;
-    CX.globalAlpha=0.9; CX.fillStyle=glowHex;
+    og.addColorStop(0,glowHex);
+    og.addColorStop(0.4,`rgba(${colorRGB},0.3)`);
+    og.addColorStop(1,'transparent');
+    CX.fillStyle=og; CX.shadowColor=glowHex; CX.shadowBlur=16;
+    CX.beginPath(); CX.arc(tip.x,tip.y,Math.max(0.5,r*3),0,Math.PI*2); CX.fill();
+    CX.shadowBlur=0;
+    CX.fillStyle=glowHex;
     CX.beginPath(); CX.arc(tip.x,tip.y,Math.max(0.3,r*0.4),0,Math.PI*2); CX.fill();
   }
 
   CX.restore();
 }
-
 // ── STREAM HELPERS ────────────────────────────────────────────────────────────
 function zoneFill(smoothPts, edgeY) {
   if (smoothPts.length<2) return;
@@ -1291,8 +1325,8 @@ function frame(ts) {
 
   const cobPts = buildWakePts('cob', cobY, 90);
   const iobPts = buildWakePts('iob', iobY, 90);
-  drawWake(cobPts, '190,120,55', '#c87832', MAX_COB, true,  false);
-  drawWake(iobPts, '55,90,150',  '#3a6aaa', MAX_IOB, false, false);
+  drawWake(cobPts, '60,180,140', '#3ecfa0', MAX_COB, true,  false);
+  drawWake(iobPts, '40,80,180',  '#2855c8', MAX_IOB, false, false);
 
   drawBolusMarkers(pal);
   drawTransition(pal);
@@ -1753,7 +1787,7 @@ function buildSetupScreen() {
         never to any third party. This app has no backend.
       </div>
     </div>
-    <div style="text-align:center;margin-top:10px;font-family:'DM Mono',monospace;font-size:8px;color:rgba(40,55,50,0.15);letter-spacing:1px">build 20260326-11</div>
+    <div style="text-align:center;margin-top:10px;font-family:'DM Mono',monospace;font-size:8px;color:rgba(40,55,50,0.15);letter-spacing:1px">build 20260326-13</div>
   </div>
 </div>`;
 }
