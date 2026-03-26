@@ -1461,44 +1461,73 @@ const CGM_SOURCES = {
   nightscout: {
     name: 'Nightscout / Gluroo',
     icon: '🌙',
-    description: 'Works with Gluroo, Nightscout, xDrip+, and any Nightscout-compatible backend.',
+    description: 'Works with Gluroo, Nightscout, xDrip+, and any Nightscout-compatible backend. For Gluroo: Menu → Settings → Gluroo Global Connect Nightscout.',
     fields: [
       { key: 'url',   label: 'Nightscout URL',   placeholder: 'https://xxxx.ns.gluroo.com', type: 'url' },
       { key: 'token', label: 'API Token / Secret', placeholder: 'xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx', type: 'password' },
     ],
+    _doFetch(cfg, url) {
+      // Try token in URL first (Gluroo style), fall back to api-secret header
+      return fetch(url, {
+        headers: { 'api-secret': cfg.token, 'Accept': 'application/json' }
+      });
+    },
+    _parse(data) {
+      return data
+        .filter(e => e.sgv || e.mbg)
+        .map(e => ({
+          t:     e.date,
+          bg:    e.sgv ? +(e.sgv / 18).toFixed(1) : +(e.mbg),
+          trend: e.direction || 'NONE',
+          src:   'nightscout'
+        }));
+    },
     async fetch(cfg, count=1) {
       const base = cfg.url.replace(/\/+$/, '');
-      const url  = `${base}/api/v1/entries.json?count=${count}&token=${cfg.token}`;
-      const r    = await fetch(url);
-      if (!r.ok) throw new Error(`Nightscout ${r.status}`);
+      // Try both auth methods — token in URL (Gluroo) and api-secret header
+      let r;
+      try {
+        r = await fetch(`${base}/api/v1/entries.json?count=${count}&token=${cfg.token}`);
+      } catch(e) {
+        throw new Error('Cannot reach Nightscout URL — check it is correct and accessible');
+      }
+      if (r.status === 401 || r.status === 403) {
+        // Try header auth instead
+        r = await fetch(`${base}/api/v1/entries.json?count=${count}`, {
+          headers: { 'api-secret': cfg.token }
+        });
+      }
+      if (!r.ok) throw new Error(`Nightscout error ${r.status} — check your URL and token`);
       const data = await r.json();
-      return data.map(e => ({
-        t:     e.date,                                    // ms timestamp
-        bg:    e.sgv ? +(e.sgv / 18).toFixed(1) : e.mbg, // mg/dL → mmol/L
-        trend: e.direction || 'NONE',
-        src:   'nightscout'
-      }));
+      if (!Array.isArray(data)) throw new Error('Unexpected response from Nightscout');
+      if (data.length === 0) throw new Error('No readings found — is Dexcom Share active in the Gluroo app?');
+      return this._parse(data);
     },
     async fetchRecent(cfg, hours=3) {
       const base  = cfg.url.replace(/\/+$/, '');
-      const count = hours * 12 + 5; // 5-min readings
-      const url   = `${base}/api/v1/entries.json?count=${count}&token=${cfg.token}`;
-      const r     = await fetch(url);
-      if (!r.ok) throw new Error(`Nightscout ${r.status}`);
-      const data  = await r.json();
-      return data.map(e => ({
-        t:     e.date,
-        bg:    e.sgv ? +(e.sgv / 18).toFixed(1) : e.mbg,
-        trend: e.direction || 'NONE',
-        src:   'nightscout'
-      })).sort((a,b) => a.t - b.t);
+      const count = hours * 12 + 5;
+      let r;
+      try {
+        r = await fetch(`${base}/api/v1/entries.json?count=${count}&token=${cfg.token}`);
+      } catch(e) {
+        throw new Error('Cannot reach Nightscout URL');
+      }
+      if (r.status === 401 || r.status === 403) {
+        r = await fetch(`${base}/api/v1/entries.json?count=${count}`, {
+          headers: { 'api-secret': cfg.token }
+        });
+      }
+      if (!r.ok) throw new Error(`Nightscout error ${r.status}`);
+      const data = await r.json();
+      if (!Array.isArray(data)) return [];
+      return this._parse(data).sort((a,b) => a.t - b.t);
     }
   },
 
   dexcom_share: {
     name: 'Dexcom Share',
     icon: '📡',
-    description: 'Direct Dexcom Share connection using your Dexcom app credentials. Requires Share to be enabled with at least one follower.',
+    description: 'Direct Dexcom Share using your Dexcom app credentials. Requires Share enabled with at least one follower. Must be served over https:// (works on GitHub Pages).',
     fields: [
       { key: 'username', label: 'Dexcom Username / Email', placeholder: 'yourname@email.com', type: 'text' },
       { key: 'password', label: 'Dexcom Password',          placeholder: '••••••••',            type: 'password' },
@@ -1519,7 +1548,10 @@ const CGM_SOURCES = {
         headers: {'Content-Type':'application/json', 'Accept':'application/json'},
         body: JSON.stringify({ accountName: cfg.username, password: cfg.password, applicationId: appId })
       });
-      if (!r1.ok) throw new Error('Dexcom auth failed — check username/password');
+      if (!r1.ok) const origin = window.location.origin;
+      const onGithub = origin.includes('github.io') || origin.startsWith('https://');
+      if (!onGithub) throw new Error('Dexcom Share requires the app to be hosted on https:// — use Nightscout/Gluroo for local testing, or host on GitHub Pages');
+      throw new Error('Dexcom auth failed — check username/password');
       const accountId = await r1.json();
       // Step 2: get sessionId
       const r2 = await fetch(`${base}/General/LoginPublisherAccountById`, {
