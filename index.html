@@ -16,9 +16,10 @@ html,body{width:100%;height:100%;overflow:hidden;background:#c8d8d0;touch-action
 /* BG — top centre, large serif, very light */
 #bg-wrap{
   position:absolute;
-  top:max(16px,env(safe-area-inset-top,16px));
+  top:max(20px,env(safe-area-inset-top,20px));
   left:50%;transform:translateX(-50%);
   text-align:center;
+  pointer-events:none;
 }
 #bg-num{
   font-family:'Fraunces',serif;font-weight:200;font-size:54px;
@@ -33,25 +34,9 @@ html,body{width:100%;height:100%;overflow:hidden;background:#c8d8d0;touch-action
 }
 
 /* Mana indicators — bottom corners, very subtle */
-#mana-carb{
-  position:absolute;
-  bottom:calc(max(16px,env(safe-area-inset-bottom,16px))+60px);
-  left:16px;
-}
-#mana-ins{
-  position:absolute;
-  bottom:calc(max(16px,env(safe-area-inset-bottom,16px))+60px);
-  right:16px;text-align:right;
-}
-.mana-val{
-  font-family:'Fraunces',serif;font-weight:200;font-size:28px;
-  line-height:1;letter-spacing:-1px;
-}
-.mana-label{
-  font-family:'DM Mono',monospace;font-weight:300;font-size:8px;
-  letter-spacing:1.5px;text-transform:uppercase;opacity:0.5;
-  margin-top:2px;
-}
+
+
+
 
 /* Time scrub bar — very thin, bottom */
 #timebar{
@@ -202,25 +187,38 @@ html,body{width:100%;height:100%;overflow:hidden;background:#c8d8d0;touch-action
   <div class="ripwrap"><div class="rip"></div><div class="rip"></div><div class="rip"></div></div>
   <div class="ltitle">Oskar's River</div>
   <div class="lsub">finding the current</div>
-  <div style="font-family:'DM Mono',monospace;font-size:8px;color:rgba(40,55,50,0.2);margin-top:8px;letter-spacing:1px">build 20260326-15</div>
+  <div style="font-family:'DM Mono',monospace;font-size:8px;color:rgba(40,55,50,0.2);margin-top:8px;letter-spacing:1px">build 20260326-16</div>
 </div>
 
 <canvas id="c"></canvas>
 
 <div id="hud">
-  <div id="bg-wrap" style="margin-top:max(8px,env(safe-area-inset-top,8px))">
+  <!-- BG — top centre, clear of safe area -->
+  <div id="bg-wrap">
     <div id="bg-num">—<span id="bg-arrow"></span></div>
     <div id="bg-unit">mmol/L</div>
   </div>
 
-  <div id="mana-carb">
-    <div class="mana-val" id="mc-val" style="color:rgba(180,100,40,0.65)">—</div>
-    <div class="mana-label" style="color:rgba(180,100,40,0.5)">g carbs</div>
-  </div>
-
-  <div id="mana-ins">
-    <div class="mana-val" id="mi-val" style="color:rgba(50,80,130,0.65)">—</div>
-    <div class="mana-label" style="color:rgba(50,80,130,0.5)">U insulin</div>
+  <!-- COB/IOB pill — bottom centre above timebar -->
+  <div id="mana-pill" style="
+    position:absolute;
+    bottom:calc(max(16px,env(safe-area-inset-bottom,16px))+28px);
+    left:50%;transform:translateX(-50%);
+    display:flex;gap:10px;align-items:center;pointer-events:none">
+    <div style="display:flex;align-items:center;gap:5px;
+      background:rgba(0,0,0,0.18);border-radius:12px;padding:4px 10px;
+      backdrop-filter:blur(6px)">
+      <div style="width:6px;height:6px;border-radius:50%;background:#3ecfa0;flex-shrink:0"></div>
+      <span style="font-family:'DM Mono',monospace;font-size:9px;color:rgba(255,255,255,0.4);letter-spacing:.5px">COB</span>
+      <span id="mc-val" style="font-family:'DM Mono',monospace;font-size:13px;font-weight:500;color:rgba(255,255,255,0.75)">—g</span>
+    </div>
+    <div style="display:flex;align-items:center;gap:5px;
+      background:rgba(0,0,0,0.18);border-radius:12px;padding:4px 10px;
+      backdrop-filter:blur(6px)">
+      <div style="width:6px;height:6px;border-radius:50%;background:#2855c8;flex-shrink:0"></div>
+      <span style="font-family:'DM Mono',monospace;font-size:9px;color:rgba(255,255,255,0.4);letter-spacing:.5px">IOB</span>
+      <span id="mi-val" style="font-family:'DM Mono',monospace;font-size:13px;font-weight:500;color:rgba(255,255,255,0.75)">—U</span>
+    </div>
   </div>
 
   <div id="timebar">
@@ -260,7 +258,22 @@ html,body{width:100%;height:100%;overflow:hidden;background:#c8d8d0;touch-action
 <div id="sheet">
   <div class="handle"></div>
   <div class="sheet-title">add to the flow</div>
-  <div class="sheet-sub">carbs · bolus · or both</div>
+
+  <!-- Quick action buttons -->
+  <div style="display:flex;gap:8px;padding:0 18px;margin-bottom:14px">
+    <button onclick="quickMeal()" style="flex:1;padding:10px;border-radius:10px;
+      border:1px solid rgba(62,207,160,0.3);background:rgba(62,207,160,0.08);
+      color:rgba(62,207,160,0.85);font-family:'Fraunces',serif;font-style:italic;
+      font-size:14px;cursor:pointer">🍃 meal</button>
+    <button onclick="quickCorrection()" style="flex:1;padding:10px;border-radius:10px;
+      border:1px solid rgba(40,85,200,0.3);background:rgba(40,85,200,0.08);
+      color:rgba(80,120,220,0.85);font-family:'Fraunces',serif;font-style:italic;
+      font-size:14px;cursor:pointer">💧 correction</button>
+    <button onclick="quickCarbs()" style="flex:1;padding:10px;border-radius:10px;
+      border:1px solid rgba(200,140,60,0.3);background:rgba(200,140,60,0.08);
+      color:rgba(200,140,60,0.85);font-family:'Fraunces',serif;font-style:italic;
+      font-size:14px;cursor:pointer">🌾 carbs</button>
+  </div>
 
   <div class="type-row">
     <button class="tbtn" id="tb-c" onclick="selType('c')"><span class="ico">🌾</span>carbs</button>
@@ -268,16 +281,47 @@ html,body{width:100%;height:100%;overflow:hidden;background:#c8d8d0;touch-action
     <button class="tbtn" id="tb-i" onclick="selType('i')"><span class="ico">💧</span>bolus</button>
   </div>
 
+  <!-- Time input for backloading -->
+  <div style="padding:0 18px;margin-bottom:10px">
+    <div style="display:flex;align-items:center;gap:8px">
+      <span style="font-family:'DM Mono',monospace;font-size:9px;color:rgba(40,55,50,0.35);
+        letter-spacing:1px;text-transform:uppercase;white-space:nowrap">time</span>
+      <input id="in-time" type="datetime-local"
+        style="flex:1;padding:7px 10px;border-radius:8px;border:1px solid rgba(40,55,50,0.12);
+        background:rgba(255,255,255,0.5);font-family:'DM Mono',monospace;font-size:12px;
+        color:rgba(40,55,50,0.7);outline:none">
+      <button onclick="setTimeNow()" style="padding:6px 10px;border-radius:7px;
+        border:1px solid rgba(40,55,50,0.12);background:rgba(40,55,50,0.06);
+        font-family:'DM Mono',monospace;font-size:9px;color:rgba(40,55,50,0.45);
+        cursor:pointer;white-space:nowrap;letter-spacing:.5px">now</button>
+    </div>
+  </div>
+
+  <!-- Saved meals quick-pick -->
+  <div id="saved-meals-row" style="padding:0 18px;margin-bottom:10px;display:none">
+    <div style="font-family:'DM Mono',monospace;font-size:9px;color:rgba(40,55,50,0.35);
+      letter-spacing:1px;text-transform:uppercase;margin-bottom:6px">saved meals</div>
+    <div id="saved-meals-chips" style="display:flex;flex-wrap:wrap;gap:5px"></div>
+  </div>
+
   <div class="isec" id="sec-c">
     <div class="irow">
-      <div class="idot" style="background:rgba(200,130,70,0.7)"></div>
+      <div class="idot" style="background:rgba(62,207,160,0.8)"></div>
       <input class="ifield" id="in-c" type="number" inputmode="decimal" placeholder="grams" min="0" max="200" step="1" oninput="onInp()">
       <span class="iunit">g</span>
+    </div>
+    <!-- Common carb amounts -->
+    <div style="display:flex;gap:5px;padding:0 0 8px 22px">
+      <div class="bgchip" onclick="setCarbs(15)">15g</div>
+      <div class="bgchip" onclick="setCarbs(25)">25g</div>
+      <div class="bgchip" onclick="setCarbs(35)">35g</div>
+      <div class="bgchip" onclick="setCarbs(45)">45g</div>
+      <div class="bgchip" onclick="setCarbs(60)">60g</div>
     </div>
   </div>
   <div class="isec" id="sec-i">
     <div class="irow">
-      <div class="idot" style="background:rgba(70,100,140,0.7)"></div>
+      <div class="idot" style="background:rgba(40,85,200,0.8)"></div>
       <input class="ifield" id="in-i" type="number" inputmode="decimal" placeholder="units" min="0" max="20" step="0.5" oninput="onInp()">
       <span class="iunit">U</span>
     </div>
@@ -537,7 +581,8 @@ function drawSky(pal) {
   const sf = Math.max(0, Math.min(1, pal.sunFrac||0.5));
   const sunX = W * (0.1 + sf*0.8);
   const peakFrac = Math.sin(sf*Math.PI); // 0 at edges, 1 at noon
-  const sunY = skyH*(0.72 - peakFrac*0.55); // low at horizon, high at noon
+  // Sun sits LOW — at or just below mountain line so mountains occlude it
+  const sunY = skyH*(0.82 - peakFrac*0.35); // stays near horizon
   const sunR = pal.sunR || 60;
 
   // Corona / atmosphere glow (large, soft)
@@ -616,6 +661,70 @@ function drawSky(pal) {
   CX.save(); CX.globalAlpha=0.12;
   CX.fillStyle = pal.treeFar.replace('0.2','1').replace('0.25','1').replace('0.3','1');
   drawPagoda(pgX, pgY, 14);
+  CX.restore();
+
+  // ── SHORELINE FEATURES — reeds, birds, distant jetty ──────────────
+  const sfRng = seededRand(77);
+  const skyH2 = HORIZON*H;
+
+  // Reeds — vertical lines at horizon, both sides, drifting slightly
+  CX.save();
+  for (let i=0; i<22; i++) {
+    const rx = sfRng()*W;
+    const rDrift = ((rx - treeScrollX*0.08) % W + W) % W;
+    const rh = 12 + sfRng()*28;
+    const rw = 0.8 + sfRng()*1.2;
+    const ra = 0.15 + sfRng()*0.25;
+    const rside = i < 11 ? rDrift*0.22 : W - rDrift*0.22;
+    CX.globalAlpha = ra;
+    CX.fillStyle = pal.treeFar.replace(/[\d.]+\)$/, '1)');
+    CX.fillRect(rside, skyH2-rh, rw, rh);
+    // Reed head
+    CX.globalAlpha = ra*0.8;
+    CX.beginPath();
+    CX.ellipse(rside+rw/2, skyH2-rh, rw*1.8, rw*4, 0, 0, Math.PI*2);
+    CX.fill();
+  }
+
+  // Distant jetty — simple geometric shape on one side
+  const jettyX = W*0.18 - (treeScrollX*0.05 % (W*0.6));
+  if (jettyX > -60 && jettyX < W+60) {
+    CX.globalAlpha=0.2;
+    CX.fillStyle=pal.treeFar.replace(/[\d.]+\)$/, '1)');
+    // Platform
+    CX.fillRect(jettyX, skyH2-4, 35, 3);
+    // Posts
+    for (const px of [jettyX+5, jettyX+17, jettyX+29]) {
+      CX.fillRect(px, skyH2-2, 2, 8);
+    }
+  }
+
+  // Birds — simple V shapes drifting across sky
+  for (let i=0; i<5; i++) {
+    const bx = ((sfRng()*W*1.5 + treeScrollX*(0.03+i*0.01)) % (W*1.4)) - W*0.2;
+    const by = skyH2*(0.15 + sfRng()*0.4);
+    const bs = 3 + sfRng()*5;
+    const ba = 0.12 + sfRng()*0.18;
+    CX.globalAlpha=ba;
+    CX.strokeStyle=pal.treeFar.replace(/[\d.]+\)$/, '1)');
+    CX.lineWidth=0.8;
+    CX.beginPath();
+    CX.moveTo(bx-bs, by); CX.lineTo(bx, by-bs*0.5); CX.lineTo(bx+bs, by);
+    CX.stroke();
+  }
+
+  // Distant house silhouette
+  const houseX = W*0.75 - (treeScrollX*0.04 % (W*0.8));
+  if (houseX > -40 && houseX < W+40) {
+    CX.globalAlpha=0.12;
+    CX.fillStyle=pal.treeFar.replace(/[\d.]+\)$/, '1)');
+    CX.fillRect(houseX, skyH2-14, 22, 12); // walls
+    CX.beginPath(); // roof
+    CX.moveTo(houseX-3, skyH2-14);
+    CX.lineTo(houseX+11, skyH2-24);
+    CX.lineTo(houseX+25, skyH2-14);
+    CX.closePath(); CX.fill();
+  }
   CX.restore();
 
   // Horizon mist band
@@ -916,9 +1025,14 @@ function drawWake(pts, colorRGB, glowHex, maxVal, isUpper, isFuture) {
         BOT.push({x: p.x - perp.nx*swirlW, y: p.y - perp.ny*swirlW});
       }
 
-      // Draw filled band
-      CX.globalAlpha = alpha;
-      CX.fillStyle   = glowHex;
+      // Draw filled band with soft horizontal fade
+      const bandGrad = CX.createLinearGradient(bandPts[0].x, 0, tip.x, 0);
+      bandGrad.addColorStop(0,   `rgba(${colorRGB},0)`);
+      bandGrad.addColorStop(0.3, `rgba(${colorRGB},${alpha*0.5})`);
+      bandGrad.addColorStop(0.8, `rgba(${colorRGB},${alpha})`);
+      bandGrad.addColorStop(1,   `rgba(${colorRGB},${alpha*1.2})`);
+      CX.globalAlpha = 1;
+      CX.fillStyle   = bandGrad;
       CX.beginPath();
       CX.moveTo(TOP[0].x, TOP[0].y);
       for (let i=1;i<TOP.length;i++) {
@@ -1393,9 +1507,68 @@ CV.addEventListener('wheel',e=>{viewSpan=Math.max(MIN_SPAN,Math.min(MAX_SPAN,vie
 
 // ── LOG SHEET ────────────────────────────────────────────────
 let _st=null;
+// Saved meals from session/localStorage
+const SAVED_MEALS = (() => {
+  try { return JSON.parse(localStorage.getItem('river_meals')||'[]'); } catch(e) { return []; }
+})();
+
+function saveMealToHistory(name, carbs, insulin, t) {
+  const entry = {name, carbs, insulin, t: t||Date.now()};
+  SAVED_MEALS.unshift(entry);
+  if (SAVED_MEALS.length > 20) SAVED_MEALS.pop();
+  try { localStorage.setItem('river_meals', JSON.stringify(SAVED_MEALS)); } catch(e) {}
+}
+
+function renderSavedMeals() {
+  const row = document.getElementById('saved-meals-row');
+  const chips = document.getElementById('saved-meals-chips');
+  if (!row || !chips) return;
+  if (SAVED_MEALS.length === 0) { row.style.display='none'; return; }
+  row.style.display='block';
+  chips.innerHTML = SAVED_MEALS.slice(0,8).map((m,i) =>
+    `<button onclick="loadSavedMeal(${i})" style="padding:5px 10px;border-radius:8px;
+      border:1px solid rgba(40,55,50,0.12);background:rgba(40,55,50,0.05);
+      font-family:'DM Mono',monospace;font-size:10px;color:rgba(40,55,50,0.55);
+      cursor:pointer">${m.name} (${m.carbs}g)</button>`
+  ).join('');
+}
+
+function loadSavedMeal(idx) {
+  const m = SAVED_MEALS[idx];
+  if (!m) return;
+  selType('b');
+  document.getElementById('in-c').value = m.carbs;
+  document.getElementById('in-i').value = m.insulin || '';
+  onInp();
+}
+
+function setTimeNow() {
+  const now = new Date();
+  const local = new Date(now.getTime() - now.getTimezoneOffset()*60000);
+  document.getElementById('in-time').value = local.toISOString().slice(0,16);
+}
+function getEntryTime() {
+  const v = document.getElementById('in-time').value;
+  if (!v) return Date.now();
+  return new Date(v).getTime();
+}
+
+function setCarbs(v) {
+  document.getElementById('in-c').value = v;
+  document.querySelectorAll('#sec-c .bgchip').forEach(c =>
+    c.classList.toggle('on', parseInt(c.textContent)===v));
+  onInp();
+}
+
+function quickMeal()       { openSheet(); selType('b'); }
+function quickCorrection() { openSheet(); selType('i'); }
+function quickCarbs()      { openSheet(); selType('c'); }
+
 function openSheet(){
   document.getElementById('sheet').classList.add('open');
   document.getElementById('overlay').classList.add('open');
+  setTimeNow();
+  renderSavedMeals();
   selType('b');
 }
 function closeSheet(){
@@ -1439,12 +1612,22 @@ function onInp(){
 function commitDrop(){
   const c=parseFloat(document.getElementById('in-c').value)||0;
   const u=parseFloat(document.getElementById('in-i').value)||0;
+  const t=getEntryTime();
   if(c>0||u>0){
-    SESSION.push({t:Date.now(),c,u});
+    SESSION.push({t,c,u});
     try{sessionStorage.setItem('rv3',JSON.stringify(SESSION));}catch(e){}
+    // Save meal to history if has carbs
+    if(c>0) {
+      const bg=parseFloat(document.getElementById('in-bg').value)||0;
+      const mealName = c>0&&u>0?`${c}g + ${u}U`:(c>0?`${c}g carbs`:`${u}U bolus`);
+      saveMealToHistory(mealName, c, u, t);
+    }
+    // Also update HISTORY_RAW entry for that time if it exists
+    const existing = HISTORY_RAW.findIndex(h=>Math.abs(h.t-t)<150000);
+    if(existing>=0) { HISTORY_RAW[existing].iob+=u; HISTORY_RAW[existing].cob+=c; }
   }
-  const msg=[]; if(c>0)msg.push(`${c}g carbs`); if(u>0)msg.push(`${u}U insulin`);
-  showToast(msg.join(' · ')+'\nfloating downstream');
+  const msg=[]; if(c>0)msg.push(`${c}g`); if(u>0)msg.push(`${u}U`);
+  showToast((msg.join(' · ')||'logged')+'\ninto the river');
   ['in-c','in-i','in-bg'].forEach(id=>document.getElementById(id).value='');
   document.getElementById('sugbox').style.display='none';
   document.getElementById('dropbtn').disabled=true;
@@ -1805,7 +1988,7 @@ function buildSetupScreen() {
         never to any third party. This app has no backend.
       </div>
     </div>
-    <div style="text-align:center;margin-top:10px;font-family:'DM Mono',monospace;font-size:8px;color:rgba(40,55,50,0.15);letter-spacing:1px">build 20260326-15</div>
+    <div style="text-align:center;margin-top:10px;font-family:'DM Mono',monospace;font-size:8px;color:rgba(40,55,50,0.15);letter-spacing:1px">build 20260326-16</div>
   </div>
 </div>`;
 }
