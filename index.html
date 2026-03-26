@@ -1445,13 +1445,16 @@ const CGM_SOURCES = {
           src:   'nightscout'
         }));
     },
+    _proxy: 'https://orange-surf-6f98.john-king-uk.workers.dev',
     async _get(cfg, path) {
-      const base = cfg.url.replace(/\/+$/, '');
-      const sep  = path.includes('?') ? '&' : '?';
-      const url  = base + path + sep + 'token=' + cfg.token;
+      const base   = cfg.url.replace(/\/+$/, '');
+      const sep    = path.includes('?') ? '&' : '?';
+      const target = base + path + sep + 'token=' + cfg.token;
+      // Route through CORS proxy (Gluroo doesn't send CORS headers)
+      const proxyUrl = this._proxy + '/?url=' + encodeURIComponent(target);
       let r;
-      try { r = await fetch(url); }
-      catch(e) { throw new Error('Cannot reach ' + base + ' — check the URL is correct'); }
+      try { r = await fetch(proxyUrl); }
+      catch(e) { throw new Error('Cannot reach ' + base + ' — check URL is correct'); }
       return r;
     },
     async fetch(cfg, count=1) {
