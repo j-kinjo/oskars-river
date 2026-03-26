@@ -187,7 +187,7 @@ html,body{width:100%;height:100%;overflow:hidden;background:#c8d8d0;touch-action
   <div class="ripwrap"><div class="rip"></div><div class="rip"></div><div class="rip"></div></div>
   <div class="ltitle">Oskar's River</div>
   <div class="lsub">finding the current</div>
-  <div style="font-family:'DM Mono',monospace;font-size:8px;color:rgba(40,55,50,0.2);margin-top:8px;letter-spacing:1px">build 20260326-19</div>
+  <div style="font-family:'DM Mono',monospace;font-size:8px;color:rgba(40,55,50,0.2);margin-top:8px;letter-spacing:1px">build 20260326-20</div>
 </div>
 
 <canvas id="c"></canvas>
@@ -1191,7 +1191,7 @@ function drawBGTrail(pal) {
   CX.beginPath();
   CX.moveTo(pts[0].x, pts[0].y);
   for (let i=1;i<pts.length-1;i++) {
-    const mid={(x:(pts[i].x+pts[i+1].x)/2),(y:(pts[i].y+pts[i+1].y)/2)};
+    const mid={x:(pts[i].x+pts[i+1].x)/2, y:(pts[i].y+pts[i+1].y)/2};
     CX.quadraticCurveTo(pts[i].x,pts[i].y,mid.x,mid.y);
   }
   CX.lineTo(pts[pts.length-1].x,pts[pts.length-1].y);
@@ -2098,7 +2098,7 @@ function buildSetupScreen() {
         never to any third party. This app has no backend.
       </div>
     </div>
-    <div style="text-align:center;margin-top:10px;font-family:'DM Mono',monospace;font-size:8px;color:rgba(40,55,50,0.15);letter-spacing:1px">build 20260326-19</div>
+    <div style="text-align:center;margin-top:10px;font-family:'DM Mono',monospace;font-size:8px;color:rgba(40,55,50,0.15);letter-spacing:1px">build 20260326-20</div>
   </div>
 </div>`;
 }
