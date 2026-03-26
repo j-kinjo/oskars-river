@@ -1430,10 +1430,11 @@ const CGM_SOURCES = {
   nightscout: {
     name: 'Nightscout / Gluroo',
     icon: '🌙',
-    description: 'Works with Gluroo, Nightscout, xDrip+, and any Nightscout-compatible backend. For Gluroo: Menu → Settings → Gluroo Global Connect Nightscout.',
+    description: 'Gluroo needs a free Cloudflare proxy worker for CORS. See the cloudflare-worker.js file in the repo. Enter your Nightscout URL, token, and the deployed worker URL below.',
     fields: [
       { key: 'url',   label: 'Nightscout URL',   placeholder: 'https://xxxx.ns.gluroo.com', type: 'url' },
       { key: 'token', label: 'API Token / Secret', placeholder: 'xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx', type: 'password' },
+      { key: 'proxy', label: 'Proxy Worker URL (required for Gluroo)', placeholder: 'https://your-worker.workers.dev', type: 'url' },
     ],
     _parse(data) {
       return data
@@ -1445,29 +1446,42 @@ const CGM_SOURCES = {
           src:   'nightscout'
         }));
     },
-    async fetch(cfg, count=1) {
-      // Token in URL only — no custom headers (avoids CORS preflight)
-      const base = cfg.url.replace(/\/+$/, '').replace(/\/$/, '');
-      const url  = `${base}/api/v1/entries.json?count=${count}&token=${cfg.token}`;
+    async _get(cfg, path) {
+      const base = cfg.url.replace(/\/+$/, '');
+      // Gluroo uses api-secret header auth (from their JSON config format)
       let r;
-      try { r = await fetch(url); }
-      catch(e) { throw new Error('Cannot reach ' + base + ' — check the URL is correct'); }
-      if (r.status === 401) throw new Error('Token rejected — regenerate it in Gluroo: Menu → Settings → Gluroo Global Connect');
-      if (r.status === 403) throw new Error('Access denied — check your token');
-      if (!r.ok) throw new Error(`Server returned ${r.status} — try again in a moment`);
+      try {
+        r = await fetch(base + path, { headers: { 'api-secret': cfg.token } });
+        if (r.ok) return r;
+      } catch(e) { /* fall through to URL token */ }
+      // Fallback: token in URL (standard Nightscout)
+      const sep = path.includes('?') ? '&' : '?';
+      try {
+        r = await fetch(base + path + sep + 'token=' + cfg.token);
+        return r;
+      } catch(e) {
+        throw new Error('Cannot reach ' + base + ' — check the URL is correct');
+      }
+    },
+    async fetch(cfg, count=1) {
+      let r;
+      try { r = await this._get(cfg, '/api/v1/entries.json?count=' + count); }
+      catch(e) { throw e; }
+      if (r.status === 401 || r.status === 403)
+        throw new Error('Token rejected — get a fresh one: Gluroo → Menu → Settings → Gluroo Global Connect');
+      if (!r.ok) throw new Error('Server returned ' + r.status);
       let data;
-      try { data = await r.json(); } catch(e) { throw new Error('Bad response from server — is the URL correct?'); }
+      try { data = await r.json(); } catch(e) { throw new Error('Bad response — is the URL correct?'); }
       if (!Array.isArray(data)) throw new Error('Unexpected response format');
-      if (data.length === 0) throw new Error('No readings — is Dexcom Share enabled in the Gluroo app?');
+      if (data.length === 0) throw new Error('No readings — is Dexcom Share active in the Gluroo app?');
       return this._parse(data);
     },
     async fetchRecent(cfg, hours=3) {
-      const base  = cfg.url.replace(/\/+$/, '').replace(/\/$/, '');
       const count = hours * 12 + 5;
-      const url   = `${base}/api/v1/entries.json?count=${count}&token=${cfg.token}`;
       let r;
-      try { r = await fetch(url); } catch(e) { throw new Error('Cannot reach ' + base); }
-      if (!r.ok) throw new Error(`Server returned ${r.status}`);
+      try { r = await this._get(cfg, '/api/v1/entries.json?count=' + count); }
+      catch(e) { throw new Error('Cannot reach server'); }
+      if (!r.ok) throw new Error('Server returned ' + r.status);
       let data;
       try { data = await r.json(); } catch(e) { return []; }
       if (!Array.isArray(data)) return [];
@@ -1833,7 +1847,8 @@ async function connectCGM() {
 
   btn.textContent    = 'connecting…';
   btn.disabled       = true;
-  status.textContent = 'Testing connection…';
+  const base2 = fields.url ? fields.url.replace(/\/+$/, '') : '';
+  status.textContent = 'Testing: ' + base2 + '/api/v1/entries.json…';
   status.style.color = 'rgba(40,55,50,0.4)';
 
   try {
