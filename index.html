@@ -1430,11 +1430,10 @@ const CGM_SOURCES = {
   nightscout: {
     name: 'Nightscout / Gluroo',
     icon: '🌙',
-    description: 'Gluroo needs a free Cloudflare proxy worker for CORS. See the cloudflare-worker.js file in the repo. Enter your Nightscout URL, token, and the deployed worker URL below.',
+    description: 'In Gluroo: Menu → Settings → Gluroo Global Connect Nightscout. Tap Copy → Copy JSON. Paste the URL into the URL field and the apiSecretToken value into the token field.',
     fields: [
       { key: 'url',   label: 'Nightscout URL',   placeholder: 'https://xxxx.ns.gluroo.com', type: 'url' },
       { key: 'token', label: 'API Token / Secret', placeholder: 'xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx', type: 'password' },
-      { key: 'proxy', label: 'Proxy Worker URL (required for Gluroo)', placeholder: 'https://your-worker.workers.dev', type: 'url' },
     ],
     _parse(data) {
       return data
