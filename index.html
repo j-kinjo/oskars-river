@@ -22,15 +22,15 @@ html,body{width:100%;height:100%;overflow:hidden;background:#c8d8d0;touch-action
   pointer-events:none;
 }
 #bg-num{
-  font-family:'Fraunces',serif;font-weight:200;font-size:54px;
-  color:rgba(40,55,50,0.7);letter-spacing:-2px;line-height:1;
-  text-shadow:0 1px 8px rgba(255,255,255,0.5);
+  font-family:'Fraunces',serif;font-weight:300;font-size:76px;
+  color:rgba(255,255,255,0.92);letter-spacing:-3px;line-height:1;
+  text-shadow:0 2px 20px rgba(0,0,0,0.3),0 0 40px rgba(100,220,180,0.2);
 }
-#bg-arrow{font-size:20px;opacity:0.5;margin-left:4px;vertical-align:middle}
+#bg-arrow{font-size:28px;opacity:0.7;margin-left:6px;vertical-align:middle}
 #bg-unit{
-  font-family:'DM Mono',monospace;font-weight:300;font-size:9px;
-  color:rgba(40,55,50,0.4);letter-spacing:2px;text-transform:uppercase;
-  margin-top:1px;
+  font-family:'DM Mono',monospace;font-weight:300;font-size:11px;
+  color:rgba(255,255,255,0.45);letter-spacing:3px;text-transform:uppercase;
+  margin-top:2px;
 }
 
 /* Mana indicators — bottom corners, very subtle */
@@ -187,7 +187,7 @@ html,body{width:100%;height:100%;overflow:hidden;background:#c8d8d0;touch-action
   <div class="ripwrap"><div class="rip"></div><div class="rip"></div><div class="rip"></div></div>
   <div class="ltitle">Oskar's River</div>
   <div class="lsub">finding the current</div>
-  <div style="font-family:'DM Mono',monospace;font-size:8px;color:rgba(40,55,50,0.2);margin-top:8px;letter-spacing:1px">build 20260326-17</div>
+  <div style="font-family:'DM Mono',monospace;font-size:8px;color:rgba(40,55,50,0.2);margin-top:8px;letter-spacing:1px">build 20260326-19</div>
 </div>
 
 <canvas id="c"></canvas>
@@ -197,6 +197,9 @@ html,body{width:100%;height:100%;overflow:hidden;background:#c8d8d0;touch-action
   <div id="bg-wrap">
     <div id="bg-num">—<span id="bg-arrow"></span></div>
     <div id="bg-unit">mmol/L</div>
+    <div id="stale-warn" style="display:none;font-family:'DM Mono',monospace;
+      font-size:10px;color:rgba(255,160,60,0.9);letter-spacing:.5px;
+      margin-top:4px;text-align:center"></div>
   </div>
 
   <!-- COB/IOB pill — bottom centre above timebar -->
@@ -241,23 +244,22 @@ html,body{width:100%;height:100%;overflow:hidden;background:#c8d8d0;touch-action
   position:fixed;
   bottom:calc(max(20px,env(safe-area-inset-bottom,20px))+44px);
   left:24px;
-  width:8px;height:8px;border-radius:50%;background:#c87832;opacity:0;
-  transition:background .5s,opacity .5s;z-index:20;pointer-events:none;
-  box-shadow:0 0 8px currentColor" title="CGM status"></div>
+  width:7px;height:7px;border-radius:50%;background:#c87832;opacity:0;
+  transition:background .5s,opacity .5s;z-index:20;pointer-events:none" title="CGM status"></div>
 
 <!-- Return to Now button — appears when scrolled back -->
 <button id="now-btn" onclick="returnToNow()" style="
   position:fixed;
-  top:max(16px,env(safe-area-inset-top,16px));
+  bottom:calc(max(20px,env(safe-area-inset-bottom,20px)));
   right:16px;
   padding:7px 14px;border-radius:20px;
-  border:1px solid rgba(255,255,255,0.25);
-  background:rgba(0,0,0,0.25);
+  border:1px solid rgba(255,255,255,0.2);
+  background:rgba(0,0,0,0.22);
   backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px);
   font-family:'DM Mono',monospace;font-size:10px;letter-spacing:.8px;
-  color:rgba(255,255,255,0.8);text-transform:uppercase;
+  color:rgba(255,255,255,0.6);text-transform:uppercase;
   cursor:pointer;z-index:20;pointer-events:auto;
-  display:none;transition:opacity .2s">
+  opacity:0;transition:opacity .3s">
   ◉ now
 </button>
 
@@ -964,12 +966,13 @@ function buildWakePts(valueKey, yMapFn, futureMinutes) {
 function boatYfromBG(bg) {
   const skyH = HORIZON*H;
   const waterH = H - skyH;
-  // Map BG 2.5–18 → water range (with safe margins from lily pad zones)
-  const safeTop = skyH + waterH*0.08;  // near top lily zone
-  const safeBot = H    - waterH*0.08;  // near bottom lily zone
+  const safeTop = skyH + waterH*0.08;
+  const safeBot = H    - waterH*0.08;
   const frac = Math.max(0,Math.min(1,(bg-2.5)/(18-2.5)));
   return safeBot - frac*(safeBot-safeTop);
 }
+// Alias used by BG trail
+const bgToY = (bg) => boatYfromBG(bg);
 const BOAT_Y_FRAC = HORIZON + (1-HORIZON)*0.42; // fallback only
 function cobY(cob, x, bgAtX) {
   const by = bgAtX!=null ? boatYfromBG(bgAtX) : BOAT_Y_FRAC*H;
@@ -1157,6 +1160,91 @@ function getPerpendicular(pts, i) {
   const dx=p1.x-p0.x, dy=p1.y-p0.y;
   const len=Math.sqrt(dx*dx+dy*dy)||1;
   return {nx:-dy/len, ny:dx/len}; // rotated 90°
+}
+
+// ── BG HISTORY TRAIL ─────────────────────────────────────────────────────
+function drawBGTrail(pal) {
+  const leftT  = Math.max(CGM_START, xT(0));
+  const n      = Math.min(400, Math.max(100, Math.floor(W/1.5)));
+  const pts    = [];
+  const nowT   = viewTime;
+
+  for (let i=0; i<=n; i++) {
+    const t  = leftT + (i/n)*(nowT-leftT);
+    const d  = dataAt(t);
+    const x  = tX(t);
+    const y  = bgToY(d.bg);
+    const inRange = d.bg >= BG_LOW && d.bg <= BG_HIGH;
+    pts.push({x, y, bg:d.bg, inRange, t});
+  }
+  if (pts.length < 2) return;
+
+  CX.save();
+
+  // ── Glow shadow pass (wide soft glow) ──
+  CX.globalAlpha = 0.18;
+  CX.strokeStyle = 'rgba(255,255,255,0.8)';
+  CX.lineWidth   = 6;
+  CX.shadowColor = 'rgba(200,255,220,0.6)';
+  CX.shadowBlur  = 12;
+  CX.lineJoin    = 'round'; CX.lineCap = 'round';
+  CX.beginPath();
+  CX.moveTo(pts[0].x, pts[0].y);
+  for (let i=1;i<pts.length-1;i++) {
+    const mid={(x:(pts[i].x+pts[i+1].x)/2),(y:(pts[i].y+pts[i+1].y)/2)};
+    CX.quadraticCurveTo(pts[i].x,pts[i].y,mid.x,mid.y);
+  }
+  CX.lineTo(pts[pts.length-1].x,pts[pts.length-1].y);
+  CX.stroke();
+  CX.shadowBlur=0;
+
+  // ── Coloured core line — green in range, amber above, blue below ──
+  // Draw in segments by colour
+  let seg=[];
+  for (let i=0;i<pts.length;i++) {
+    const p = pts[i];
+    const col = p.bg > BG_HIGH ? 'rgba(230,140,40,0.85)' :
+                p.bg < BG_LOW  ? 'rgba(80,130,220,0.85)' :
+                                  'rgba(80,220,160,0.9)';
+    if (seg.length===0 || seg[seg.length-1].col===col) {
+      seg.push({...p, col});
+    } else {
+      // Draw segment
+      CX.globalAlpha=0.9;
+      CX.strokeStyle=seg[0].col; CX.lineWidth=2.2;
+      CX.shadowColor=seg[0].col; CX.shadowBlur=4;
+      CX.beginPath(); CX.moveTo(seg[0].x,seg[0].y);
+      for (let j=1;j<seg.length;j++) CX.lineTo(seg[j].x,seg[j].y);
+      CX.stroke(); CX.shadowBlur=0;
+      seg=[{...p,col}];
+    }
+  }
+  // Draw final segment
+  if (seg.length>1) {
+    CX.globalAlpha=0.9;
+    CX.strokeStyle=seg[0].col; CX.lineWidth=2.2;
+    CX.shadowColor=seg[0].col; CX.shadowBlur=4;
+    CX.beginPath(); CX.moveTo(seg[0].x,seg[0].y);
+    for (let j=1;j<seg.length;j++) CX.lineTo(seg[j].x,seg[j].y);
+    CX.stroke(); CX.shadowBlur=0;
+  }
+
+  // ── Dots at BG readings (every ~15min) for clarity ──
+  const dotInterval = (viewSpan/W) * W / 18; // ~18 dots visible
+  let lastDotT = 0;
+  for (const p of pts) {
+    if (p.t - lastDotT < dotInterval) continue;
+    lastDotT = p.t;
+    const col = p.bg > BG_HIGH ? '#e68c28' : p.bg < BG_LOW ? '#5082dc' : '#50dcA0';
+    const r   = p.bg > BG_HIGH || p.bg < BG_LOW ? 3.5 : 2.5;
+    CX.globalAlpha=0.8;
+    CX.fillStyle=col;
+    CX.shadowColor=col; CX.shadowBlur=6;
+    CX.beginPath(); CX.arc(p.x,p.y,r,0,Math.PI*2); CX.fill();
+    CX.shadowBlur=0;
+  }
+
+  CX.restore();
 }
 
 // ── BOLUS MARKERS ────────────────────────────────────────────
@@ -1398,6 +1486,16 @@ function drawTimeLabels(pal) {
 let lastHUD=0;
 function updateHUD(d, pal) {
   if (Date.now()-lastHUD<300) return; lastHUD=Date.now();
+
+  // Stale data check — warn if last real reading is old
+  const staleWarn = document.getElementById('stale-warn');
+  if (staleWarn) {
+    const minsStale = _lastReadingT>0 ? Math.round((Date.now()-_lastReadingT)/60000) : 0;
+    const isStale   = minsStale > 12 && _lastReadingT > 0;
+    staleWarn.style.display = isStale ? 'block' : 'none';
+    if (isStale) staleWarn.textContent = `⚠ no reading for ${minsStale}m`;
+  }
+
   const prev15=dataAt(viewTime-15*60000);
   const delta=d.bg-prev15.bg;
   const arr=delta>1.5?'↑↑':delta>0.5?'↑':delta<-1.5?'↓↓':delta<-0.5?'↓':'→';
@@ -1415,7 +1513,7 @@ function updateHUD(d, pal) {
 // ── MAIN FRAME ───────────────────────────────────────────────
 function returnToNow() {
   viewTime = HISTORY_RAW[HISTORY_RAW.length-1].t;
-  viewSpan = 4 * 3600000;
+  viewSpan = 2 * 3600000; // fixed 2h
   document.getElementById('now-btn').style.display='none';
 }
 
@@ -1449,6 +1547,9 @@ function frame(ts) {
   drawWake(cobPts, '60,180,140', '#3ecfa0', MAX_COB, true,  false);
   drawWake(iobPts, '40,80,180',  '#2855c8', MAX_IOB, false, false);
 
+  // ── BG HISTORY TRAIL — the path the boat has taken ──────────────
+  drawBGTrail(pal);
+
   drawBolusMarkers(pal);
   drawTransition(pal);
   drawTimeLabels(pal);
@@ -1469,9 +1570,9 @@ function frame(ts) {
 
   // Show "return to now" when scrolled away from latest data
   const latestT = HISTORY_RAW[HISTORY_RAW.length-1].t;
-  const awayFromNow = (latestT - viewTime) > 8 * 60000; // >8 mins back
+  const awayFromNow = (latestT - viewTime) > 8 * 60000;
   const nowBtn = document.getElementById('now-btn');
-  if (nowBtn) nowBtn.style.display = awayFromNow ? 'block' : 'none';
+  if (nowBtn) nowBtn.style.opacity = awayFromNow ? '0.85' : '0';
 
   // Draw time label above/near the boat showing what time is at NOW position
   const nowX = NOW_X * W;
@@ -1522,7 +1623,7 @@ let md={on:false,x0:0,t0:0};
 CV.addEventListener('mousedown',e=>{if(!e.target.closest('#sheet,#logbtn'))md={on:true,x0:e.clientX,t0:viewTime}});
 CV.addEventListener('mousemove',e=>{if(md.on)viewTime=Math.max(CGM_START,Math.min(CGM_END,md.t0-(e.clientX-md.x0)*(viewSpan/W)))});
 CV.addEventListener('mouseup',()=>md.on=false);
-CV.addEventListener('wheel',e=>{viewSpan=Math.max(MIN_SPAN,Math.min(MAX_SPAN,viewSpan*(e.deltaY>0?1.1:0.9)));},{passive:true});
+// wheel zoom disabled — fixed 2h view
 
 // ── LOG SHEET ────────────────────────────────────────────────
 let _st=null;
@@ -1997,7 +2098,7 @@ function buildSetupScreen() {
         never to any third party. This app has no backend.
       </div>
     </div>
-    <div style="text-align:center;margin-top:10px;font-family:'DM Mono',monospace;font-size:8px;color:rgba(40,55,50,0.15);letter-spacing:1px">build 20260326-17</div>
+    <div style="text-align:center;margin-top:10px;font-family:'DM Mono',monospace;font-size:8px;color:rgba(40,55,50,0.15);letter-spacing:1px">build 20260326-19</div>
   </div>
 </div>`;
 }
@@ -2130,7 +2231,8 @@ function setLiveStatus(state, text) {
   const colors = { live:'#4a9060', connecting:'#c87832', error:'#c04030' };
   dot.style.background = colors[state] || colors.connecting;
   dot.title = text || '';
-  dot.style.opacity = '1';
+  // Only show dot when there's an issue — hide when live and OK
+  dot.style.opacity = state === 'live' ? '0' : '0.85';
 }
 
 // ── SETTINGS BUTTON (cog, bottom-left) ──────────────────────────────────
@@ -2155,7 +2257,7 @@ function openSettings() {
 
 
 window.addEventListener('load',()=>{
-  viewTime=CGM_END; viewSpan=4*3600000;
+  viewTime=CGM_END; viewSpan=2*3600000; // fixed 2h window
   try{
     SESSION=JSON.parse(sessionStorage.getItem('rv3')||'[]');
     SESSION=SESSION.filter(s=>(Date.now()-s.t)<240*60000);
