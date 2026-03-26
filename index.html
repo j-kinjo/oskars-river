@@ -1466,12 +1466,6 @@ const CGM_SOURCES = {
       { key: 'url',   label: 'Nightscout URL',   placeholder: 'https://xxxx.ns.gluroo.com', type: 'url' },
       { key: 'token', label: 'API Token / Secret', placeholder: 'xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx', type: 'password' },
     ],
-    _doFetch(cfg, url) {
-      // Try token in URL first (Gluroo style), fall back to api-secret header
-      return fetch(url, {
-        headers: { 'api-secret': cfg.token, 'Accept': 'application/json' }
-      });
-    },
     _parse(data) {
       return data
         .filter(e => e.sgv || e.mbg)
@@ -1483,42 +1477,30 @@ const CGM_SOURCES = {
         }));
     },
     async fetch(cfg, count=1) {
-      const base = cfg.url.replace(/\/+$/, '');
-      // Try both auth methods — token in URL (Gluroo) and api-secret header
+      // Token in URL only — no custom headers (avoids CORS preflight)
+      const base = cfg.url.replace(/\/+$/, '').replace(/\/$/, '');
+      const url  = `${base}/api/v1/entries.json?count=${count}&token=${cfg.token}`;
       let r;
-      try {
-        r = await fetch(`${base}/api/v1/entries.json?count=${count}&token=${cfg.token}`);
-      } catch(e) {
-        throw new Error('Cannot reach Nightscout URL — check it is correct and accessible');
-      }
-      if (r.status === 401 || r.status === 403) {
-        // Try header auth instead
-        r = await fetch(`${base}/api/v1/entries.json?count=${count}`, {
-          headers: { 'api-secret': cfg.token }
-        });
-      }
-      if (!r.ok) throw new Error(`Nightscout error ${r.status} — check your URL and token`);
-      const data = await r.json();
-      if (!Array.isArray(data)) throw new Error('Unexpected response from Nightscout');
-      if (data.length === 0) throw new Error('No readings found — is Dexcom Share active in the Gluroo app?');
+      try { r = await fetch(url); }
+      catch(e) { throw new Error('Cannot reach ' + base + ' — check the URL is correct'); }
+      if (r.status === 401) throw new Error('Token rejected — regenerate it in Gluroo: Menu → Settings → Gluroo Global Connect');
+      if (r.status === 403) throw new Error('Access denied — check your token');
+      if (!r.ok) throw new Error(`Server returned ${r.status} — try again in a moment`);
+      let data;
+      try { data = await r.json(); } catch(e) { throw new Error('Bad response from server — is the URL correct?'); }
+      if (!Array.isArray(data)) throw new Error('Unexpected response format');
+      if (data.length === 0) throw new Error('No readings — is Dexcom Share enabled in the Gluroo app?');
       return this._parse(data);
     },
     async fetchRecent(cfg, hours=3) {
-      const base  = cfg.url.replace(/\/+$/, '');
+      const base  = cfg.url.replace(/\/+$/, '').replace(/\/$/, '');
       const count = hours * 12 + 5;
+      const url   = `${base}/api/v1/entries.json?count=${count}&token=${cfg.token}`;
       let r;
-      try {
-        r = await fetch(`${base}/api/v1/entries.json?count=${count}&token=${cfg.token}`);
-      } catch(e) {
-        throw new Error('Cannot reach Nightscout URL');
-      }
-      if (r.status === 401 || r.status === 403) {
-        r = await fetch(`${base}/api/v1/entries.json?count=${count}`, {
-          headers: { 'api-secret': cfg.token }
-        });
-      }
-      if (!r.ok) throw new Error(`Nightscout error ${r.status}`);
-      const data = await r.json();
+      try { r = await fetch(url); } catch(e) { throw new Error('Cannot reach ' + base); }
+      if (!r.ok) throw new Error(`Server returned ${r.status}`);
+      let data;
+      try { data = await r.json(); } catch(e) { return []; }
       if (!Array.isArray(data)) return [];
       return this._parse(data).sort((a,b) => a.t - b.t);
     }
