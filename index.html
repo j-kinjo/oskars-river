@@ -202,7 +202,7 @@ html,body{width:100%;height:100%;overflow:hidden;background:#c8d8d0;touch-action
   <div class="ripwrap"><div class="rip"></div><div class="rip"></div><div class="rip"></div></div>
   <div class="ltitle">Oskar's River</div>
   <div class="lsub">finding the current</div>
-  <div style="font-family:'DM Mono',monospace;font-size:8px;color:rgba(40,55,50,0.2);margin-top:8px;letter-spacing:1px">build 20260326-10</div>
+  <div style="font-family:'DM Mono',monospace;font-size:8px;color:rgba(40,55,50,0.2);margin-top:8px;letter-spacing:1px">build 20260326-11</div>
 </div>
 
 <canvas id="c"></canvas>
@@ -1655,9 +1655,9 @@ function ingestReadings(readings) {
     if (r.t > _lastReadingT) _lastReadingT = r.t;
   }
   HISTORY_RAW.sort((a,b) => a.t - b.t);
-  // Snap to latest if user is near "now"
+  // Always snap to latest live reading
   const latestT = HISTORY_RAW[HISTORY_RAW.length-1].t;
-  if (Math.abs(viewTime - latestT) < 10 * 60000) viewTime = latestT;
+  viewTime = latestT;
 }
 
 function formatAge(t) {
@@ -1753,7 +1753,7 @@ function buildSetupScreen() {
         never to any third party. This app has no backend.
       </div>
     </div>
-    <div style="text-align:center;margin-top:10px;font-family:'DM Mono',monospace;font-size:8px;color:rgba(40,55,50,0.15);letter-spacing:1px">build 20260326-10</div>
+    <div style="text-align:center;margin-top:10px;font-family:'DM Mono',monospace;font-size:8px;color:rgba(40,55,50,0.15);letter-spacing:1px">build 20260326-11</div>
   </div>
 </div>`;
 }
