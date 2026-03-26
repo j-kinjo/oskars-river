@@ -202,7 +202,7 @@ html,body{width:100%;height:100%;overflow:hidden;background:#c8d8d0;touch-action
   <div class="ripwrap"><div class="rip"></div><div class="rip"></div><div class="rip"></div></div>
   <div class="ltitle">Oskar's River</div>
   <div class="lsub">finding the current</div>
-  <div style="font-family:'DM Mono',monospace;font-size:8px;color:rgba(40,55,50,0.2);margin-top:8px;letter-spacing:1px">build 20260326-13</div>
+  <div style="font-family:'DM Mono',monospace;font-size:8px;color:rgba(40,55,50,0.2);margin-top:8px;letter-spacing:1px">build 20260326-14</div>
 </div>
 
 <canvas id="c"></canvas>
@@ -511,7 +511,7 @@ function palette(t) {
   };
 }
 // ── ANIMATION STATE ──────────────────────────────────────────
-let phi=0, t0=0;
+let phi=0, t0=0, treeScrollX=0;
 let bgPrev = null;
 
 // Seed for deterministic "random" positions (lily pads, trees)
@@ -1315,6 +1315,7 @@ function updateHUD(d, pal) {
 function frame(ts) {
   const dt=Math.min((ts-t0)/1000, 0.05); t0=ts;
   phi+=0.4*dt;
+  treeScrollX+=10*dt; // river current speed
 
   const d   = dataAt(viewTime);
   const pal = palette(viewTime);
@@ -1787,7 +1788,7 @@ function buildSetupScreen() {
         never to any third party. This app has no backend.
       </div>
     </div>
-    <div style="text-align:center;margin-top:10px;font-family:'DM Mono',monospace;font-size:8px;color:rgba(40,55,50,0.15);letter-spacing:1px">build 20260326-13</div>
+    <div style="text-align:center;margin-top:10px;font-family:'DM Mono',monospace;font-size:8px;color:rgba(40,55,50,0.15);letter-spacing:1px">build 20260326-14</div>
   </div>
 </div>`;
 }
