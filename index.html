@@ -187,7 +187,7 @@ html,body{width:100%;height:100%;overflow:hidden;background:#c8d8d0;touch-action
   <div class="ripwrap"><div class="rip"></div><div class="rip"></div><div class="rip"></div></div>
   <div class="ltitle">Oskar's River</div>
   <div class="lsub">finding the current</div>
-  <div style="font-family:'DM Mono',monospace;font-size:8px;color:rgba(40,55,50,0.2);margin-top:8px;letter-spacing:1px">build 20260326-16</div>
+  <div style="font-family:'DM Mono',monospace;font-size:8px;color:rgba(40,55,50,0.2);margin-top:8px;letter-spacing:1px">build 20260326-17</div>
 </div>
 
 <canvas id="c"></canvas>
@@ -245,6 +245,22 @@ html,body{width:100%;height:100%;overflow:hidden;background:#c8d8d0;touch-action
   transition:background .5s,opacity .5s;z-index:20;pointer-events:none;
   box-shadow:0 0 8px currentColor" title="CGM status"></div>
 
+<!-- Return to Now button — appears when scrolled back -->
+<button id="now-btn" onclick="returnToNow()" style="
+  position:fixed;
+  top:max(16px,env(safe-area-inset-top,16px));
+  right:16px;
+  padding:7px 14px;border-radius:20px;
+  border:1px solid rgba(255,255,255,0.25);
+  background:rgba(0,0,0,0.25);
+  backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px);
+  font-family:'DM Mono',monospace;font-size:10px;letter-spacing:.8px;
+  color:rgba(255,255,255,0.8);text-transform:uppercase;
+  cursor:pointer;z-index:20;pointer-events:auto;
+  display:none;transition:opacity .2s">
+  ◉ now
+</button>
+
 <button id="logbtn" onclick="openSheet()">
   <svg viewBox="0 0 20 20" fill="none">
     <!-- Water drop -->
@@ -258,78 +274,55 @@ html,body{width:100%;height:100%;overflow:hidden;background:#c8d8d0;touch-action
 <div id="sheet">
   <div class="handle"></div>
   <div class="sheet-title">add to the flow</div>
+  <div class="sheet-sub">carbs · bolus · or both</div>
 
-  <!-- Quick action buttons -->
-  <div style="display:flex;gap:8px;padding:0 18px;margin-bottom:14px">
-    <button onclick="quickMeal()" style="flex:1;padding:10px;border-radius:10px;
-      border:1px solid rgba(62,207,160,0.3);background:rgba(62,207,160,0.08);
-      color:rgba(62,207,160,0.85);font-family:'Fraunces',serif;font-style:italic;
-      font-size:14px;cursor:pointer">🍃 meal</button>
-    <button onclick="quickCorrection()" style="flex:1;padding:10px;border-radius:10px;
-      border:1px solid rgba(40,85,200,0.3);background:rgba(40,85,200,0.08);
-      color:rgba(80,120,220,0.85);font-family:'Fraunces',serif;font-style:italic;
-      font-size:14px;cursor:pointer">💧 correction</button>
-    <button onclick="quickCarbs()" style="flex:1;padding:10px;border-radius:10px;
-      border:1px solid rgba(200,140,60,0.3);background:rgba(200,140,60,0.08);
-      color:rgba(200,140,60,0.85);font-family:'Fraunces',serif;font-style:italic;
-      font-size:14px;cursor:pointer">🌾 carbs</button>
-  </div>
-
+  <!-- Type selector -->
   <div class="type-row">
     <button class="tbtn" id="tb-c" onclick="selType('c')"><span class="ico">🌾</span>carbs</button>
     <button class="tbtn" id="tb-b" onclick="selType('b')"><span class="ico">🍃</span>meal</button>
     <button class="tbtn" id="tb-i" onclick="selType('i')"><span class="ico">💧</span>bolus</button>
   </div>
 
-  <!-- Time input for backloading -->
-  <div style="padding:0 18px;margin-bottom:10px">
-    <div style="display:flex;align-items:center;gap:8px">
-      <span style="font-family:'DM Mono',monospace;font-size:9px;color:rgba(40,55,50,0.35);
-        letter-spacing:1px;text-transform:uppercase;white-space:nowrap">time</span>
-      <input id="in-time" type="datetime-local"
-        style="flex:1;padding:7px 10px;border-radius:8px;border:1px solid rgba(40,55,50,0.12);
-        background:rgba(255,255,255,0.5);font-family:'DM Mono',monospace;font-size:12px;
-        color:rgba(40,55,50,0.7);outline:none">
-      <button onclick="setTimeNow()" style="padding:6px 10px;border-radius:7px;
-        border:1px solid rgba(40,55,50,0.12);background:rgba(40,55,50,0.06);
-        font-family:'DM Mono',monospace;font-size:9px;color:rgba(40,55,50,0.45);
-        cursor:pointer;white-space:nowrap;letter-spacing:.5px">now</button>
-    </div>
+  <!-- Time — always visible, defaults to now -->
+  <div style="display:flex;align-items:center;gap:8px;padding:0 18px;margin-bottom:12px">
+    <span style="font-family:'DM Mono',monospace;font-size:9px;color:rgba(40,55,50,0.35);
+      letter-spacing:1px;text-transform:uppercase;white-space:nowrap">when</span>
+    <input id="in-time" type="datetime-local"
+      style="flex:1;padding:8px 10px;border-radius:8px;
+      border:1px solid rgba(40,55,50,0.12);background:rgba(255,255,255,0.55);
+      font-family:'DM Mono',monospace;font-size:12px;color:rgba(40,55,50,0.7);outline:none">
+    <button onclick="setTimeNow()" style="padding:6px 10px;border-radius:7px;
+      border:1px solid rgba(40,55,50,0.12);background:rgba(40,55,50,0.05);
+      font-family:'DM Mono',monospace;font-size:9px;color:rgba(40,55,50,0.4);
+      cursor:pointer;letter-spacing:.5px">now</button>
   </div>
 
-  <!-- Saved meals quick-pick -->
-  <div id="saved-meals-row" style="padding:0 18px;margin-bottom:10px;display:none">
-    <div style="font-family:'DM Mono',monospace;font-size:9px;color:rgba(40,55,50,0.35);
-      letter-spacing:1px;text-transform:uppercase;margin-bottom:6px">saved meals</div>
-    <div id="saved-meals-chips" style="display:flex;flex-wrap:wrap;gap:5px"></div>
-  </div>
-
+  <!-- Carbs -->
   <div class="isec" id="sec-c">
     <div class="irow">
       <div class="idot" style="background:rgba(62,207,160,0.8)"></div>
-      <input class="ifield" id="in-c" type="number" inputmode="decimal" placeholder="grams" min="0" max="200" step="1" oninput="onInp()">
+      <input class="ifield" id="in-c" type="number" inputmode="decimal"
+        placeholder="grams" min="0" max="200" step="1" oninput="onInp()">
       <span class="iunit">g</span>
     </div>
-    <!-- Common carb amounts -->
-    <div style="display:flex;gap:5px;padding:0 0 8px 22px">
-      <div class="bgchip" onclick="setCarbs(15)">15g</div>
-      <div class="bgchip" onclick="setCarbs(25)">25g</div>
-      <div class="bgchip" onclick="setCarbs(35)">35g</div>
-      <div class="bgchip" onclick="setCarbs(45)">45g</div>
-      <div class="bgchip" onclick="setCarbs(60)">60g</div>
-    </div>
   </div>
+
+  <!-- Insulin -->
   <div class="isec" id="sec-i">
     <div class="irow">
       <div class="idot" style="background:rgba(40,85,200,0.8)"></div>
-      <input class="ifield" id="in-i" type="number" inputmode="decimal" placeholder="units" min="0" max="20" step="0.5" oninput="onInp()">
+      <input class="ifield" id="in-i" type="number" inputmode="decimal"
+        placeholder="units" min="0" max="20" step="0.5" oninput="onInp()">
       <span class="iunit">U</span>
     </div>
   </div>
+
+  <!-- BG -->
   <div class="isec" id="sec-bg">
     <div class="irow">
       <div class="idot" style="background:rgba(40,55,50,0.3)"></div>
-      <input class="ifield" id="in-bg" type="number" inputmode="decimal" placeholder="BG now" min="2" max="25" step="0.1" oninput="onInp()">
+      <input class="ifield" id="in-bg" type="number" inputmode="decimal"
+        placeholder="BG now" min="2" max="25" step="0.1" oninput="onInp()">
       <span class="iunit">mmol</span>
     </div>
     <div class="bgchips">
@@ -341,12 +334,20 @@ html,body{width:100%;height:100%;overflow:hidden;background:#c8d8d0;touch-action
     </div>
   </div>
 
+  <!-- Saved meals -->
+  <div id="saved-meals-row" style="display:none;padding:0 18px;margin-bottom:10px">
+    <div style="font-family:'DM Mono',monospace;font-size:9px;color:rgba(40,55,50,0.3);
+      letter-spacing:1px;text-transform:uppercase;margin-bottom:6px">recent meals</div>
+    <div id="saved-meals-chips" style="display:flex;flex-wrap:wrap;gap:5px"></div>
+  </div>
+
+  <!-- Bolus suggestion -->
   <div class="sugbox" id="sugbox">
     <div class="sugval" id="sugval">—</div>
     <div class="sugnote" id="sugnote"></div>
   </div>
+
   <button id="dropbtn" onclick="commitDrop()" disabled>flow it in</button>
-</div>
 
 <div id="toast"></div>
 
@@ -989,134 +990,119 @@ function iobY(iob, x, bgAtX) {
 
 function drawWake(pts, colorRGB, glowHex, maxVal, isUpper, isFuture) {
   if (pts.length < 2) return;
-
   const pastPts   = pts.filter(p=>!p.future);
   const futurePts = pts.filter(p=>p.future);
   if (pastPts.length < 2 && futurePts.length < 2) return;
-  const tip = pastPts.length>0 ? pastPts[pastPts.length-1] : pts[0];
+  const tip     = pastPts.length>0 ? pastPts[pastPts.length-1] : pts[0];
   const tipFrac = Math.max(0, Math.min(1, tip.val/maxVal));
 
   CX.save();
 
-  // ── PAPER-CUT WAKE BANDS (inspired by boat_and_wake mood board) ──────────
-  // Draw 4 distinct tinted bands from the wake path, each slightly wider/older
-  // giving the layered paper-cut look
-  if (pastPts.length > 3) {
-    const numBands = 5;
-    for (let band=numBands; band>=1; band--) {
-      const bandFrac  = band / numBands;        // 1=outermost, 0.2=innermost
-      const ageCutoff = bandFrac * 2.5 * 3600000; // older pts = outer band
-      const bandPts   = pastPts.filter(p => (viewTime - p.t) <= ageCutoff);
-      if (bandPts.length < 2) continue;
-
-      // Band width grows toward outer bands
-      const halfW = (2 + band * 12) * Math.min(1, tipFrac + 0.1);
-      // Opacity: inner bands brighter, outer fainter
-      const alpha = (0.55 - band * 0.08) * tipFrac;
-      if (alpha <= 0) continue;
-
-      // Build TOP and BOTTOM edges of band using perpendicular normals
-      const TOP=[], BOT=[];
-      for (let i=0; i<bandPts.length; i++) {
-        const p    = bandPts[i];
-        const perp = getPerpendicular(bandPts, i);
-        const swirlW = halfW + Math.sin(i*0.12+phi*(0.4+band*0.1))*halfW*0.25;
-        TOP.push({x: p.x + perp.nx*swirlW, y: p.y + perp.ny*swirlW});
-        BOT.push({x: p.x - perp.nx*swirlW, y: p.y - perp.ny*swirlW});
-      }
-
-      // Draw filled band with soft horizontal fade
-      const bandGrad = CX.createLinearGradient(bandPts[0].x, 0, tip.x, 0);
-      bandGrad.addColorStop(0,   `rgba(${colorRGB},0)`);
-      bandGrad.addColorStop(0.3, `rgba(${colorRGB},${alpha*0.5})`);
-      bandGrad.addColorStop(0.8, `rgba(${colorRGB},${alpha})`);
-      bandGrad.addColorStop(1,   `rgba(${colorRGB},${alpha*1.2})`);
-      CX.globalAlpha = 1;
-      CX.fillStyle   = bandGrad;
-      CX.beginPath();
-      CX.moveTo(TOP[0].x, TOP[0].y);
-      for (let i=1;i<TOP.length;i++) {
-        const prev=TOP[i-1], curr=TOP[i];
-        CX.quadraticCurveTo(prev.x,prev.y,(prev.x+curr.x)/2,(prev.y+curr.y)/2);
-      }
-      CX.lineTo(TOP[TOP.length-1].x, TOP[TOP.length-1].y);
-      for (let i=BOT.length-1;i>=0;i--) {
-        const curr=BOT[i], next=i>0?BOT[i-1]:BOT[0];
-        CX.quadraticCurveTo(curr.x,curr.y,(curr.x+next.x)/2,(curr.y+next.y)/2);
-      }
-      CX.closePath();
-      CX.fill();
-    }
-  }
-
-  // ── ZONE FILL: coloured water above/below the mana line ──────────────────
+  // ── ZONE FILL: coloured water tint above/below the line ──────────────
   if (pastPts.length > 1) {
     const skyH  = HORIZON*H;
     const edgeY = isUpper ? skyH+1 : H-1;
-    const smoothed = smoothPath(pastPts);
-
+    const smooth = smoothPath(pastPts);
+    // Single smooth gradient, no hard edges
     const zg = CX.createLinearGradient(pastPts[0].x, 0, tip.x, 0);
-    zg.addColorStop(0,    `rgba(${colorRGB},0)`);
-    zg.addColorStop(0.3,  `rgba(${colorRGB},0.04)`);
-    zg.addColorStop(0.7,  `rgba(${colorRGB},0.12)`);
-    zg.addColorStop(1,    `rgba(${colorRGB},0.22)`);
-    CX.globalAlpha = 1;
+    zg.addColorStop(0,   `rgba(${colorRGB},0)`);
+    zg.addColorStop(0.4, `rgba(${colorRGB},${0.06*tipFrac})`);
+    zg.addColorStop(0.8, `rgba(${colorRGB},${0.15*tipFrac})`);
+    zg.addColorStop(1,   `rgba(${colorRGB},${0.28*tipFrac})`);
     CX.fillStyle = zg;
-    zoneFill(smoothed, edgeY); CX.fill();
+    zoneFill(smooth, edgeY);
+    CX.fill();
   }
 
-  // ── GLOWING CORE LINE ────────────────────────────────────────────────────
+  // ── WAKE RIBBON: smooth tapered shape, widens toward past ────────────
+  if (pastPts.length > 2) {
+    const swirled = swirlPath(pastPts, 0.6, 1.0, 0, maxVal);
+    const TOP=[], BOT=[];
+    for (let i=0; i<swirled.length; i++) {
+      const p       = swirled[i];
+      const ageFrac = Math.max(0, Math.min(1, (viewTime-p.t)/(2.5*3600000)));
+      const vf      = Math.min(1, p.val/maxVal);
+      const hw      = Math.max(0.5, (1.5 + ageFrac*22) * Math.max(0.05, vf));
+      const perp    = getPerpendicular(swirled, i);
+      TOP.push({x:p.x+perp.nx*hw, y:p.y+perp.ny*hw});
+      BOT.push({x:p.x-perp.nx*hw, y:p.y-perp.ny*hw});
+    }
+    // Smooth horizontal gradient — no hard left edge
+    const rg = CX.createLinearGradient(swirled[0].x, 0, tip.x, 0);
+    rg.addColorStop(0,   `rgba(${colorRGB},0)`);
+    rg.addColorStop(0.25,`rgba(${colorRGB},${0.05*tipFrac})`);
+    rg.addColorStop(0.65,`rgba(${colorRGB},${0.22*tipFrac})`);
+    rg.addColorStop(1,   `rgba(${colorRGB},${0.55*tipFrac})`);
+    CX.fillStyle=rg;
+    CX.beginPath();
+    CX.moveTo(TOP[0].x, TOP[0].y);
+    for (let i=1;i<TOP.length;i++) {
+      const p=TOP[i-1],c=TOP[i];
+      CX.quadraticCurveTo(p.x,p.y,(p.x+c.x)/2,(p.y+c.y)/2);
+    }
+    CX.lineTo(TOP[TOP.length-1].x,TOP[TOP.length-1].y);
+    for (let i=BOT.length-1;i>=0;i--) {
+      const c=BOT[i],n=i>0?BOT[i-1]:BOT[0];
+      CX.quadraticCurveTo(c.x,c.y,(c.x+n.x)/2,(c.y+n.y)/2);
+    }
+    CX.closePath(); CX.fill();
+  }
+
+  // ── GLOWING CORE LINE ─────────────────────────────────────────────────
   if (pastPts.length > 1) {
-    const coreSwirl = swirlPath(pastPts, 0.4, 0.8, 0, maxVal);
+    const core = swirlPath(pastPts, 0.3, 0.8, 0, maxVal);
     CX.lineJoin='round'; CX.lineCap='round';
-    const seg = 12, step = Math.max(1, Math.floor(coreSwirl.length/seg));
-    for (let s=0; s<seg; s++) {
-      const i0=s*step, i1=Math.min(coreSwirl.length-1,(s+1)*step);
-      const frac = 1-(s/(seg-1));
-      CX.globalAlpha   = frac*frac*0.9 * tipFrac;
+    const segs=14, step=Math.max(1,Math.floor(core.length/segs));
+    for (let s=0;s<segs;s++) {
+      const i0=s*step, i1=Math.min(core.length-1,(s+1)*step);
+      const frac=1-(s/(segs-1));
+      CX.globalAlpha   = frac*frac*0.9*tipFrac;
       CX.strokeStyle   = glowHex;
-      CX.lineWidth     = Math.max(0.3, 0.8+frac*2);
+      CX.lineWidth     = Math.max(0.3, 0.8+frac*2.2);
       CX.shadowColor   = glowHex;
-      CX.shadowBlur    = frac < 0.3 ? 12 : 0;
-      CX.beginPath();
-      CX.moveTo(coreSwirl[i0].x, coreSwirl[i0].y);
-      for (let i=i0+1;i<=i1;i++) CX.lineTo(coreSwirl[i].x, coreSwirl[i].y);
+      CX.shadowBlur    = frac<0.25 ? 14 : 0;
+      CX.beginPath(); CX.moveTo(core[i0].x,core[i0].y);
+      for (let i=i0+1;i<=i1;i++) CX.lineTo(core[i].x,core[i].y);
       CX.stroke(); CX.shadowBlur=0;
     }
   }
 
-  // ── FUTURE PREDICTION ────────────────────────────────────────────────────
-  if (futurePts.length > 1) {
-    const futSwirl = swirlPath(futurePts, 0.3, 0.8, 1.2, maxVal);
-    CX.globalAlpha = 0.3 * tipFrac;
-    CX.strokeStyle = glowHex; CX.lineWidth=1;
-    CX.setLineDash([3,9]);
-    CX.beginPath(); CX.moveTo(tip.x, tip.y);
-    for (const p of futSwirl) CX.lineTo(p.x, p.y);
-    CX.stroke(); CX.setLineDash([]);
-
-    // Future zone
-    const edgeY = isUpper ? HORIZON*H+1 : H-1;
-    const fg = CX.createLinearGradient(tip.x,0,futurePts[futurePts.length-1].x,0);
-    fg.addColorStop(0,`rgba(${colorRGB},0.08)`);
-    fg.addColorStop(1,`rgba(${colorRGB},0.01)`);
-    CX.fillStyle=fg; CX.globalAlpha=0.2*tipFrac;
-    CX.beginPath(); CX.moveTo(tip.x,edgeY); CX.lineTo(tip.x,tip.y);
-    for (const p of futSwirl) CX.lineTo(p.x,p.y);
-    CX.lineTo(futSwirl[futSwirl.length-1].x,edgeY); CX.closePath(); CX.fill();
+  // ── SPARKLE PARTICLES ────────────────────────────────────────────────
+  if (tipFrac > 0.05 && pastPts.length > 1) {
+    const sparkN = Math.floor(3 + tipFrac*6);
+    for (let i=0;i<sparkN;i++) {
+      const idx = Math.floor(pastPts.length*(1-i/sparkN));
+      if (idx<0||idx>=pastPts.length) continue;
+      const sp = pastPts[idx];
+      const vf = Math.min(1,sp.val/maxVal);
+      const sa = vf*(0.25+Math.sin(phi*2.2+i*1.9)*0.2);
+      if (sa<0.03) continue;
+      const sr = Math.max(0.3, 0.5+vf*1.8);
+      CX.globalAlpha=sa; CX.fillStyle=glowHex;
+      CX.shadowColor=glowHex; CX.shadowBlur=5;
+      CX.beginPath(); CX.arc(sp.x,sp.y,sr,0,Math.PI*2); CX.fill();
+      CX.shadowBlur=0;
+    }
   }
 
-  // ── TIP ORB ──────────────────────────────────────────────────────────────
-  if (tipFrac > 0.02) {
-    const r = Math.max(0.5, 4 + tipFrac*12);
-    CX.globalAlpha = 0.8+tipFrac*0.2;
+  // ── FUTURE PREDICTION ────────────────────────────────────────────────
+  if (futurePts.length>1) {
+    const futS=swirlPath(futurePts,0.3,0.8,1.2,maxVal);
+    CX.globalAlpha=0.28*tipFrac; CX.strokeStyle=glowHex; CX.lineWidth=0.9;
+    CX.setLineDash([3,9]);
+    CX.beginPath(); CX.moveTo(tip.x,tip.y);
+    for (const p of futS) CX.lineTo(p.x,p.y);
+    CX.stroke(); CX.setLineDash([]);
+  }
+
+  // ── TIP ORB ──────────────────────────────────────────────────────────
+  if (tipFrac>0.02) {
+    const r=Math.max(0.5,4+tipFrac*12);
+    CX.globalAlpha=0.85;
     const og=CX.createRadialGradient(tip.x,tip.y,0,tip.x,tip.y,Math.max(0.5,r*3));
-    og.addColorStop(0,glowHex);
-    og.addColorStop(0.4,`rgba(${colorRGB},0.3)`);
-    og.addColorStop(1,'transparent');
+    og.addColorStop(0,glowHex); og.addColorStop(0.4,`rgba(${colorRGB},0.2)`); og.addColorStop(1,'transparent');
     CX.fillStyle=og; CX.shadowColor=glowHex; CX.shadowBlur=16;
-    CX.beginPath(); CX.arc(tip.x,tip.y,Math.max(0.5,r*3),0,Math.PI*2); CX.fill();
-    CX.shadowBlur=0;
+    CX.beginPath(); CX.arc(tip.x,tip.y,Math.max(0.5,r*3),0,Math.PI*2); CX.fill(); CX.shadowBlur=0;
     CX.fillStyle=glowHex;
     CX.beginPath(); CX.arc(tip.x,tip.y,Math.max(0.3,r*0.4),0,Math.PI*2); CX.fill();
   }
@@ -1241,7 +1227,7 @@ function drawBoat(pal, d) {
   CX.rotate(tilt);
 
   // NOTE: straight wake lines removed — COB/IOB streams ARE the wake
-  const bW=14, bL=36;
+  const bW=18, bL=46; // bigger, more cartoon
 
   // Water shadow
   CX.save(); CX.globalAlpha=0.15;
@@ -1253,13 +1239,14 @@ function drawBoat(pal, d) {
   hg.addColorStop(0,woodDark); hg.addColorStop(0.35,woodLight);
   hg.addColorStop(0.65,woodLight); hg.addColorStop(1,woodDark);
   CX.fillStyle=hg;
+  // Rounder cartoon hull - wider belly, more pronounced curve
   CX.beginPath();
-  CX.moveTo(-bL,-bW*0.55);
-  CX.lineTo(-bL, bW*0.55);
-  CX.bezierCurveTo(-bL+bL*0.3,bW*0.9, bL*0.4,bW*0.65, bL*0.85,bW*0.2);
-  CX.bezierCurveTo(bL*0.95,bW*0.08, bL,0, bL,0);
-  CX.bezierCurveTo(bL*0.95,-bW*0.08, bL*0.85,-bW*0.2, bL*0.7,-bW*0.4);
-  CX.bezierCurveTo(bL*0.4,-bW*0.65, -bL+bL*0.3,-bW*0.9, -bL,-bW*0.55);
+  CX.moveTo(-bL,-bW*0.45);          // stern port
+  CX.lineTo(-bL, bW*0.45);          // stern starboard
+  CX.bezierCurveTo(-bL+bL*0.25,bW*1.0, bL*0.3,bW*0.85, bL*0.75,bW*0.3);
+  CX.bezierCurveTo(bL*0.9,bW*0.12, bL,0, bL,0);   // bow tip
+  CX.bezierCurveTo(bL*0.9,-bW*0.12, bL*0.75,-bW*0.3, bL*0.3,-bW*0.85);
+  CX.bezierCurveTo(-bL+bL*0.25,-bW*1.0, -bL,-bW*0.45, -bL,-bW*0.45);
   CX.closePath(); CX.fill();
 
   // Stern face
@@ -1426,6 +1413,15 @@ function updateHUD(d, pal) {
 }
 
 // ── MAIN FRAME ───────────────────────────────────────────────
+function returnToNow() {
+  viewTime = HISTORY_RAW[HISTORY_RAW.length-1].t;
+  viewSpan = 4 * 3600000;
+  document.getElementById('now-btn').style.display='none';
+}
+
+// Track if user has scrolled away from now
+let _isAtNow = true;
+
 function frame(ts) {
   const dt=Math.min((ts-t0)/1000, 0.05); t0=ts;
   phi+=0.4*dt;
@@ -1470,6 +1466,29 @@ function frame(ts) {
     CX.shadowBlur = 0; CX.restore();
     _pulseAlpha *= 0.94;
   }
+
+  // Show "return to now" when scrolled away from latest data
+  const latestT = HISTORY_RAW[HISTORY_RAW.length-1].t;
+  const awayFromNow = (latestT - viewTime) > 8 * 60000; // >8 mins back
+  const nowBtn = document.getElementById('now-btn');
+  if (nowBtn) nowBtn.style.display = awayFromNow ? 'block' : 'none';
+
+  // Draw time label above/near the boat showing what time is at NOW position
+  const nowX = NOW_X * W;
+  const boatY2 = boatYfromBG(d.bg);
+  const vd = new Date(viewTime);
+  const timeStr = vd.toLocaleTimeString('en-GB',{hour:'2-digit',minute:'2-digit'});
+  const dateStr = vd.toLocaleDateString('en-GB',{weekday:'short',day:'numeric',month:'short'});
+  CX.save();
+  CX.globalAlpha = 0.65;
+  CX.fillStyle = pal.bgText || 'rgba(255,255,255,0.8)';
+  CX.font = "200 13px 'Fraunces',serif";
+  CX.textAlign = 'center';
+  CX.fillText(timeStr, nowX, boatY2 - 40);
+  CX.globalAlpha = 0.3;
+  CX.font = "300 9px 'DM Mono',monospace";
+  CX.fillText(dateStr, nowX, boatY2 - 26);
+  CX.restore();
 
   updateHUD(d, pal);
 
@@ -1560,17 +1579,7 @@ function setCarbs(v) {
   onInp();
 }
 
-function quickMeal()       { openSheet(); selType('b'); }
-function quickCorrection() { openSheet(); selType('i'); }
-function quickCarbs()      { openSheet(); selType('c'); }
 
-function openSheet(){
-  document.getElementById('sheet').classList.add('open');
-  document.getElementById('overlay').classList.add('open');
-  setTimeNow();
-  renderSavedMeals();
-  selType('b');
-}
 function closeSheet(){
   document.getElementById('sheet').classList.remove('open');
   document.getElementById('overlay').classList.remove('open');
@@ -1988,7 +1997,7 @@ function buildSetupScreen() {
         never to any third party. This app has no backend.
       </div>
     </div>
-    <div style="text-align:center;margin-top:10px;font-family:'DM Mono',monospace;font-size:8px;color:rgba(40,55,50,0.15);letter-spacing:1px">build 20260326-16</div>
+    <div style="text-align:center;margin-top:10px;font-family:'DM Mono',monospace;font-size:8px;color:rgba(40,55,50,0.15);letter-spacing:1px">build 20260326-17</div>
   </div>
 </div>`;
 }
