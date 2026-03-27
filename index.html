@@ -187,7 +187,7 @@ html,body{width:100%;height:100%;overflow:hidden;background:#c8d8d0;touch-action
   <div class="ripwrap"><div class="rip"></div><div class="rip"></div><div class="rip"></div></div>
   <div class="ltitle">Oskar's River</div>
   <div class="lsub">finding the current</div>
-  <div style="font-family:'DM Mono',monospace;font-size:8px;color:rgba(40,55,50,0.2);margin-top:8px;letter-spacing:1px">build 20260326-27</div>
+  <div style="font-family:'DM Mono',monospace;font-size:8px;color:rgba(40,55,50,0.2);margin-top:8px;letter-spacing:1px">build 20260326-30</div>
 </div>
 
 <canvas id="c"></canvas>
@@ -1311,64 +1311,94 @@ function drawBGTrail(pal) {
     CX.shadowBlur=0;
   }
 
-  // ── FUTURE PREDICTION — faint dotted BG forecast ────────────────
-  // Projects BG forward based on current IOB/COB balance
+  // ── FUTURE PREDICTION ──────────────────────────────────────────────
+  // Correct model: IOB lowers BG gradually (not instantly), COB raises it
+  // delta = IOB_now * (fraction_spent_by_minsAhead) * ISF
   if (pts.length > 2) {
-    const d0   = dataAt(viewTime);
+    const d0    = dataAt(viewTime);
+    const prev5 = dataAt(viewTime - 5*60000);
+    const roc   = d0.bg - prev5.bg;
+    const ISF   = (new Date(viewTime).getHours() >= 9 &&
+                   new Date(viewTime).getHours() < 15) ? 7.0 : 6.0; // updated 26 Mar 2026
+
     const predPts = [];
-    const steps   = 24; // 2h in 5min steps
-    for (let i=1; i<=steps; i++) {
-      const minsAhead = i * 5;
-      const ft  = viewTime + minsAhead * 60000;
-      const fx  = tX(ft);
-      if (fx > W+20) break;
-      const iobEffect = d0.iob > 0 ? -(d0.iob * iobF(minsAhead) * 2.5) : 0;
-      const cobEffect = d0.cob > 0 ? +(d0.cob * cobF(minsAhead) * 0.05) : 0;
-      const prev5  = dataAt(viewTime - 5*60000);
-      const rocBG  = (d0.bg - prev5.bg);
-      const rocDecay = rocBG * Math.exp(-minsAhead/20);
-      const predBG = Math.max(2.0, Math.min(20, d0.bg + iobEffect + cobEffect + rocDecay));
-      predPts.push({x:fx, y:bgToY(predBG), bg:predBG, t:ft});
+    for (let i=1; i<=24; i++) {
+      const mins = i * 5;
+      const ft   = viewTime + mins * 60000;
+      const fx   = tX(ft);
+      if (fx > W + 20) break;
+
+      // IOB: blood-glucose lowering from insulin already active
+      // spent fraction = 1 - iobF(mins), so effect grows over time
+      const iobDelta = d0.iob > 0 ? -d0.iob * (1.0 - iobF(mins)) * ISF : 0;
+
+      // COB: carbs raising BG as they absorb
+      const cobDelta = d0.cob > 0 ? d0.cob * (1.0 - cobF(mins)) * 0.05 : 0;
+
+      // Rate-of-change momentum decays
+      const rocDecay = roc * Math.exp(-mins / 25);
+
+      const predBG = Math.max(1.5, Math.min(22,
+        d0.bg + iobDelta + cobDelta + rocDecay));
+      predPts.push({ x:fx, y:bgToY(predBG), bg:predBG });
     }
+
     if (predPts.length > 1) {
       CX.save();
-      CX.globalAlpha = 0.35;
-      CX.setLineDash([4, 8]);
-      CX.lineWidth  = 1.8;
-      CX.lineJoin   = 'round';
-      CX.lineCap    = 'round';
-      // Start segment from last known point
-      const lastPt  = pts[pts.length-1];
-      let segStart  = {x:lastPt.x, y:lastPt.y};
-      let segPts    = [segStart];
-      let segCol    = lastPt.bg > BG_HIGH ? 'rgba(230,140,40,0.7)' :
-                      lastPt.bg < BG_LOW  ? 'rgba(80,130,220,0.7)' :
-                                             'rgba(80,220,160,0.7)';
-      for (const p of predPts) {
-        const col = p.bg > BG_HIGH ? 'rgba(230,140,40,0.7)' :
-                    p.bg < BG_LOW  ? 'rgba(80,130,220,0.7)' :
-                                      'rgba(80,220,160,0.7)';
+      CX.setLineDash([5, 7]);
+      CX.lineWidth = 2.5;
+      CX.lineJoin  = 'round';
+      CX.lineCap   = 'round';
+
+      const getCol = (bg, a) =>
+        bg > BG_HIGH ? ('rgba(230,140,40,' + a + ')') :
+        bg < BG_LOW  ? ('rgba(80,130,220,' + a + ')') :
+                        ('rgba(80,220,160,' + a + ')');
+
+      const lastPt = pts[pts.length-1];
+      var segPts = [{x:lastPt.x, y:lastPt.y, bg:lastPt.bg}];
+      var segCol = getCol(lastPt.bg, 0.75);
+
+      for (var pi=0; pi<predPts.length; pi++) {
+        var p   = predPts[pi];
+        var col = getCol(p.bg, 0.75);
         if (col !== segCol && segPts.length > 1) {
+          CX.globalAlpha = 0.75;
           CX.strokeStyle = segCol;
+          CX.shadowColor = segCol; CX.shadowBlur = 4;
           CX.beginPath(); CX.moveTo(segPts[0].x, segPts[0].y);
-          for (const s of segPts.slice(1)) CX.lineTo(s.x, s.y);
-          CX.stroke();
-          segPts = [segPts[segPts.length-1]];
+          for (var si=1; si<segPts.length; si++) CX.lineTo(segPts[si].x, segPts[si].y);
+          CX.stroke(); CX.shadowBlur = 0;
+          segPts = [{x:segPts[segPts.length-1].x, y:segPts[segPts.length-1].y, bg:segPts[segPts.length-1].bg}];
           segCol = col;
         }
         segPts.push(p);
       }
       if (segPts.length > 1) {
+        CX.globalAlpha = 0.75;
         CX.strokeStyle = segCol;
+        CX.shadowColor = segCol; CX.shadowBlur = 4;
         CX.beginPath(); CX.moveTo(segPts[0].x, segPts[0].y);
-        for (const s of segPts.slice(1)) CX.lineTo(s.x, s.y);
-        CX.stroke();
+        for (var si=1; si<segPts.length; si++) CX.lineTo(segPts[si].x, segPts[si].y);
+        CX.stroke(); CX.shadowBlur = 0;
       }
-      CX.setLineDash([]);
-      CX.restore();
+
+      // Endpoint dot + predicted value label
+      var last = predPts[predPts.length-1];
+      var endCol = getCol(last.bg, 0.9);
+      CX.globalAlpha = 0.85; CX.setLineDash([]);
+      CX.fillStyle = endCol; CX.shadowColor = endCol; CX.shadowBlur = 6;
+      CX.beginPath(); CX.arc(last.x, last.y, 3.5, 0, Math.PI*2); CX.fill();
+      CX.shadowBlur = 0;
+      CX.globalAlpha = 0.75;
+      CX.fillStyle = endCol;
+      CX.font = "200 11px 'Fraunces',serif";
+      CX.textAlign = 'center';
+      CX.fillText(last.bg.toFixed(1), last.x, last.y - 8);
+
+      CX.setLineDash([]); CX.restore();
     }
   }
-
   CX.restore();
 }
 
@@ -2113,10 +2143,20 @@ function onInp(){
   window._pendingDrop = has ? {c, u, t:Date.now()} : null;
   btn.disabled=!has;
   if(c>0&&bg>0&&['c','b'].includes(_st)){
-    const dose=(c/8.5)+(bg>10?Math.max(0,(bg-6.7)/6):0);
+    // Time-aware I:C and ISF (updated 26 Mar 2026)
+    const _now = new Date(getEntryTime());
+    const _h   = _now.getHours() + _now.getMinutes()/60;
+    const _ic  = (_h>=6&&_h<10) ? 8.5 : (_h>=10&&_h<14) ? 12 : (_h>=14&&_h<18) ? 15 : 10;
+    const _isf = (_h>=9&&_h<15) ? 7.0 : 6.0;
+    const _target = 6.0;
+    const _carbDose = c > 0 ? c / _ic : 0;
+    const _corrDose = bg > 7.0 ? Math.max(0, (bg - _target) / _isf) : 0;
+    const dose = _carbDose + _corrDose;
     const r=Math.round(dose/0.5)*0.5;
     document.getElementById('sugval').textContent=r.toFixed(1)+'U';
-    document.getElementById('sugnote').textContent=`${c}g ÷ 8.5 I:C${bg>10?' + correction':''}`;
+    const _icStr   = c>0 ? (c+'g / '+_ic+' I:C') : '';
+    const _corrStr = bg>7.0 ? ('corr ISF '+_isf) : '';
+    document.getElementById('sugnote').textContent=[_icStr,_corrStr].filter(Boolean).join(' + ');
     sug.style.display='block';
     if(!document.getElementById('in-i').value&&_st==='b') document.getElementById('in-i').value=r.toFixed(1);
   } else sug.style.display='none';
@@ -2534,7 +2574,7 @@ function buildSetupScreen() {
         never to any third party. This app has no backend.
       </div>
     </div>
-    <div style="text-align:center;margin-top:10px;font-family:'DM Mono',monospace;font-size:8px;color:rgba(40,55,50,0.15);letter-spacing:1px">build 20260326-27</div>
+    <div style="text-align:center;margin-top:10px;font-family:'DM Mono',monospace;font-size:8px;color:rgba(40,55,50,0.15);letter-spacing:1px">build 20260326-30</div>
   </div>
 </div>`;
 }
