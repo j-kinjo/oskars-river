@@ -88,6 +88,9 @@ html,body{width:100%;height:100%;overflow:hidden;background:#c8d8d0;touch-action
   transform:translateY(110%);
   transition:transform .34s cubic-bezier(0.32,0.72,0,1);
   pointer-events:none;
+  max-height:88vh;
+  overflow-y:auto;
+  -webkit-overflow-scrolling:touch;
 }
 #sheet.open{transform:translateY(0);pointer-events:auto}
 .handle{width:32px;height:3px;background:rgba(40,55,50,0.18);border-radius:2px;margin:10px auto}
@@ -187,7 +190,7 @@ html,body{width:100%;height:100%;overflow:hidden;background:#c8d8d0;touch-action
   <div class="ripwrap"><div class="rip"></div><div class="rip"></div><div class="rip"></div></div>
   <div class="ltitle">Oskar's River</div>
   <div class="lsub">finding the current</div>
-  <div style="font-family:'DM Mono',monospace;font-size:8px;color:rgba(40,55,50,0.2);margin-top:8px;letter-spacing:1px">build 20260326-31</div>
+  <div style="font-family:'DM Mono',monospace;font-size:8px;color:rgba(40,55,50,0.2);margin-top:8px;letter-spacing:1px">build 20260326-33</div>
 </div>
 
 <canvas id="c"></canvas>
@@ -1739,9 +1742,15 @@ function updateHUD(d, pal) {
     if (isStale) staleWarn.textContent = `⚠ no reading for ${minsStale}m`;
   }
 
-  const prev15=dataAt(viewTime-15*60000);
-  const delta=d.bg-prev15.bg;
-  const arr=delta>1.5?'↑↑':delta>0.5?'↑':delta<-1.5?'↓↓':delta<-0.5?'↓':'→';
+  // Use 15min delta but match Dexcom thresholds scaled to 15min window
+  // Dexcom: ↑↑ > 3 mmol/hr, ↑ 1-3/hr, → <1/hr, ↓ -1 to -3/hr, ↓↓ < -3/hr
+  // Over 15min: ↑↑ > 0.75, ↑ 0.25–0.75, → ±0.25, ↓ -0.25 to -0.75, ↓↓ < -0.75
+  const prev15 = dataAt(viewTime - 15*60000);
+  const delta  = d.bg - prev15.bg;
+  const arr = delta > 0.75  ? '↑↑' :
+              delta > 0.25  ? '↑'  :
+              delta < -0.75 ? '↓↓' :
+              delta < -0.25 ? '↓'  : '→';
   const bgEl=document.getElementById('bg-num');
   const color=d.bg<BG_LOW?'rgba(50,80,160,0.7)':d.bg>BG_HIGH?'rgba(160,80,30,0.7)':pal.bgText;
   bgEl.innerHTML=d.bg.toFixed(1)+`<span style="font-size:20px;opacity:0.4;margin-left:3px">${arr}</span>`;
@@ -2104,22 +2113,9 @@ function setCarbs(v) {
 }
 
 
-function openSheet(){
-  const sheet = document.getElementById('sheet');
-  const overlay = document.getElementById('overlay');
-  if (!sheet || !overlay) return;
-  sheet.classList.add('open');
-  overlay.classList.add('open');
-  setTimeNow();
-  renderSavedMeals();
-  selType('b');
-}
+// openSheet defined in food system below
 
-function closeSheet(){
-  document.getElementById('sheet').classList.remove('open');
-  document.getElementById('overlay').classList.remove('open');
-  window._pendingDrop=null;
-}
+// closeSheet defined in food system below
 function selType(t){
   _st=t;
   ['c','b','i'].forEach(x=>document.getElementById(`tb-${x}`).className='tbtn'+(x===t?` sel-${t}`:''));
@@ -2195,6 +2191,517 @@ function showToast(msg){
 }
 
 // ── INIT ─────────────────────────────────────────────────────;
+
+// ═══════════════════════════════════════════════════════════════════════
+//  FOOD & BOLUS SYSTEM
+//  - Food database with GI, carbs per 100g
+//  - Meal builder: search/add items by weight → auto carbs
+//  - Smart bolus: time-aware I:C + ISF, IOB offset, suggested eat time
+//  - Forecast: visual impact prediction shown as river event
+//  - Eat-time reminder
+// ═══════════════════════════════════════════════════════════════════════
+
+// ── FOOD DATABASE ──────────────────────────────────────────────────────
+// {name, carbs_per_100g, gi, category}
+// GI: low<55, medium 55-69, high>=70
+const FOOD_DB = [
+  // Breads
+  {name:'Wild bread / sourdough',  c100:42, gi:54, cat:'bread'},
+  {name:'White wrap / tortilla',   c100:52, gi:70, cat:'bread'},
+  {name:'Durum wrap',              c100:52, gi:70, cat:'bread'},
+  {name:'Mini white wrap',         c100:50, gi:70, cat:'bread'},
+  {name:'Wholemeal bread',         c100:41, gi:51, cat:'bread'},
+  {name:'White bread',             c100:49, gi:75, cat:'bread'},
+  {name:'Pitta white',             c100:57, gi:57, cat:'bread'},
+  {name:'Flatbread',               c100:50, gi:62, cat:'bread'},
+  // Cereals / breakfast
+  {name:'Surreal cereal',          c100:38, gi:47, cat:'cereal'},
+  {name:'Shreddies',               c100:72, gi:70, cat:'cereal'},
+  {name:'Weetabix',                c100:71, gi:69, cat:'cereal'},
+  {name:'Porridge oats (made up)', c100:12, gi:55, cat:'cereal'},
+  // Snacks
+  {name:'Quavers',                 c100:57, gi:74, cat:'snack'},
+  {name:'Mini cheddars',           c100:56, gi:65, cat:'snack'},
+  {name:'Amaretti biscuit',        c100:76, gi:65, cat:'snack'},
+  {name:'Digestive biscuit',       c100:64, gi:59, cat:'snack'},
+  {name:'Glucose tabs (each)',     c100:95, gi:100,cat:'hypo', g_each:4},
+  {name:'Lindor dark chocolate',   c100:50, gi:45, cat:'snack', g_each:12},
+  // Fruit
+  {name:'Apple',                   c100:14, gi:36, cat:'fruit'},
+  {name:'Satsuma / clementine',    c100:12, gi:43, cat:'fruit'},
+  {name:'Banana',                  c100:23, gi:51, cat:'fruit'},
+  {name:'Grapes',                  c100:17, gi:59, cat:'fruit'},
+  // Dairy
+  {name:'Yogurt drink Benecol',    c100:11, gi:35, cat:'dairy', g_each:100},
+  {name:'Greek yogurt',            c100:6,  gi:11, cat:'dairy'},
+  {name:'Milk whole',              c100:5,  gi:31, cat:'dairy'},
+  // Protein / low carb
+  {name:'Egg',                     c100:1,  gi:0,  cat:'protein', g_each:60},
+  {name:'Cheese',                  c100:0,  gi:0,  cat:'protein'},
+  {name:'Chicken breast',          c100:0,  gi:0,  cat:'protein'},
+  {name:'Peanut butter',           c100:20, gi:14, cat:'protein'},
+  // Mains
+  {name:'Pasta cooked',            c100:25, gi:49, cat:'main'},
+  {name:'Rice white cooked',       c100:28, gi:73, cat:'main'},
+  {name:'Pizza slice',             c100:30, gi:60, cat:'main', g_each:100},
+  {name:'Fish fingers (each)',     c100:17, gi:38, cat:'main', g_each:30},
+  {name:'Baked beans',             c100:13, gi:40, cat:'main'},
+  // Drinks
+  {name:'Apple juice',             c100:10, gi:44, cat:'drink', g_each:200},
+  {name:'Orange juice',            c100:9,  gi:50, cat:'drink', g_each:200},
+  {name:'Milk 200ml',              c100:5,  gi:31, cat:'drink', g_each:200},
+];
+
+// ── MEAL STATE ─────────────────────────────────────────────────────────
+var _mealItems   = [];   // [{food, grams, carbs}]
+var _bolusGiven  = false;
+var _eatReminder = null;
+var _sheetMode   = 'meal'; // 'meal' | 'bolus' | 'correction'
+
+// ── FOOD LIBRARY (saved custom items + history) ────────────────────────
+var FOOD_LIBRARY = (function() {
+  try { return JSON.parse(localStorage.getItem('river_food_lib') || '[]'); } catch(e) { return []; }
+})();
+
+function saveFoodLibrary() {
+  try { localStorage.setItem('river_food_lib', JSON.stringify(FOOD_LIBRARY)); } catch(e) {}
+}
+
+// ── MEAL HISTORY ──────────────────────────────────────────────────────
+var MEAL_HISTORY = (function() {
+  try { return JSON.parse(localStorage.getItem('river_meal_hist') || '[]'); } catch(e) { return []; }
+})();
+
+function saveMealHistory() {
+  try { localStorage.setItem('river_meal_hist', JSON.stringify(MEAL_HISTORY.slice(0, 30))); } catch(e) {}
+}
+
+// ── BOLUS CALCULATION ─────────────────────────────────────────────────
+function calcBolus(totalCarbs, currentBG, entryTime) {
+  var d    = dataAt(viewTime);
+  var h    = new Date(entryTime).getHours() + new Date(entryTime).getMinutes()/60;
+  var ic   = h>=6&&h<10 ? 8.5 : h>=10&&h<14 ? 12 : h>=14&&h<18 ? 15 : 10;
+  var isf  = h>=9&&h<15 ? 7.0 : 6.0;
+  var tgt  = 6.0;
+  var bg   = currentBG || d.bg;
+
+  // Carb dose
+  var carbDose = totalCarbs > 0 ? totalCarbs / ic : 0;
+
+  // Correction (only if BG above target AND IOB doesn't already cover it)
+  var rawCorr  = bg > tgt ? Math.max(0, (bg - tgt) / isf) : 0;
+  // Offset by active IOB to avoid stacking
+  var corrDose = Math.max(0, rawCorr - d.iob);
+
+  // Round to nearest 0.5U
+  var total    = Math.round((carbDose + corrDose) / 0.5) * 0.5;
+
+  return {
+    total:    total,
+    carbDose: Math.round(carbDose * 10) / 10,
+    corrDose: Math.round(corrDose * 10) / 10,
+    ic:       ic,
+    isf:      isf,
+    iob:      Math.round(d.iob * 10) / 10,
+    bg:       Math.round(bg * 10) / 10,
+    tgt:      tgt,
+  };
+}
+
+// Suggested eat time: bolus wait based on BG level
+// High BG → wait longer; low → eat sooner
+function suggestEatWait(bg) {
+  if (bg > 10) return 25; // high — wait longer
+  if (bg > 7)  return 20; // normal
+  if (bg > 5)  return 15; // slightly low
+  return 5;               // low — eat now / reduce bolus
+}
+
+// GI-adjusted absorption speed (used in forecast)
+function mealAbsorptionSpeed(avgGI) {
+  if (avgGI >= 70) return 1.4;  // fast
+  if (avgGI >= 55) return 1.0;  // medium
+  return 0.7;                   // slow (sourdough etc)
+}
+
+// ── FORECAST ──────────────────────────────────────────────────────────
+// Returns array of {minsFromNow, predBG} for the meal impact
+function buildMealForecast(totalCarbs, bolusU, avgGI, eatInMins) {
+  var d0   = dataAt(viewTime);
+  var bg   = d0.bg;
+  var iob  = d0.iob;
+  var ISF  = (new Date(viewTime).getHours() >= 9 &&
+              new Date(viewTime).getHours() < 15) ? 7.0 : 6.0;
+  var speed = mealAbsorptionSpeed(avgGI || 60);
+  var pts   = [];
+
+  for (var i = 0; i <= 36; i++) { // 3h in 5min steps
+    var mins = i * 5;
+
+    // COB from this meal (starts absorbing at eatInMins)
+    var eatElapsed = Math.max(0, mins - eatInMins);
+    var cobRemaining = totalCarbs * cobF(eatElapsed * speed);
+    var cobSpent     = totalCarbs * (1 - cobF(eatElapsed * speed));
+    var carbEffect   = cobSpent * 0.055; // rough mmol rise per g absorbed
+
+    // IOB effect: existing + new bolus
+    var totalIOB  = iob + bolusU;
+    var iobEffect = totalIOB * (1 - iobF(mins)) * ISF;
+
+    // Existing IOB
+    var existIOBEffect = d0.iob * (1 - iobF(mins)) * ISF;
+
+    // Rate of change momentum
+    var prev5 = dataAt(viewTime - 5*60000);
+    var roc   = bg - prev5.bg;
+    var rocDecay = roc * Math.exp(-mins/25);
+
+    var predBG = Math.max(1.5, Math.min(22,
+      bg + carbEffect - iobEffect + rocDecay
+    ));
+
+    pts.push({mins: mins, bg: predBG, cob: cobRemaining});
+  }
+  return pts;
+}
+
+// ── SHEET RENDERING ───────────────────────────────────────────────────
+function openSheet() {
+  _mealItems  = [];
+  _bolusGiven = false;
+  _sheetMode  = 'meal';
+  renderSheet();
+  document.getElementById('sheet').classList.add('open');
+  document.getElementById('overlay').classList.add('open');
+  setTimeNow();
+}
+
+function closeSheet() {
+  document.getElementById('sheet').classList.remove('open');
+  document.getElementById('overlay').classList.remove('open');
+  window._pendingDrop = null;
+}
+
+function renderSheet() {
+  var sheet = document.getElementById('sheet');
+  var d     = dataAt(viewTime);
+  var bg    = d.bg;
+  var iob   = d.iob;
+
+  var totalCarbs  = _mealItems.reduce(function(s,i){return s+i.carbs;}, 0);
+  var avgGI       = _mealItems.length > 0
+    ? _mealItems.reduce(function(s,i){return s+(i.food.gi||55)*i.carbs;},0) / Math.max(totalCarbs,1)
+    : 55;
+  var eatWait     = suggestEatWait(bg);
+  var bolus       = totalCarbs > 0 ? calcBolus(totalCarbs, bg, getEntryTime()) : null;
+  var giLabel     = avgGI >= 70 ? 'high GI' : avgGI >= 55 ? 'medium GI' : 'low GI';
+  var giCol       = avgGI >= 70 ? 'rgba(210,80,40,0.8)' : avgGI >= 55 ? 'rgba(200,140,30,0.8)' : 'rgba(60,160,90,0.8)';
+
+  var itemsHTML = _mealItems.map(function(item, idx) {
+    return '<div style="display:flex;align-items:center;gap:8px;padding:5px 0;border-bottom:1px solid rgba(40,55,50,0.06)">' +
+      '<div style="flex:1;font-family:\'DM Mono\',monospace;font-size:11px;color:rgba(40,55,50,0.7)">' + item.food.name + '</div>' +
+      '<input type="number" value="' + item.grams + '" min="1" max="500" step="1" ' +
+        'style="width:52px;padding:4px 6px;border-radius:6px;border:1px solid rgba(40,55,50,0.12);' +
+        'background:rgba(255,255,255,0.6);font-family:\'DM Mono\',monospace;font-size:11px;text-align:right" ' +
+        'onchange="updateItemGrams(' + idx + ',this.value)">' +
+      '<span style="font-family:\'DM Mono\',monospace;font-size:9px;color:rgba(40,55,50,0.4);width:18px">g</span>' +
+      '<span style="font-family:\'DM Mono\',monospace;font-size:11px;color:rgba(62,180,120,0.8);width:36px;text-align:right">' +
+        item.carbs.toFixed(0) + 'g</span>' +
+      '<button onclick="removeMealItem(' + idx + ')" style="background:none;border:none;cursor:pointer;' +
+        'color:rgba(40,55,50,0.25);font-size:14px;padding:0 2px">×</button>' +
+    '</div>';
+  }).join('');
+
+  // Forecast mini-chart (ASCII-style via canvas would be ideal but inline SVG is lighter)
+  var forecastHTML = '';
+  if (totalCarbs > 0 && bolus) {
+    var pts  = buildMealForecast(totalCarbs, bolus.total, avgGI, eatWait);
+    var maxBG = Math.max.apply(null, pts.map(function(p){return p.bg;}));
+    var minBG = Math.min.apply(null, pts.map(function(p){return p.bg;}));
+    var range = Math.max(maxBG - minBG, 2);
+    var W = 260, H = 48;
+    var svgPts = pts.map(function(p, i) {
+      var x = (i / (pts.length-1)) * W;
+      var y = H - ((p.bg - minBG) / range) * (H-6) - 3;
+      return x.toFixed(0) + ',' + y.toFixed(0);
+    }).join(' ');
+    // BG_LOW line
+    var lowY = H - ((BG_LOW - minBG) / range) * (H-6) - 3;
+    var highY = H - ((BG_HIGH - minBG) / range) * (H-6) - 3;
+    var peakBG = Math.max.apply(null, pts.map(function(p){return p.bg;}));
+    var peakCol = peakBG > BG_HIGH ? 'rgba(210,100,40,0.8)' : peakBG < BG_LOW ? 'rgba(80,120,200,0.8)' : 'rgba(60,180,120,0.8)';
+
+    forecastHTML = '<div style="padding:0 18px;margin-bottom:12px">' +
+      '<div style="font-family:\'DM Mono\',monospace;font-size:9px;color:rgba(40,55,50,0.3);' +
+        'letter-spacing:1px;text-transform:uppercase;margin-bottom:6px">forecast · 3h</div>' +
+      '<svg width="' + W + '" height="' + H + '" style="overflow:visible">' +
+        // BG range bands
+        (highY > 0 ? '<rect x="0" y="0" width="' + W + '" height="' + highY.toFixed(0) + '" fill="rgba(210,100,40,0.06)"/>' : '') +
+        (lowY < H ? '<rect x="0" y="' + lowY.toFixed(0) + '" width="' + W + '" height="' + (H-lowY).toFixed(0) + '" fill="rgba(80,120,200,0.06)"/>' : '') +
+        // Target lines
+        '<line x1="0" y1="' + highY.toFixed(0) + '" x2="' + W + '" y2="' + highY.toFixed(0) + '" stroke="rgba(210,100,40,0.2)" stroke-width="0.5" stroke-dasharray="3,3"/>' +
+        '<line x1="0" y1="' + lowY.toFixed(0) + '" x2="' + W + '" y2="' + lowY.toFixed(0) + '" stroke="rgba(80,120,200,0.2)" stroke-width="0.5" stroke-dasharray="3,3"/>' +
+        // Eat time marker
+        '<line x1="' + ((eatWait/180)*W).toFixed(0) + '" y1="0" x2="' + ((eatWait/180)*W).toFixed(0) + '" y2="' + H + '" stroke="rgba(62,180,120,0.3)" stroke-width="1" stroke-dasharray="2,4"/>' +
+        // Forecast line
+        '<polyline points="' + svgPts + '" fill="none" stroke="' + peakCol + '" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>' +
+        // Peak label
+        '<text x="' + W + '" y="8" font-family="DM Mono,monospace" font-size="9" fill="' + peakCol + '" text-anchor="end">peak ' + peakBG.toFixed(1) + '</text>' +
+        // Now dot
+        '<circle cx="0" cy="' + (H - ((bg-minBG)/range)*(H-6) - 3).toFixed(0) + '" r="3" fill="rgba(62,180,120,0.9)"/>' +
+      '</svg>' +
+      '<div style="display:flex;justify-content:space-between;font-family:\'DM Mono\',monospace;font-size:8px;color:rgba(40,55,50,0.25);margin-top:2px">' +
+        '<span>now</span><span>+1h</span><span>+2h</span><span>+3h</span>' +
+      '</div>' +
+    '</div>';
+  }
+
+  var bolusHTML = '';
+  if (bolus && totalCarbs > 0) {
+    var eatTime = new Date(getEntryTime().valueOf ? getEntryTime() : Date.now());
+    eatTime = new Date((typeof getEntryTime()==='number'?getEntryTime():Date.now()) + eatWait*60000);
+    var eatStr = eatTime.toLocaleTimeString('en-GB',{hour:'2-digit',minute:'2-digit'});
+
+    bolusHTML =
+      '<div style="margin:0 18px 12px;padding:14px;background:rgba(40,85,200,0.06);' +
+        'border-radius:12px;border:1px solid rgba(40,85,200,0.15)">' +
+        '<div style="display:flex;align-items:baseline;gap:8px;margin-bottom:8px">' +
+          '<div style="font-family:\'Fraunces\',serif;font-style:italic;font-weight:200;font-size:32px;' +
+            'color:rgba(40,85,200,0.85)">' + bolus.total.toFixed(1) + 'U</div>' +
+          '<div style="font-family:\'DM Mono\',monospace;font-size:9px;color:rgba(40,55,50,0.4);line-height:1.5">' +
+            bolus.carbDose.toFixed(1) + 'U carbs (' + totalCarbs.toFixed(0) + 'g ÷ ' + bolus.ic + ')<br>' +
+            (bolus.corrDose > 0 ? bolus.corrDose.toFixed(1) + 'U correction (BG ' + bolus.bg + ' → ' + bolus.tgt + ', ISF ' + bolus.isf + ')<br>' : '') +
+            (bolus.iob > 0.2 ? 'IOB ' + bolus.iob + 'U already active' : '') +
+          '</div>' +
+        '</div>' +
+        '<div style="display:flex;gap:8px;align-items:center">' +
+          '<div style="font-family:\'DM Mono\',monospace;font-size:9px;color:rgba(40,55,50,0.4);letter-spacing:.5px">' +
+            'bolus now → eat ' + eatStr + ' <span style="opacity:0.5">(~' + eatWait + 'min wait)</span>' +
+          '</div>' +
+        '</div>' +
+        '<div style="margin-top:8px;display:flex;gap:6px">' +
+          '<button onclick="confirmBolus(' + bolus.total + ')" style="flex:1;padding:10px;border-radius:9px;' +
+            'border:1px solid rgba(40,85,200,0.3);background:rgba(40,85,200,0.1);' +
+            'font-family:\'Fraunces\',serif;font-style:italic;font-weight:200;font-size:15px;' +
+            'color:rgba(40,85,200,0.9);cursor:pointer">bolus given ✓</button>' +
+          '<button onclick="adjustBolus(-0.5)" style="padding:10px 12px;border-radius:9px;' +
+            'border:1px solid rgba(40,55,50,0.12);background:transparent;' +
+            'font-family:\'DM Mono\',monospace;font-size:12px;color:rgba(40,55,50,0.4);cursor:pointer">−½</button>' +
+          '<button onclick="adjustBolus(0.5)" style="padding:10px 12px;border-radius:9px;' +
+            'border:1px solid rgba(40,55,50,0.12);background:transparent;' +
+            'font-family:\'DM Mono\',monospace;font-size:12px;color:rgba(40,55,50,0.4);cursor:pointer">+½</button>' +
+        '</div>' +
+      '</div>';
+  }
+
+  sheet.innerHTML =
+    '<div class="handle"></div>' +
+    '<div class="sheet-title">add to the flow</div>' +
+
+    // Time row
+    '<div style="display:flex;align-items:center;gap:8px;padding:0 18px;margin-bottom:14px">' +
+      '<span style="font-family:\'DM Mono\',monospace;font-size:9px;color:rgba(40,55,50,0.3);letter-spacing:1px;text-transform:uppercase">when</span>' +
+      '<input id="in-time" type="datetime-local" style="flex:1;padding:8px 10px;border-radius:8px;border:1px solid rgba(40,55,50,0.12);background:rgba(255,255,255,0.55);font-family:\'DM Mono\',monospace;font-size:12px;color:rgba(40,55,50,0.7);outline:none" onchange="renderSheet()">' +
+      '<button onclick="setTimeNow();renderSheet()" style="padding:6px 10px;border-radius:7px;border:1px solid rgba(40,55,50,0.12);background:rgba(40,55,50,0.05);font-family:\'DM Mono\',monospace;font-size:9px;color:rgba(40,55,50,0.4);cursor:pointer">now</button>' +
+    '</div>' +
+
+    // Food search
+    '<div style="padding:0 18px;margin-bottom:10px">' +
+      '<div style="position:relative">' +
+        '<input id="food-search" type="text" placeholder="search food..." autocomplete="off" autocorrect="off" spellcheck="false"' +
+          ' style="width:100%;padding:10px 12px;border-radius:10px;border:1px solid rgba(40,55,50,0.15);background:rgba(255,255,255,0.6);font-family:\'DM Mono\',monospace;font-size:13px;color:rgba(40,55,50,0.8);outline:none;box-sizing:border-box"' +
+          ' oninput="searchFood(this.value)">' +
+        '<div id="food-results" style="display:none;position:absolute;top:100%;left:0;right:0;z-index:50;' +
+          'background:rgba(240,238,228,0.99);border:1px solid rgba(40,55,50,0.12);border-radius:10px;' +
+          'box-shadow:0 4px 20px rgba(0,0,0,0.08);max-height:180px;overflow-y:auto;margin-top:4px"></div>' +
+      '</div>' +
+    '</div>' +
+
+    // Meal items
+    (itemsHTML ? '<div style="padding:0 18px;margin-bottom:10px">' +
+      '<div style="font-family:\'DM Mono\',monospace;font-size:9px;color:rgba(40,55,50,0.3);letter-spacing:1px;text-transform:uppercase;margin-bottom:6px">' +
+        'meal · ' + totalCarbs.toFixed(0) + 'g carbs' +
+        (avgGI && _mealItems.length > 0 ? ' · <span style="color:' + giCol + '">' + giLabel + ' (GI ' + avgGI.toFixed(0) + ')</span>' : '') +
+      '</div>' +
+      itemsHTML +
+    '</div>' : '') +
+
+    // Recent meals
+    buildRecentMealsHTML() +
+
+    // Forecast
+    forecastHTML +
+
+    // Bolus suggestion
+    bolusHTML +
+
+    // Manual insulin entry (if no meal)
+    (totalCarbs === 0 ?
+      '<div style="padding:0 18px;margin-bottom:12px">' +
+        '<div style="font-family:\'DM Mono\',monospace;font-size:9px;color:rgba(40,55,50,0.3);letter-spacing:1px;text-transform:uppercase;margin-bottom:8px">manual bolus / correction</div>' +
+        '<div style="display:flex;align-items:center;gap:10px">' +
+          '<div style="width:8px;height:8px;border-radius:50%;background:rgba(40,85,200,0.8);flex-shrink:0"></div>' +
+          '<input id="in-i" type="number" inputmode="decimal" placeholder="units" min="0" max="20" step="0.5"' +
+            ' style="flex:1;background:rgba(255,255,255,0.6);border:1px solid rgba(40,55,50,0.12);border-radius:8px;padding:10px 12px;font-family:\'Fraunces\',serif;font-size:18px;color:rgba(40,55,50,0.8);outline:none">' +
+          '<span style="font-family:\'DM Mono\',monospace;font-size:11px;color:rgba(40,55,50,0.4)">U</span>' +
+          '<button onclick="commitManualBolus()" style="padding:10px 14px;border-radius:9px;border:1px solid rgba(40,85,200,0.3);background:rgba(40,85,200,0.08);font-family:\'DM Mono\',monospace;font-size:10px;color:rgba(40,85,200,0.8);cursor:pointer">log</button>' +
+        '</div>' +
+      '</div>'
+    : '') +
+
+    '<div style="height:max(20px,env(safe-area-inset-bottom,20px))"></div>';
+
+  setTimeNow();
+}
+
+function buildRecentMealsHTML() {
+  if (MEAL_HISTORY.length === 0) return '';
+  var recent = MEAL_HISTORY.slice(0, 6);
+  var chips = recent.map(function(m, i) {
+    return '<button onclick="loadMealHistory(' + i + ')" style="padding:5px 10px;border-radius:8px;' +
+      'border:1px solid rgba(40,55,50,0.1);background:rgba(255,255,255,0.5);' +
+      'font-family:\'DM Mono\',monospace;font-size:10px;color:rgba(40,55,50,0.5);cursor:pointer;white-space:nowrap">' +
+      m.name.slice(0,20) + ' (' + m.totalCarbs + 'g)</button>';
+  }).join('');
+  return '<div style="padding:0 18px;margin-bottom:12px">' +
+    '<div style="font-family:\'DM Mono\',monospace;font-size:9px;color:rgba(40,55,50,0.25);letter-spacing:1px;text-transform:uppercase;margin-bottom:6px">recent meals</div>' +
+    '<div style="display:flex;flex-wrap:wrap;gap:5px">' + chips + '</div>' +
+  '</div>';
+}
+
+function searchFood(q) {
+  var results = document.getElementById('food-results');
+  if (!q || q.length < 1) { results.style.display='none'; return; }
+  var ql = q.toLowerCase();
+
+  // Combine DB + library
+  var all = FOOD_DB.concat(FOOD_LIBRARY);
+  var matches = all.filter(function(f) { return f.name.toLowerCase().indexOf(ql) >= 0; }).slice(0, 8);
+
+  if (matches.length === 0) {
+    results.style.display='block';
+    results.innerHTML = '<div style="padding:10px 14px;font-family:\'DM Mono\',monospace;font-size:11px;color:rgba(40,55,50,0.35)">' +
+      'not found — <button onclick="addCustomFood(\'' + q.replace(/'/g,"\\'") + '\')" style="background:none;border:none;cursor:pointer;color:rgba(40,85,200,0.7);font-family:\'DM Mono\',monospace;font-size:11px;text-decoration:underline">add custom</button></div>';
+    return;
+  }
+
+  results.style.display='block';
+  results.innerHTML = matches.map(function(f) {
+    var giCol2 = f.gi>=70?'rgba(200,80,40,0.6)':f.gi>=55?'rgba(190,130,30,0.6)':'rgba(50,150,80,0.6)';
+    return '<div onclick="addFoodItem(\'' + f.name.replace(/'/g,"\\'") + '\')" style="padding:10px 14px;cursor:pointer;' +
+      'border-bottom:1px solid rgba(40,55,50,0.05);display:flex;justify-content:space-between;align-items:center">' +
+      '<div>' +
+        '<div style="font-family:\'DM Mono\',monospace;font-size:12px;color:rgba(40,55,50,0.8)">' + f.name + '</div>' +
+        '<div style="font-family:\'DM Mono\',monospace;font-size:9px;color:rgba(40,55,50,0.35);">' + f.c100 + 'g carbs/100g</div>' +
+      '</div>' +
+      '<div style="font-size:10px;color:' + giCol2 + ';font-family:\'DM Mono\',monospace">GI ' + (f.gi||'—') + '</div>' +
+    '</div>';
+  }).join('');
+}
+
+function addFoodItem(name) {
+  var all   = FOOD_DB.concat(FOOD_LIBRARY);
+  var food  = null;
+  for (var i=0; i<all.length; i++) { if (all[i].name === name) { food = all[i]; break; } }
+  if (!food) return;
+  var defaultG = food.g_each || 100;
+  var carbs    = Math.round((food.c100 * defaultG / 100) * 10) / 10;
+  _mealItems.push({food: food, grams: defaultG, carbs: carbs});
+  document.getElementById('food-search').value = '';
+  document.getElementById('food-results').style.display = 'none';
+  renderSheet();
+}
+
+function addCustomFood(name) {
+  var carbs = parseFloat(prompt('Carbs per 100g for "' + name + '"?') || '0');
+  var gi    = parseInt(prompt('GI (glycaemic index, 0-100)?') || '60');
+  if (carbs > 0) {
+    var f = {name: name, c100: carbs, gi: gi, cat: 'custom'};
+    FOOD_LIBRARY.push(f);
+    saveFoodLibrary();
+    addFoodItem(name);
+  }
+}
+
+function updateItemGrams(idx, val) {
+  var g  = parseFloat(val) || 0;
+  var f  = _mealItems[idx].food;
+  _mealItems[idx].grams = g;
+  _mealItems[idx].carbs = Math.round((f.c100 * g / 100) * 10) / 10;
+  renderSheet();
+}
+
+function removeMealItem(idx) {
+  _mealItems.splice(idx, 1);
+  renderSheet();
+}
+
+function loadMealHistory(idx) {
+  var m = MEAL_HISTORY[idx];
+  if (!m || !m.items) return;
+  _mealItems = m.items.map(function(item) {
+    // Try to find original food object
+    var all  = FOOD_DB.concat(FOOD_LIBRARY);
+    var food = null;
+    for (var i=0; i<all.length; i++) { if (all[i].name === item.name) { food=all[i]; break; } }
+    if (!food) food = {name:item.name, c100:0, gi:55, cat:'saved'};
+    return {food:food, grams:item.grams, carbs:item.carbs};
+  });
+  renderSheet();
+}
+
+function confirmBolus(units) {
+  var t = typeof getEntryTime === 'function' ? getEntryTime() : Date.now();
+  SESSION.push({t: t, c: 0, u: units});
+  try { sessionStorage.setItem('rv3', JSON.stringify(SESSION)); } catch(e) {}
+  _bolusGiven = true;
+
+  // Save meal to history
+  var totalCarbs = _mealItems.reduce(function(s,i){return s+i.carbs;},0);
+  if (_mealItems.length > 0) {
+    MEAL_HISTORY.unshift({
+      name:       _mealItems.map(function(i){return i.food.name;}).join(', '),
+      totalCarbs: Math.round(totalCarbs),
+      items:      _mealItems.map(function(i){return {name:i.food.name,grams:i.grams,carbs:i.carbs};}),
+      t:          t,
+    });
+    saveMealHistory();
+  }
+
+  // Set eat reminder
+  var bg = dataAt(viewTime).bg;
+  var wait = suggestEatWait(bg);
+  var eatAt = Date.now() + wait * 60000;
+  if (_eatReminder) clearTimeout(_eatReminder);
+  _eatReminder = setTimeout(function() {
+    if (document.getElementById('sheet').classList.contains('open')) return;
+    showAlertBanner('Time to eat! (' + wait + 'min since bolus)', 'rgba(62,180,120,0.9)', false);
+    if (navigator.vibrate) navigator.vibrate([200, 100, 200]);
+  }, wait * 60000);
+
+  showToast('💧 ' + units.toFixed(1) + 'U logged\n⏰ eat reminder set for ' +
+    new Date(eatAt).toLocaleTimeString('en-GB',{hour:'2-digit',minute:'2-digit'}));
+  closeSheet();
+}
+
+function adjustBolus(delta) {
+  // Find the bolus button and update — just re-render with adjusted calc
+  // We store override in window
+  window._bolusOverride = (window._bolusOverride || 0) + delta;
+  renderSheet();
+}
+
+function commitManualBolus() {
+  var el = document.getElementById('in-i');
+  if (!el) return;
+  var u = parseFloat(el.value) || 0;
+  if (u <= 0) return;
+  var t = typeof getEntryTime === 'function' ? getEntryTime() : Date.now();
+  SESSION.push({t: t, c: 0, u: u});
+  try { sessionStorage.setItem('rv3', JSON.stringify(SESSION)); } catch(e) {}
+  showToast('💧 ' + u.toFixed(1) + 'U logged');
+  closeSheet();
+}
 
 // ═══════════════════════════════════════════════════════════════════════════
 //  CGM SOURCE SYSTEM
@@ -2574,7 +3081,7 @@ function buildSetupScreen() {
         never to any third party. This app has no backend.
       </div>
     </div>
-    <div style="text-align:center;margin-top:10px;font-family:'DM Mono',monospace;font-size:8px;color:rgba(40,55,50,0.15);letter-spacing:1px">build 20260326-31</div>
+    <div style="text-align:center;margin-top:10px;font-family:'DM Mono',monospace;font-size:8px;color:rgba(40,55,50,0.15);letter-spacing:1px">build 20260326-33</div>
   </div>
 </div>`;
 }
