@@ -190,7 +190,7 @@ html,body{width:100%;height:100%;overflow:hidden;background:#c8d8d0;touch-action
   <div class="ripwrap"><div class="rip"></div><div class="rip"></div><div class="rip"></div></div>
   <div class="ltitle">Oskar's River</div>
   <div class="lsub">finding the current</div>
-  <div style="font-family:'DM Mono',monospace;font-size:8px;color:rgba(40,55,50,0.2);margin-top:8px;letter-spacing:1px">build 20260326-50</div>
+  <div style="font-family:'DM Mono',monospace;font-size:8px;color:rgba(40,55,50,0.2);margin-top:8px;letter-spacing:1px">build 20260326-51</div>
 </div>
 
 <canvas id="c"></canvas>
@@ -1044,7 +1044,7 @@ function drawBoat(pal, d) {
   const isHigh = d.bg > BG_HIGH;
   const orbRGB = isLow  ? [80,120,220] :
                  isHigh ? [230,140,50]  :
-                 pal.lineR;
+                 pal.bgLine;
   const r=orbRGB[0], g=orbRGB[1], b=orbRGB[2];
 
   const pulseRate = isLow ? 3.5 : isHigh ? 2.2 : 1.0;
@@ -1196,7 +1196,10 @@ function drawTimeLabels(pal) {
   );
   CX.globalAlpha=0.28;CX.fillStyle='rgba(200,220,240,1)';
   CX.font="300 9px 'DM Mono',monospace";CX.textAlign='right';
-  CX.fillText('build 50',W-10,H-8);
+  CX.fillText('build 51',W-10,H-8);
+  CX.globalAlpha=0.28;CX.fillStyle='rgba(200,220,240,1)';
+  CX.font="300 9px 'DM Mono',monospace";CX.textAlign='right';
+  CX.fillText('build 51',W-10,H-8);
   CX.restore();
 }
 
@@ -3068,7 +3071,7 @@ function buildSetupScreen() {
         never to any third party. This app has no backend.
       </div>
     </div>
-    <div style="text-align:center;margin-top:10px;font-family:'DM Mono',monospace;font-size:8px;color:rgba(40,55,50,0.15);letter-spacing:1px">build 20260326-50</div>
+    <div style="text-align:center;margin-top:10px;font-family:'DM Mono',monospace;font-size:8px;color:rgba(40,55,50,0.15);letter-spacing:1px">build 20260326-51</div>
   </div>
 </div>`;
 }
