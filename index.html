@@ -964,205 +964,158 @@ function drawNowPulse(pal, d) {
 }
 
 // ── BOLUS MARKERS ────────────────────────────────────────────────────
+// ── BOLUS / EVENT MARKERS — anchored context cards ────────────────
 function drawBolusMarkers(pal) {
+  if (!window._eventCards) window._eventCards = [];
+  window._eventCards = [];
   CX.save();
-  const allEvents = [...BOLUS_EVENTS, ...SESSION.map(s=>({t:s.t,c:s.c||0,u:s.u||0}))];
+  const allEvents = [...BOLUS_EVENTS, ...SESSION.map(s => ({t:s.t, c:s.c||0, u:s.u||0}))];
+
   for (const b of allEvents) {
-    const x = tX(b.t);
-    if (x < -60 || x > W+60) continue;
-    const d = dataAt(b.t);
+    const x   = tX(b.t);
+    if (x < -80 || x > W + 80) continue;
+    const d   = dataAt(b.t);
     const bgY = bgToY(d.bg);
 
-    // Carb event — warm amber ripple ABOVE the BG line (buoyancy)
-    if (b.c > 2) {
-      const elapsed   = (viewTime-b.t)/60000;
-      const fadeFrac  = Math.max(0, 1-elapsed/90);
-      const pulsePhase= Math.min(1, elapsed/20);
-      if (fadeFrac > 0.01) {
-        for (let ring=0; ring<3; ring++) {
-          const rPhase = (pulsePhase + ring*0.22) % 1;
-          const r      = Math.max(0.5, 6 + rPhase*24*(Math.min(b.c,60)/40));
-          const ry     = bgY - r*0.5; // above BG line
-          CX.globalAlpha = fadeFrac*(1-rPhase)*0.4;
-          CX.strokeStyle = `rgba(${pal.cobR.join(',')},1)`;
-          CX.lineWidth   = 1.2;
-          CX.shadowColor = `rgba(${pal.cobR.join(',')},0.6)`;
-          CX.shadowBlur  = 3;
-          CX.beginPath(); CX.ellipse(x, ry, r, r*0.5, 0, 0, Math.PI*2); CX.stroke();
-          CX.shadowBlur  = 0;
-        }
-        CX.globalAlpha = fadeFrac*0.8;
-        CX.fillStyle   = `rgba(${pal.cobR.join(',')},1)`;
-        CX.shadowColor = `rgba(${pal.cobR.join(',')},0.8)`;
-        CX.shadowBlur  = 6;
-        CX.beginPath(); CX.arc(x, bgY - 4, Math.max(0.5, 2+fadeFrac*2), 0, Math.PI*2); CX.fill();
-        CX.shadowBlur  = 0;
-      }
+    if (b.c > 1) {
+      const r = pal.cobR[0], g = pal.cobR[1], bv = pal.cobR[2];
+      const cardY = bgY - 30 - Math.min(b.c * 0.4, 36);
+      // Stem
+      CX.globalAlpha = 0.35;
+      CX.strokeStyle = 'rgba(' + r + ',' + g + ',' + bv + ',0.7)';
+      CX.lineWidth   = 0.8; CX.setLineDash([2,5]);
+      CX.beginPath(); CX.moveTo(x, bgY - 5); CX.lineTo(x, cardY + 12); CX.stroke();
+      CX.setLineDash([]);
+      // Dot on trace
+      CX.globalAlpha = 0.9; CX.fillStyle = 'rgba(' + r + ',' + g + ',' + bv + ',1)';
+      CX.shadowColor = 'rgba(' + r + ',' + g + ',' + bv + ',0.8)'; CX.shadowBlur = 5;
+      CX.beginPath(); CX.arc(x, bgY, 3.2, 0, Math.PI*2); CX.fill(); CX.shadowBlur = 0;
+      // Pill label
+      const lbl = b.c + 'g';
+      CX.font = "300 9px 'DM Mono',monospace";
+      const lw = CX.measureText(lbl).width + 12;
+      CX.globalAlpha = 0.6;
+      CX.fillStyle   = 'rgba(' + r + ',' + g + ',' + bv + ',0.18)';
+      CX.strokeStyle = 'rgba(' + r + ',' + g + ',' + bv + ',0.45)';
+      CX.lineWidth   = 0.7;
+      CX.beginPath(); CX.roundRect(x - lw/2, cardY, lw, 15, 4); CX.fill(); CX.stroke();
+      CX.globalAlpha = 0.85; CX.fillStyle = 'rgba(' + r + ',' + g + ',' + bv + ',1)';
+      CX.textAlign   = 'center';
+      CX.fillText(lbl, x, cardY + 10.5);
+      window._eventCards.push({x, y:cardY+8, w:lw+4, h:16, data:b, type:'carb'});
     }
 
-    // Insulin event — cool indigo ripple BELOW the BG line (gravity)
     if (b.u > 0.1) {
-      const delay    = 15;
-      const elapsed  = (viewTime-b.t)/60000 - delay;
-      const fadeFrac = Math.max(0, 1-Math.max(0,elapsed)/120);
-      const pulsePhase = elapsed < 0 ? 0 : Math.min(1, elapsed/(IOB_PEAK-delay));
-      if (fadeFrac > 0.01 && elapsed > -5) {
-        for (let ring=0; ring<3; ring++) {
-          const rPhase = (pulsePhase + ring*0.25) % 1;
-          const r      = Math.max(0.5, 5 + rPhase*18*(Math.min(b.u,5)/3));
-          const ry     = bgY + r*0.5; // below BG line
-          CX.globalAlpha = fadeFrac*(1-rPhase)*0.35;
-          CX.strokeStyle = `rgba(${pal.iobR.join(',')},1)`;
-          CX.lineWidth   = 1.0;
-          CX.shadowColor = `rgba(${pal.iobR.join(',')},0.5)`;
-          CX.shadowBlur  = 3;
-          CX.beginPath(); CX.ellipse(x, ry, r, r*0.5, 0, 0, Math.PI*2); CX.stroke();
-          CX.shadowBlur  = 0;
-        }
-        CX.globalAlpha = fadeFrac*0.75;
-        CX.fillStyle   = `rgba(${pal.iobR.join(',')},1)`;
-        CX.shadowColor = `rgba(${pal.iobR.join(',')},0.7)`;
-        CX.shadowBlur  = 5;
-        CX.beginPath(); CX.arc(x, bgY + 4, Math.max(0.5, 1.5+fadeFrac*2), 0, Math.PI*2); CX.fill();
-        CX.shadowBlur  = 0;
-      }
+      const r = pal.iobR[0], g = pal.iobR[1], bv = pal.iobR[2];
+      const cardY = bgY + 30 + Math.min(b.u * 8, 36);
+      CX.globalAlpha = 0.35;
+      CX.strokeStyle = 'rgba(' + r + ',' + g + ',' + bv + ',0.7)';
+      CX.lineWidth   = 0.8; CX.setLineDash([2,5]);
+      CX.beginPath(); CX.moveTo(x, bgY + 5); CX.lineTo(x, cardY - 2); CX.stroke();
+      CX.setLineDash([]);
+      CX.globalAlpha = 0.9; CX.fillStyle = 'rgba(' + r + ',' + g + ',' + bv + ',1)';
+      CX.shadowColor = 'rgba(' + r + ',' + g + ',' + bv + ',0.8)'; CX.shadowBlur = 5;
+      CX.beginPath(); CX.arc(x, bgY, 3.2, 0, Math.PI*2); CX.fill(); CX.shadowBlur = 0;
+      const lbl = b.u.toFixed(1) + 'U';
+      CX.font = "300 9px 'DM Mono',monospace";
+      const lw = CX.measureText(lbl).width + 12;
+      CX.globalAlpha = 0.6;
+      CX.fillStyle   = 'rgba(' + r + ',' + g + ',' + bv + ',0.15)';
+      CX.strokeStyle = 'rgba(' + r + ',' + g + ',' + bv + ',0.4)';
+      CX.lineWidth   = 0.7;
+      CX.beginPath(); CX.roundRect(x - lw/2, cardY - 1, lw, 15, 4); CX.fill(); CX.stroke();
+      CX.globalAlpha = 0.8; CX.fillStyle = 'rgba(' + r + ',' + g + ',' + bv + ',1)';
+      CX.textAlign   = 'center';
+      CX.fillText(lbl, x, cardY + 10);
+      window._eventCards.push({x, y:cardY+7, w:lw+4, h:16, data:b, type:'insulin'});
     }
   }
-  CX.restore();
+  CX.globalAlpha = 1; CX.restore();
 }
 
-// ── THE BOAT — driftwood raft, now even smaller, sitting on BG line ────
+
 function drawBoat(pal, d) {
-  const nowX  = NOW_X*W;
-  const boatY = bgToY(d.bg);
-  const prev  = dataAt(viewTime - 10*60000);
-  const rate  = (d.bg - prev.bg)/(10/60);
-  const tilt  = Math.max(-0.18, Math.min(0.18, rate*0.018));
-  const bob   = Math.sin(phi*1.1)*1.8;
+  const nowX = NOW_X*W;
+  const bgY  = bgToY(d.bg);
+  const prev = dataAt(viewTime - 10*60000);
+  const rate = (d.bg - prev.bg) / (10/60);
+
+  const isLow  = d.bg < BG_LOW;
+  const isHigh = d.bg > BG_HIGH;
+  const orbRGB = isLow  ? [80,120,220] :
+                 isHigh ? [230,140,50]  :
+                 pal.lineR;
+  const r=orbRGB[0], g=orbRGB[1], b=orbRGB[2];
+
+  const pulseRate = isLow ? 3.5 : isHigh ? 2.2 : 1.0;
+  const pulse = 0.5 + Math.sin(phi * pulseRate) * 0.5;
+  const bob   = Math.sin(phi * 1.1) * 2.2;
+  const cy    = bgY + bob;
+  const orbSz = 8 + pulse * 4;
 
   CX.save();
-  CX.translate(nowX, boatY + bob);
-  CX.rotate(tilt);
-  CX.scale(0.42, 0.42);
 
-  const dk    = pal.isNight;
-  const wood  = [dk?'#7a4820':'#a86428', dk?'#8a5530':'#be7838', dk?'#6a3c18':'#925220'];
-  const woodHi= dk?'#a07040':'#d4a060';
-  const endC  = dk?'#3a1c08':'#5c2e10';
-  const ropeC = dk?'#6a4a10':'#9a6818';
+  // Outer glow
+  var glowG = CX.createRadialGradient(nowX, cy, 0, nowX, cy, orbSz * 4.5);
+  glowG.addColorStop(0,   'rgba(' + r + ',' + g + ',' + b + ',' + (0.16 + pulse*0.07) + ')');
+  glowG.addColorStop(0.4, 'rgba(' + r + ',' + g + ',' + b + ',' + (0.05 + pulse*0.03) + ')');
+  glowG.addColorStop(1,   'rgba(' + r + ',' + g + ',' + b + ',0)');
+  CX.fillStyle = glowG;
+  CX.beginPath(); CX.arc(nowX, cy, orbSz * 4.5, 0, Math.PI*2); CX.fill();
 
-  // Subtle water shadow beneath
-  CX.save(); CX.globalAlpha=0.15; CX.fillStyle='rgba(0,0,0,0.8)';
-  CX.beginPath(); CX.ellipse(4, 32, 82, 10, 0, 0, Math.PI*2); CX.fill(); CX.restore();
+  // Direction arc — shows rate of change
+  const arcA = rate > 0.3  ? [-Math.PI*0.85, -Math.PI*0.15] :
+               rate < -0.3 ? [ Math.PI*0.15,  Math.PI*0.85] :
+               [-Math.PI, Math.PI];
+  CX.globalAlpha = 0.45 + pulse * 0.2;
+  CX.strokeStyle = 'rgba(' + r + ',' + g + ',' + b + ',0.9)';
+  CX.lineWidth   = 1.4;
+  CX.shadowColor = 'rgba(' + r + ',' + g + ',' + b + ',0.8)';
+  CX.shadowBlur  = 5;
+  CX.beginPath(); CX.arc(nowX, cy, orbSz * 1.6, arcA[0], arcA[1]); CX.stroke();
+  CX.shadowBlur  = 0;
 
-  function drawLog(cx, cy, halfLen, ry, col, ang) {
-    CX.save(); CX.translate(cx, cy); CX.rotate(ang);
-    CX.fillStyle = endC;
-    CX.beginPath(); CX.ellipse(-halfLen, 0, 5, ry*0.9, 0, 0, Math.PI*2); CX.fill();
-    CX.beginPath(); CX.ellipse(halfLen, 0, 4, ry*0.65, 0, 0, Math.PI*2); CX.fill();
-    CX.fillStyle = col;
-    CX.beginPath();
-    CX.moveTo(-halfLen, -ry);
-    CX.bezierCurveTo(-halfLen*0.5,-ry*1.05, halfLen*0.4,-ry*0.9, halfLen,-ry*0.6);
-    CX.lineTo(halfLen, ry*0.6);
-    CX.bezierCurveTo(halfLen*0.4, ry*0.9, -halfLen*0.5, ry*1.05, -halfLen, ry);
-    CX.closePath(); CX.fill();
-    CX.save(); CX.strokeStyle=endC; CX.lineWidth=0.6; CX.globalAlpha=0.3;
-    [-ry*0.45,0,ry*0.45].forEach(yo => {
-      CX.beginPath(); CX.moveTo(-halfLen+5,yo*0.85); CX.lineTo(halfLen-4,yo*0.65); CX.stroke();
-    });
-    CX.restore();
-    CX.save(); CX.fillStyle=woodHi; CX.globalAlpha=0.12;
-    CX.beginPath();
-    CX.moveTo(-halfLen,-ry);
-    CX.bezierCurveTo(-halfLen*0.5,-ry*1.05, halfLen*0.4,-ry*0.9, halfLen,-ry*0.6);
-    CX.lineTo(halfLen,-ry*0.2);
-    CX.bezierCurveTo(halfLen*0.4,-ry*0.5, -halfLen*0.5,-ry*0.6, -halfLen,-ry*0.5);
-    CX.closePath(); CX.fill(); CX.restore();
-    CX.restore();
+  // Core sphere
+  var coreG = CX.createRadialGradient(nowX - orbSz*0.28, cy - orbSz*0.28, 0, nowX, cy, orbSz);
+  coreG.addColorStop(0,   'rgba(255,255,255,' + (0.55 + pulse*0.2) + ')');
+  coreG.addColorStop(0.4, 'rgba(' + r + ',' + g + ',' + b + ',' + (0.88 + pulse*0.08) + ')');
+  coreG.addColorStop(1,   'rgba(' + r + ',' + g + ',' + b + ',' + (0.45 + pulse*0.1) + ')');
+  CX.globalAlpha = 1;
+  CX.fillStyle   = coreG;
+  CX.shadowColor = 'rgba(' + r + ',' + g + ',' + b + ',1)';
+  CX.shadowBlur  = 12;
+  CX.beginPath(); CX.arc(nowX, cy, orbSz, 0, Math.PI*2); CX.fill();
+  CX.shadowBlur  = 0;
+
+  // Rate-of-change trail dots
+  if (Math.abs(rate) > 0.25) {
+    var dir = rate > 0 ? -1 : 1;
+    for (var i = 1; i <= 3; i++) {
+      var dotA = (0.35 - i*0.09) * (Math.min(3, Math.abs(rate)) / 3);
+      if (dotA < 0.02) continue;
+      CX.globalAlpha = dotA;
+      CX.fillStyle   = 'rgba(' + r + ',' + g + ',' + b + ',1)';
+      CX.beginPath(); CX.arc(nowX, cy + dir*i*9, Math.max(0.5, 2.2 - i*0.5), 0, Math.PI*2); CX.fill();
+    }
   }
 
-  drawLog(-3,-14,80,8,wood[0],-0.02);
-  drawLog(0,  0, 86,9,wood[1], 0.00);
-  drawLog(-2, 14,78,8,wood[2], 0.02);
-
-  function drawRope(rx) {
-    CX.save();
-    CX.strokeStyle=ropeC; CX.lineWidth=3.5; CX.lineCap='round';
-    CX.beginPath(); CX.moveTo(rx,-22); CX.lineTo(rx,22); CX.stroke();
-    CX.strokeStyle='#d4a840'; CX.lineWidth=1.2; CX.globalAlpha=0.45;
-    CX.beginPath(); CX.moveTo(rx,-22); CX.lineTo(rx,22); CX.stroke();
-    CX.globalAlpha=1;
-    CX.fillStyle='#5a3c08';
-    CX.beginPath(); CX.ellipse(rx,1,4.5,3.5,0,0,Math.PI*2); CX.fill();
-    CX.restore();
+  // Live reading pulse ring
+  if (_pulseAlpha > 0.01) {
+    var pr = 18 + (1 - _pulseAlpha) * 50;
+    CX.globalAlpha = _pulseAlpha * 0.4;
+    CX.strokeStyle = 'rgba(' + r + ',' + g + ',' + b + ',0.8)';
+    CX.lineWidth   = 1.2;
+    CX.shadowColor = 'rgba(' + r + ',' + g + ',' + b + ',0.8)';
+    CX.shadowBlur  = 8;
+    CX.beginPath(); CX.arc(nowX, cy, Math.max(1, pr), 0, Math.PI*2); CX.stroke();
+    CX.shadowBlur  = 0;
+    _pulseAlpha   *= 0.93;
   }
-  drawRope(-43); drawRope(40);
-
-  // Mast
-  const mx=-12;
-  CX.save();
-  CX.strokeStyle=dk?'#2a1408':'#4a2808'; CX.lineWidth=4.5; CX.lineCap='round';
-  CX.beginPath(); CX.moveTo(mx,0); CX.bezierCurveTo(mx+2,-36,mx+4,-72,mx+5,-105); CX.stroke();
-  CX.strokeStyle=dk?'#5a3418':'#8a5828'; CX.lineWidth=1.8; CX.globalAlpha=0.4;
-  CX.beginPath(); CX.moveTo(mx+1,0); CX.bezierCurveTo(mx+3,-36,mx+5,-72,mx+6,-105); CX.stroke();
-  CX.globalAlpha=1;
-  CX.fillStyle=dk?'#2a1408':'#3a1c08';
-  CX.beginPath(); CX.ellipse(mx+2,-50,3.2,2.3,0,0,Math.PI*2); CX.fill();
-  CX.restore();
-
-  // Leaf sail
-  const sway = Math.sin(phi*0.55)*3;
-  const lx=mx+5, ly=-103;
-  const lGreen=dk?'#2a5010':'#4a8a22';
-  const lMid  =dk?'#183808':'#2d6a10';
-  const lHi   =dk?'#3a6518':'#70b035';
-
-  CX.fillStyle=lGreen;
-  CX.beginPath();
-  CX.moveTo(lx,ly);
-  CX.bezierCurveTo(lx+16+sway,ly+13, lx+36+sway,ly+35, lx+32+sway,ly+60);
-  CX.bezierCurveTo(lx+20+sway,ly+80, lx+5,ly+88, lx,ly+92);
-  CX.bezierCurveTo(lx-8,ly+88, lx-18+sway*0.7,ly+72, lx-18+sway*0.7,ly+50);
-  CX.bezierCurveTo(lx-14+sway*0.5,ly+24, lx-4,ly+11, lx,ly);
-  CX.closePath(); CX.fill();
-
-  CX.fillStyle=lHi; CX.globalAlpha=0.38;
-  CX.beginPath();
-  CX.moveTo(lx,ly);
-  CX.bezierCurveTo(lx+7+sway*0.6,ly+15, lx+20+sway*0.7,ly+37, lx+16+sway*0.7,ly+58);
-  CX.bezierCurveTo(lx+9+sway*0.5,ly+76, lx+2,ly+86, lx,ly+90);
-  CX.bezierCurveTo(lx-4,ly+84, lx-7+sway*0.4,ly+66, lx-7+sway*0.4,ly+48);
-  CX.bezierCurveTo(lx-4+sway*0.3,ly+24, lx-2,ly+11, lx,ly);
-  CX.closePath(); CX.fill();
-  CX.globalAlpha=1;
-
-  CX.strokeStyle=lMid; CX.lineWidth=1.1; CX.globalAlpha=0.6; CX.lineCap='round';
-  CX.beginPath();
-  CX.moveTo(lx,ly+92);
-  CX.bezierCurveTo(lx+4+sway*0.3,ly+60, lx+4+sway*0.4,ly+28, lx,ly);
-  CX.stroke();
-  CX.lineWidth=0.65; CX.globalAlpha=0.4;
-  [[lx+2,ly+72,lx+20+sway*0.6,ly+60],[lx+2,ly+50,lx+25+sway*0.7,ly+40],
-   [lx+2,ly+28,lx+22+sway*0.6,ly+20],[lx+1,ly+14,lx+12+sway*0.4,ly+8],
-   [lx-1,ly+68,lx-16+sway*0.5,ly+58],[lx,ly+48,lx-16+sway*0.5,ly+38],
-   [lx+1,ly+26,lx-12+sway*0.4,ly+18]].forEach(([x1,y1,x2,y2])=>{
-    CX.beginPath(); CX.moveTo(x1,y1); CX.lineTo(x2,y2); CX.stroke();
-  });
-  CX.globalAlpha=1;
-
-  // Pebbles
-  [[18,4,4.5,2.8,-8],[26,-2,3.5,2.2,12],[9,-5,3,1.8,-5]].forEach(([px,py,rx,ry,ang])=>{
-    CX.save(); CX.translate(px,py); CX.rotate(ang*Math.PI/180);
-    CX.fillStyle=dk?'#505050':'#807868'; CX.globalAlpha=0.65;
-    CX.beginPath(); CX.ellipse(0,0,rx,ry,0,0,Math.PI*2); CX.fill();
-    CX.restore();
-  });
 
   CX.restore();
 }
 
-// ── FUTURE MIST — right of now ─────────────────────────────────────────
+
 function drawFutureMist(pal) {
   const nowX = NOW_X*W;
   // Very subtle — the void itself is already dark enough
