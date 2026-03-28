@@ -190,7 +190,7 @@ html,body{width:100%;height:100%;overflow:hidden;background:#c8d8d0;touch-action
   <div class="ripwrap"><div class="rip"></div><div class="rip"></div><div class="rip"></div></div>
   <div class="ltitle">Oskar's River</div>
   <div class="lsub">finding the current</div>
-  <div style="font-family:'DM Mono',monospace;font-size:8px;color:rgba(40,55,50,0.2);margin-top:8px;letter-spacing:1px">build 20260326-47</div>
+  <div style="font-family:'DM Mono',monospace;font-size:8px;color:rgba(40,55,50,0.2);margin-top:8px;letter-spacing:1px">build 20260326-50</div>
 </div>
 
 <canvas id="c"></canvas>
@@ -1194,6 +1194,9 @@ function drawTimeLabels(pal) {
     nd.toLocaleTimeString('en-GB',{hour:'2-digit',minute:'2-digit'}),
     nowX, H - 44
   );
+  CX.globalAlpha=0.28;CX.fillStyle='rgba(200,220,240,1)';
+  CX.font="300 9px 'DM Mono',monospace";CX.textAlign='right';
+  CX.fillText('build 50',W-10,H-8);
   CX.restore();
 }
 
@@ -1498,7 +1501,7 @@ function checkAlerts(d) {
       var msg = veryHigh
         ? ('BG ' + d.bg.toFixed(1) + ' — correction window open')
         : (d.bg.toFixed(1) + ' mmol — could correct now');
-      showAlertBanner(msg, 'rgba(180,100,30,0.85)', false);
+      showRiverPebble(msg,'correction');
     }
     return;
   }
@@ -3065,7 +3068,7 @@ function buildSetupScreen() {
         never to any third party. This app has no backend.
       </div>
     </div>
-    <div style="text-align:center;margin-top:10px;font-family:'DM Mono',monospace;font-size:8px;color:rgba(40,55,50,0.15);letter-spacing:1px">build 20260326-47</div>
+    <div style="text-align:center;margin-top:10px;font-family:'DM Mono',monospace;font-size:8px;color:rgba(40,55,50,0.15);letter-spacing:1px">build 20260326-50</div>
   </div>
 </div>`;
 }
