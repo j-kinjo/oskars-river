@@ -190,7 +190,7 @@ html,body{width:100%;height:100%;overflow:hidden;background:#c8d8d0;touch-action
   <div class="ripwrap"><div class="rip"></div><div class="rip"></div><div class="rip"></div></div>
   <div class="ltitle">Oskar's River</div>
   <div class="lsub">finding the current</div>
-  <div style="font-family:'DM Mono',monospace;font-size:8px;color:rgba(40,55,50,0.2);margin-top:8px;letter-spacing:1px">build 20260326-44</div>
+  <div style="font-family:'DM Mono',monospace;font-size:8px;color:rgba(40,55,50,0.2);margin-top:8px;letter-spacing:1px">build 20260326-45</div>
 </div>
 
 <canvas id="c"></canvas>
@@ -1372,6 +1372,86 @@ const ALERTS = {
   }
 };
 
+// ── HOVER TOOLTIP ─────────────────────────────────────────────────
+var _hoverTooltip = null;
+var _tooltipFade  = 0;
+var _lastTooltip  = null;
+
+function drawHoverTooltip(pal) {
+  if (!_hoverTooltip) { _tooltipFade = Math.max(0, _tooltipFade - 0.06); }
+  else                { _tooltipFade = Math.min(1, _tooltipFade + 0.14); }
+  if (_tooltipFade < 0.01) return;
+  var tp = _hoverTooltip || _lastTooltip;
+  if (!tp) return;
+  CX.save();
+  CX.globalAlpha = _tooltipFade;
+  CX.font = "300 10px 'DM Mono',monospace";
+  var tw = CX.measureText(tp.label).width;
+  var bw = tw + 16, bh = 22;
+  var bx = Math.max(4, Math.min(W - bw - 4, tp.x - bw/2));
+  var by = Math.max(4, tp.y - bh - 12);
+  CX.fillStyle = 'rgba(6,9,20,0.90)';
+  CX.strokeStyle = tp.col || 'rgba(140,180,220,0.4)';
+  CX.lineWidth = 0.6;
+  CX.beginPath(); CX.roundRect(bx, by, bw, bh, 4);
+  CX.fill(); CX.stroke();
+  CX.fillStyle = tp.col || 'rgba(170,210,240,0.9)';
+  CX.textAlign = 'center';
+  CX.fillText(tp.label, bx + bw/2, by + 14);
+  CX.fillStyle = tp.col || 'rgba(170,210,240,0.6)';
+  CX.beginPath(); CX.arc(tp.x, tp.y, 2.5, 0, Math.PI*2); CX.fill();
+  CX.restore();
+}
+
+function checkHover(mx, my) {
+  var dots = window._bgDots || [];
+  for (var i = 0; i < dots.length; i++) {
+    var d = dots[i];
+    if (Math.hypot(mx - d.x, my - d.y) < 16) {
+      var ts = new Date(d.t).toLocaleTimeString('en-GB',{hour:'2-digit',minute:'2-digit'});
+      _hoverTooltip = {x:d.x, y:d.y, label:d.bg.toFixed(1)+' mmol  '+ts, col:d.col};
+      _lastTooltip  = _hoverTooltip; return;
+    }
+  }
+  var cards = window._eventCards || [];
+  for (var j = 0; j < cards.length; j++) {
+    var c = cards[j];
+    if (mx>c.x-c.w/2-10&&mx<c.x+c.w/2+10&&my>c.y-c.h-6&&my<c.y+c.h+6) {
+      var ts2 = new Date(c.data.t).toLocaleTimeString('en-GB',{hour:'2-digit',minute:'2-digit'});
+      var lbl = c.type==='carb' ? c.data.c+'g carbs  '+ts2 : c.data.u.toFixed(1)+'U bolus  '+ts2;
+      var col = c.type==='carb' ? 'rgba(220,155,60,0.9)' : 'rgba(100,140,225,0.9)';
+      _hoverTooltip = {x:c.x, y:c.y-8, label:lbl, col:col};
+      _lastTooltip  = _hoverTooltip; return;
+    }
+  }
+  _hoverTooltip = null;
+}
+
+(function wireHoverEvents() {
+  window.addEventListener('load', function() {
+    var cv = document.getElementById('c');
+    if (!cv) return;
+    function onMove(cx, cy) {
+      checkHover(cx, cy);
+      if (window._pebbleHitbox) {
+        var h = window._pebbleHitbox;
+        if (cx>h.x&&cx<h.x+h.w&&cy>h.y&&cy<h.y+h.h) { _riverPebble=null; window._pebbleHitbox=null; }
+      }
+    }
+    cv.addEventListener('mousemove', function(e) {
+      var r=cv.getBoundingClientRect();
+      onMove((e.clientX-r.left)*(cv.width/r.width),(e.clientY-r.top)*(cv.height/r.height));
+    });
+    cv.addEventListener('touchmove', function(e) {
+      if (e.touches.length!==1) return;
+      var r=cv.getBoundingClientRect();
+      onMove((e.touches[0].clientX-r.left)*(cv.width/r.width),(e.touches[0].clientY-r.top)*(cv.height/r.height));
+    },{passive:true});
+    cv.addEventListener('mouseleave', function(){ _hoverTooltip=null; });
+  });
+})();
+
+
 var _alertState = null;
 var _alertPulse = 0;
 var _bannerTimeout = null;
@@ -1550,6 +1630,8 @@ function frame(ts) {
   const pal = palette(viewTime);
 
   // ── ANIMATION STATE ──────────────────────────────────────────
+  window._bgDots=[];
+  window._eventCards=[];
   drawVoid(pal);
 
   // ── EQUILIBRIUM ZONE — soft target corridor ────────────────────
@@ -1558,8 +1640,8 @@ function frame(ts) {
   // ── FORCE RIBBONS — carbs above, insulin below ─────────────────
   const cobPts = buildForcePts('cob',  1, 90);  // buoyancy: upward (+1)
   const iobPts = buildForcePts('iob', -1, 90);  // gravity:  downward (-1)
-  drawForceRibbon(cobPts, pal.cobR, 'carbs',   1);
-  drawForceRibbon(iobPts, pal.iobR, 'insulin', -1);
+  drawForceRibbon(cobPts, pal.cobR,  1);
+  drawForceRibbon(iobPts, pal.iobR, -1);
 
   // ── BG TRACE — the life-line ────────────────────────────────────
   drawBGTrail(pal);
@@ -3028,7 +3110,7 @@ function buildSetupScreen() {
         never to any third party. This app has no backend.
       </div>
     </div>
-    <div style="text-align:center;margin-top:10px;font-family:'DM Mono',monospace;font-size:8px;color:rgba(40,55,50,0.15);letter-spacing:1px">build 20260326-44</div>
+    <div style="text-align:center;margin-top:10px;font-family:'DM Mono',monospace;font-size:8px;color:rgba(40,55,50,0.15);letter-spacing:1px">build 20260326-45</div>
   </div>
 </div>`;
 }
