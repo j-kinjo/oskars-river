@@ -190,7 +190,7 @@ html,body{width:100%;height:100%;overflow:hidden;background:#c8d8d0;touch-action
   <div class="ripwrap"><div class="rip"></div><div class="rip"></div><div class="rip"></div></div>
   <div class="ltitle">Oskar's River</div>
   <div class="lsub">finding the current</div>
-  <div style="font-family:'DM Mono',monospace;font-size:8px;color:rgba(40,55,50,0.2);margin-top:8px;letter-spacing:1px">build 20260326-54</div>
+  <div style="font-family:'DM Mono',monospace;font-size:8px;color:rgba(40,55,50,0.2);margin-top:8px;letter-spacing:1px">build 20260326-55</div>
 </div>
 
 <canvas id="c"></canvas>
@@ -1199,10 +1199,10 @@ function drawTimeLabels(pal) {
   CX.fillText('now', nowX, H - 35);
   CX.globalAlpha=0.28;CX.fillStyle='rgba(200,220,240,1)';
   CX.font="300 9px 'DM Mono',monospace";CX.textAlign='right';
-  CX.fillText('build 54',W-10,H-8);
+  CX.fillText('build 55',W-10,H-8);
   CX.globalAlpha=0.28;CX.fillStyle='rgba(200,220,240,1)';
   CX.font="300 9px 'DM Mono',monospace";CX.textAlign='right';
-  CX.fillText('build 54',W-10,H-8);
+  CX.fillText('build 55',W-10,H-8);
   CX.restore();
 }
 
@@ -1739,7 +1739,8 @@ function setTimeNow() {
   var el = document.getElementById('in-time');
   if (el) el.value = val;
 }
-var _entryTimeVal = null; // preserved across renderSheet() calls
+var _entryTimeVal = null;
+var _bolusVal = null; // preserved across renderSheet() calls
 
 function getEntryTime() {
   var el = document.getElementById('in-time');
@@ -2141,28 +2142,20 @@ function renderSheet() {
           '<span style="font-family:\'DM Mono\',monospace;font-size:13px;color:rgba(40,55,50,0.4)">U</span>' +
         '</div>' +
 
-        // Context hint — small, factual, not prescriptive
-        (rangeStr ? '<div style="font-family:\'DM Mono\',monospace;font-size:9px;' +
-          'color:rgba(40,55,50,0.3);line-height:1.6;margin-bottom:10px">' + rangeStr + '</div>' : '') +
-
-        // Eat wait hint
-        '<div style="font-family:\'DM Mono\',monospace;font-size:9px;color:rgba(40,55,50,0.3);' +
-          'margin-bottom:12px">suggested eat time: ' + eatStr + ' (~' + eatWait + 'min after bolus)</div>' +
-
-        // Action buttons
-        '<div style="display:flex;gap:8px">' +
+        // Action buttons — above context so they're immediately visible
+        '<div style="display:flex;gap:8px;margin-bottom:10px">' +
           // Log carbs + bolus
           '<button onclick="logMealEntry()" ' +
             'style="flex:1;padding:11px;border-radius:9px;' +
             'border:1px solid rgba(40,85,200,0.3);background:rgba(40,85,200,0.08);' +
             'font-family:\'Fraunces\',serif;font-style:italic;font-weight:200;font-size:15px;' +
-            'color:rgba(40,85,200,0.85);cursor:pointer">log to flow</button>' +
+            'color:rgba(40,85,200,0.85);cursor:pointer">add to flow</button>' +
           // Log carbs only (skip bolus)
           '<button onclick="logMealEntry(true)" ' +
             'style="padding:11px 14px;border-radius:9px;' +
             'border:1px solid rgba(40,55,50,0.12);background:transparent;' +
             'font-family:\'DM Mono\',monospace;font-size:9px;letter-spacing:.5px;' +
-            'text-transform:uppercase;color:rgba(40,55,50,0.35);cursor:pointer">carbs only</button>' +
+            'text-transform:uppercase;color:rgba(40,55,50,0.35);cursor:pointer">no insulin</button>' +
         '</div>' +
       '</div>';
   }
@@ -2175,7 +2168,7 @@ function renderSheet() {
     '<div style="display:flex;align-items:center;gap:8px;padding:0 18px;margin-bottom:14px">' +
       '<span style="font-family:\'DM Mono\',monospace;font-size:9px;color:rgba(40,55,50,0.3);letter-spacing:1px;text-transform:uppercase">when</span>' +
       '<input id="in-time" type="datetime-local" style="flex:1;padding:8px 10px;border-radius:8px;border:1px solid rgba(40,55,50,0.12);background:rgba(255,255,255,0.55);font-family:\'DM Mono\',monospace;font-size:12px;color:rgba(40,55,50,0.7);outline:none" onchange="onTimeChange(this.value)">' +
-      '<button onclick="setTimeNow();renderSheet()" style="padding:6px 10px;border-radius:7px;border:1px solid rgba(40,55,50,0.12);background:rgba(40,55,50,0.05);font-family:\'DM Mono\',monospace;font-size:9px;color:rgba(40,55,50,0.4);cursor:pointer">now</button>' +
+      '<button onclick="setTimeNow()" style="padding:6px 10px;border-radius:7px;border:1px solid rgba(40,55,50,0.12);background:rgba(40,55,50,0.05);font-family:\'DM Mono\',monospace;font-size:9px;color:rgba(40,55,50,0.4);cursor:pointer">now</button>' +
     '</div>' +
 
     // Food search
@@ -2299,6 +2292,7 @@ function updateItemGrams(idx, val) {
   var f  = _mealItems[idx].food;
   _mealItems[idx].grams = g;
   _mealItems[idx].carbs = Math.round((f.c100 * g / 100) * 10) / 10;
+  var _b=document.getElementById('in-bolus');if(_b&&_b.value!=='')_bolusVal=_b.value;
   renderSheet();
 }
 
@@ -2347,6 +2341,13 @@ function logMealEntry(carbsOnly) {
   }
 
   try { sessionStorage.setItem('rv3', JSON.stringify(SESSION)); } catch(e) {}
+
+  if (t > CGM_END) {
+    var lastBg = HISTORY_RAW.length > 0 ? HISTORY_RAW[HISTORY_RAW.length-1].bg : 7.0;
+    HISTORY_RAW.push({t: t, bg: lastBg, iob: 0, cob: 0, pen: 1});
+    updateCGMBounds();
+    viewTime = CGM_END;
+  }
 
   // Save to meal history
   if (_mealItems.length > 0) {
@@ -3229,7 +3230,7 @@ function buildSetupScreen() {
         never to any third party. This app has no backend.
       </div>
     </div>
-    <div style="text-align:center;margin-top:10px;font-family:'DM Mono',monospace;font-size:8px;color:rgba(40,55,50,0.15);letter-spacing:1px">build 20260326-54</div>
+    <div style="text-align:center;margin-top:10px;font-family:'DM Mono',monospace;font-size:8px;color:rgba(40,55,50,0.15);letter-spacing:1px">build 20260326-55</div>
   </div>
 </div>`;
 }
