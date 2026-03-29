@@ -190,7 +190,7 @@ html,body{width:100%;height:100%;overflow:hidden;background:#c8d8d0;touch-action
   <div class="ripwrap"><div class="rip"></div><div class="rip"></div><div class="rip"></div></div>
   <div class="ltitle">Oskar's River</div>
   <div class="lsub">finding the current</div>
-  <div style="font-family:'DM Mono',monospace;font-size:8px;color:rgba(40,55,50,0.2);margin-top:8px;letter-spacing:1px">build 20260326-53</div>
+  <div style="font-family:'DM Mono',monospace;font-size:8px;color:rgba(40,55,50,0.2);margin-top:8px;letter-spacing:1px">build 20260326-54</div>
 </div>
 
 <canvas id="c"></canvas>
@@ -210,18 +210,17 @@ html,body{width:100%;height:100%;overflow:hidden;background:#c8d8d0;touch-action
     position:absolute;
     bottom:calc(max(16px,env(safe-area-inset-bottom,16px))+28px);
     left:50%;transform:translateX(-50%);
-    display:flex;gap:10px;align-items:center;pointer-events:none">
-    <div style="display:flex;align-items:center;gap:5px;
-      background:rgba(0,0,0,0.18);border-radius:12px;padding:4px 10px;
-      backdrop-filter:blur(6px)">
-      <div style="width:6px;height:6px;border-radius:50%;background:#3ecfa0;flex-shrink:0"></div>
-      <span style="font-family:'DM Mono',monospace;font-size:9px;color:rgba(255,255,255,0.4);letter-spacing:.5px">COB</span>
-      <span id="mc-val" style="font-family:'DM Mono',monospace;font-size:13px;font-weight:500;color:rgba(255,255,255,0.75)">—g</span>
+    display:flex;gap:14px;align-items:center;pointer-events:none">
+    <div style="display:flex;flex-direction:column;align-items:center;gap:1px">
+      <span id="mc-val" style="font-family:'DM Mono',monospace;font-size:16px;font-weight:500;color:rgba(200,140,60,0.7);transition:all .4s;letter-spacing:-0.5px">—</span>
+      <span id="mc-label" style="font-family:'DM Mono',monospace;font-size:8px;color:rgba(200,140,60,0.35);letter-spacing:1px;text-transform:uppercase;transition:color .4s">carbs</span>
     </div>
-    <div style="display:flex;align-items:center;gap:5px;
-      background:rgba(0,0,0,0.18);border-radius:12px;padding:4px 10px;
-      backdrop-filter:blur(6px)">
-      <div style="width:6px;height:6px;border-radius:50%;background:#2855c8;flex-shrink:0"></div>
+    <div style="width:1px;height:24px;background:rgba(255,255,255,0.08)"></div>
+    <div style="display:flex;flex-direction:column;align-items:center;gap:1px">
+      <span id="mi-val" style="font-family:'DM Mono',monospace;font-size:16px;font-weight:500;color:rgba(80,120,220,0.7);transition:all .4s;letter-spacing:-0.5px">—</span>
+      <span id="mi-label" style="font-family:'DM Mono',monospace;font-size:8px;color:rgba(80,120,220,0.35);letter-spacing:1px;text-transform:uppercase;transition:color .4s">insulin</span>
+    </div>
+  </div>
       <span style="font-family:'DM Mono',monospace;font-size:9px;color:rgba(255,255,255,0.4);letter-spacing:.5px">IOB</span>
       <span id="mi-val" style="font-family:'DM Mono',monospace;font-size:13px;font-weight:500;color:rgba(255,255,255,0.75)">—U</span>
     </div>
@@ -1186,20 +1185,24 @@ function drawTimeLabels(pal) {
     CX.fillText(lbl, x, H - 28);
   }
 
-  // Current time label near boat — slightly larger
+  // "now" marker — small, sits at orb x position just above tick area
   CX.globalAlpha = 0.55;
   CX.fillStyle   = 'rgba(200,220,240,1)';
-  CX.font        = "200 22px 'Fraunces',serif";
+  CX.font        = "300 11px 'DM Mono',monospace";
   CX.fillText(
     nd.toLocaleTimeString('en-GB',{hour:'2-digit',minute:'2-digit'}),
-    nowX, H - 44
+    nowX, H - 46
   );
+  // Tiny "now" label beneath time
+  CX.globalAlpha = 0.22;
+  CX.font        = "300 8px 'DM Mono',monospace";
+  CX.fillText('now', nowX, H - 35);
   CX.globalAlpha=0.28;CX.fillStyle='rgba(200,220,240,1)';
   CX.font="300 9px 'DM Mono',monospace";CX.textAlign='right';
-  CX.fillText('build 53',W-10,H-8);
+  CX.fillText('build 54',W-10,H-8);
   CX.globalAlpha=0.28;CX.fillStyle='rgba(200,220,240,1)';
   CX.font="300 9px 'DM Mono',monospace";CX.textAlign='right';
-  CX.fillText('build 53',W-10,H-8);
+  CX.fillText('build 54',W-10,H-8);
   CX.restore();
 }
 
@@ -1544,10 +1547,10 @@ function updateHUD(d, pal) {
   // BG number + trend arrow
   var prev15 = dataAt(viewTime - 15*60000);
   var delta  = d.bg - prev15.bg;
-  var arr    = delta > 0.75  ? '⇑⇑' :
-               delta > 0.25  ? '⇑'  :
-               delta < -0.75 ? '⇓⇓' :
-               delta < -0.25 ? '⇓'  : '→';
+  var arr    = delta > 0.75  ? '↑↑' :
+               delta > 0.25  ? '↑'  :
+               delta < -0.75 ? '↓↓' :
+               delta < -0.25 ? '↓'  : '→';
 
   var bgEl  = document.getElementById('bg-num');
   var color = d.bg < BG_LOW  ? 'rgba(100,150,255,0.9)'  :
@@ -1559,11 +1562,25 @@ function updateHUD(d, pal) {
 
   document.getElementById('bg-unit').style.color = 'rgba(150,180,200,0.4)';
 
-  // COB / IOB pills
+  // COB / IOB — colour + opacity scale with active values
   var mcEl = document.getElementById('mc-val');
   var miEl = document.getElementById('mi-val');
-  if (mcEl) mcEl.textContent = d.cob.toFixed(0) + 'g';
-  if (miEl) miEl.textContent = d.iob.toFixed(1) + 'U';
+  var mcLb = document.getElementById('mc-label');
+  var miLb = document.getElementById('mi-label');
+  if (mcEl) {
+    var cobFrac = Math.min(1, d.cob / 40);
+    mcEl.textContent = d.cob > 0.5 ? d.cob.toFixed(0) + 'g' : '—';
+    mcEl.style.fontSize = d.cob > 5 ? '20px' : '16px';
+    mcEl.style.color = 'rgba(' + pal.cobR[0] + ',' + pal.cobR[1] + ',' + pal.cobR[2] + ',' + (0.45 + cobFrac*0.5) + ')';
+    if (mcLb) mcLb.style.color = 'rgba(' + pal.cobR[0] + ',' + pal.cobR[1] + ',' + pal.cobR[2] + ',' + (0.3 + cobFrac*0.3) + ')';
+  }
+  if (miEl) {
+    var iobFrac = Math.min(1, d.iob / 4);
+    miEl.textContent = d.iob > 0.1 ? d.iob.toFixed(1) + 'U' : '—';
+    miEl.style.fontSize = d.iob > 1 ? '20px' : '16px';
+    miEl.style.color = 'rgba(' + pal.iobR[0] + ',' + pal.iobR[1] + ',' + pal.iobR[2] + ',' + (0.45 + iobFrac*0.5) + ')';
+    if (miLb) miLb.style.color = 'rgba(' + pal.iobR[0] + ',' + pal.iobR[1] + ',' + pal.iobR[2] + ',' + (0.3 + iobFrac*0.3) + ')';
+  }
 
   // Timebar scrubber
   var prog = (viewTime - CGM_START) / (CGM_END - CGM_START);
@@ -1639,22 +1656,7 @@ function frame(ts) {
   const nowBtn = document.getElementById('now-btn');
   if (nowBtn) nowBtn.style.opacity = awayFromNow ? '0.85' : '0';
 
-  // Draw time label above/near the boat showing what time is at NOW position
-  const nowX = NOW_X * W;
-  const boatY2 = boatYfromBG(d.bg);
-  const vd = new Date(viewTime);
-  const timeStr = vd.toLocaleTimeString('en-GB',{hour:'2-digit',minute:'2-digit'});
-  const dateStr = vd.toLocaleDateString('en-GB',{weekday:'short',day:'numeric',month:'short'});
-  CX.save();
-  CX.globalAlpha = 0.65;
-  CX.fillStyle = pal.bgText || 'rgba(255,255,255,0.8)';
-  CX.font = "200 13px 'Fraunces',serif";
-  CX.textAlign = 'center';
-  CX.fillText(timeStr, nowX, boatY2 - 40);
-  CX.globalAlpha = 0.3;
-  CX.font = "300 9px 'DM Mono',monospace";
-  CX.fillText(dateStr, nowX, boatY2 - 26);
-  CX.restore();
+  // time labels handled by drawTimeLabels
 
   checkAlerts(d);
   drawHypoPulse(pal);
@@ -3227,7 +3229,7 @@ function buildSetupScreen() {
         never to any third party. This app has no backend.
       </div>
     </div>
-    <div style="text-align:center;margin-top:10px;font-family:'DM Mono',monospace;font-size:8px;color:rgba(40,55,50,0.15);letter-spacing:1px">build 20260326-53</div>
+    <div style="text-align:center;margin-top:10px;font-family:'DM Mono',monospace;font-size:8px;color:rgba(40,55,50,0.15);letter-spacing:1px">build 20260326-54</div>
   </div>
 </div>`;
 }
