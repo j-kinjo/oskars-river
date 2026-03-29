@@ -190,7 +190,7 @@ html,body{width:100%;height:100%;overflow:hidden;background:#c8d8d0;touch-action
   <div class="ripwrap"><div class="rip"></div><div class="rip"></div><div class="rip"></div></div>
   <div class="ltitle">Oskar's River</div>
   <div class="lsub">finding the current</div>
-  <div style="font-family:'DM Mono',monospace;font-size:8px;color:rgba(40,55,50,0.2);margin-top:8px;letter-spacing:1px">build 20260326-52</div>
+  <div style="font-family:'DM Mono',monospace;font-size:8px;color:rgba(40,55,50,0.2);margin-top:8px;letter-spacing:1px">build 20260326-53</div>
 </div>
 
 <canvas id="c"></canvas>
@@ -1196,10 +1196,10 @@ function drawTimeLabels(pal) {
   );
   CX.globalAlpha=0.28;CX.fillStyle='rgba(200,220,240,1)';
   CX.font="300 9px 'DM Mono',monospace";CX.textAlign='right';
-  CX.fillText('build 52',W-10,H-8);
+  CX.fillText('build 53',W-10,H-8);
   CX.globalAlpha=0.28;CX.fillStyle='rgba(200,220,240,1)';
   CX.font="300 9px 'DM Mono',monospace";CX.textAlign='right';
-  CX.fillText('build 52',W-10,H-8);
+  CX.fillText('build 53',W-10,H-8);
   CX.restore();
 }
 
@@ -2109,39 +2109,58 @@ function renderSheet() {
   }
 
   var bolusHTML = '';
-  if (bolus && totalCarbs > 0) {
-    var eatTime = new Date(getEntryTime().valueOf ? getEntryTime() : Date.now());
-    eatTime = new Date((typeof getEntryTime()==='number'?getEntryTime():Date.now()) + eatWait*60000);
-    var eatStr = eatTime.toLocaleTimeString('en-GB',{hour:'2-digit',minute:'2-digit'});
+  if (totalCarbs > 0) {
+    // Range hint only — no default value. User enters actual units given.
+    var rangeLo = bolus ? Math.max(0, bolus.total - 1.0) : 0;
+    var rangeHi = bolus ? bolus.total + 0.5 : 0;
+    var rangeStr = bolus
+      ? 'context: ' + rangeLo.toFixed(1) + ' – ' + rangeHi.toFixed(1) + 'U based on ' +
+        totalCarbs.toFixed(0) + 'g ÷ I:C ' + (bolus.ic||10) +
+        (bolus.corrDose > 0 ? ', BG ' + (bolus.bg||'') : '') +
+        (bolus.iob > 0.2 ? ', IOB ' + bolus.iob + 'U active' : '')
+      : '';
+    var eatTime = new Date(getEntryTime() + eatWait*60000);
+    var eatStr  = eatTime.toLocaleTimeString('en-GB',{hour:'2-digit',minute:'2-digit'});
 
     bolusHTML =
-      '<div style="margin:0 18px 12px;padding:14px;background:rgba(40,85,200,0.06);' +
-        'border-radius:12px;border:1px solid rgba(40,85,200,0.15)">' +
-        '<div style="display:flex;align-items:baseline;gap:8px;margin-bottom:8px">' +
-          '<div style="font-family:\'Fraunces\',serif;font-style:italic;font-weight:200;font-size:32px;' +
-            'color:rgba(40,85,200,0.85)">' + bolus.total.toFixed(1) + 'U</div>' +
-          '<div style="font-family:\'DM Mono\',monospace;font-size:9px;color:rgba(40,55,50,0.4);line-height:1.5">' +
-            bolus.carbDose.toFixed(1) + 'U carbs (' + totalCarbs.toFixed(0) + 'g ÷ ' + bolus.ic + ')<br>' +
-            (bolus.corrDose > 0 ? bolus.corrDose.toFixed(1) + 'U correction (BG ' + bolus.bg + ' → ' + bolus.tgt + ', ISF ' + bolus.isf + ')<br>' : '') +
-            (bolus.iob > 0.2 ? 'IOB ' + bolus.iob + 'U already active' : '') +
-          '</div>' +
+      '<div style="margin:0 18px 14px;padding:14px;background:rgba(40,85,200,0.05);' +
+        'border-radius:12px;border:1px solid rgba(40,85,200,0.12)">' +
+
+        // Bolus input — blank, user fills in what was actually given
+        '<div style="font-family:\'DM Mono\',monospace;font-size:9px;color:rgba(40,55,50,0.3);' +
+          'letter-spacing:1px;text-transform:uppercase;margin-bottom:8px">insulin given</div>' +
+        '<div style="display:flex;align-items:center;gap:10px;margin-bottom:6px">' +
+          '<input id="in-bolus" type="number" inputmode="decimal" placeholder="—" ' +
+            'min="0" max="20" step="0.5" ' +
+            'style="flex:1;padding:10px 14px;border-radius:9px;' +
+            'border:1px solid rgba(40,85,200,0.2);background:rgba(255,255,255,0.55);' +
+            'font-family:\'Fraunces\',serif;font-size:22px;color:rgba(40,55,50,0.8);' +
+            'outline:none;text-align:center">' +
+          '<span style="font-family:\'DM Mono\',monospace;font-size:13px;color:rgba(40,55,50,0.4)">U</span>' +
         '</div>' +
-        '<div style="display:flex;gap:8px;align-items:center">' +
-          '<div style="font-family:\'DM Mono\',monospace;font-size:9px;color:rgba(40,55,50,0.4);letter-spacing:.5px">' +
-            'bolus now → eat ' + eatStr + ' <span style="opacity:0.5">(~' + eatWait + 'min wait)</span>' +
-          '</div>' +
-        '</div>' +
-        '<div style="margin-top:8px;display:flex;gap:6px">' +
-          '<button onclick="confirmBolus(' + bolus.total + ')" style="flex:1;padding:10px;border-radius:9px;' +
-            'border:1px solid rgba(40,85,200,0.3);background:rgba(40,85,200,0.1);' +
+
+        // Context hint — small, factual, not prescriptive
+        (rangeStr ? '<div style="font-family:\'DM Mono\',monospace;font-size:9px;' +
+          'color:rgba(40,55,50,0.3);line-height:1.6;margin-bottom:10px">' + rangeStr + '</div>' : '') +
+
+        // Eat wait hint
+        '<div style="font-family:\'DM Mono\',monospace;font-size:9px;color:rgba(40,55,50,0.3);' +
+          'margin-bottom:12px">suggested eat time: ' + eatStr + ' (~' + eatWait + 'min after bolus)</div>' +
+
+        // Action buttons
+        '<div style="display:flex;gap:8px">' +
+          // Log carbs + bolus
+          '<button onclick="logMealEntry()" ' +
+            'style="flex:1;padding:11px;border-radius:9px;' +
+            'border:1px solid rgba(40,85,200,0.3);background:rgba(40,85,200,0.08);' +
             'font-family:\'Fraunces\',serif;font-style:italic;font-weight:200;font-size:15px;' +
-            'color:rgba(40,85,200,0.9);cursor:pointer">bolus given ✓</button>' +
-          '<button onclick="adjustBolus(-0.5)" style="padding:10px 12px;border-radius:9px;' +
+            'color:rgba(40,85,200,0.85);cursor:pointer">log to flow</button>' +
+          // Log carbs only (skip bolus)
+          '<button onclick="logMealEntry(true)" ' +
+            'style="padding:11px 14px;border-radius:9px;' +
             'border:1px solid rgba(40,55,50,0.12);background:transparent;' +
-            'font-family:\'DM Mono\',monospace;font-size:12px;color:rgba(40,55,50,0.4);cursor:pointer">−½</button>' +
-          '<button onclick="adjustBolus(0.5)" style="padding:10px 12px;border-radius:9px;' +
-            'border:1px solid rgba(40,55,50,0.12);background:transparent;' +
-            'font-family:\'DM Mono\',monospace;font-size:12px;color:rgba(40,55,50,0.4);cursor:pointer">+½</button>' +
+            'font-family:\'DM Mono\',monospace;font-size:9px;letter-spacing:.5px;' +
+            'text-transform:uppercase;color:rgba(40,55,50,0.35);cursor:pointer">carbs only</button>' +
         '</div>' +
       '</div>';
   }
@@ -2299,6 +2318,66 @@ function loadMealHistory(idx) {
   });
   renderSheet();
 }
+
+function logMealEntry(carbsOnly) {
+  var totalCarbs = _mealItems.reduce(function(s,i){return s+i.carbs;},0);
+  var t = getEntryTime();
+  var u = 0;
+
+  if (!carbsOnly) {
+    var inp = document.getElementById('in-bolus');
+    u = inp ? (parseFloat(inp.value) || 0) : 0;
+  }
+
+  // Log carbs
+  if (totalCarbs > 0) {
+    SESSION.push({t: t, c: totalCarbs, u: 0});
+  }
+
+  // Log insulin separately if given
+  if (u > 0) {
+    SESSION.push({t: t, c: 0, u: u});
+  }
+
+  // Also push to BOLUS_EVENTS for canvas markers
+  if (totalCarbs > 0 || u > 0) {
+    BOLUS_EVENTS.push({t: t, c: totalCarbs, u: u});
+  }
+
+  try { sessionStorage.setItem('rv3', JSON.stringify(SESSION)); } catch(e) {}
+
+  // Save to meal history
+  if (_mealItems.length > 0) {
+    MEAL_HISTORY.unshift({
+      name:       _mealItems.map(function(i){return i.food.name;}).join(', '),
+      totalCarbs: Math.round(totalCarbs),
+      items:      _mealItems.map(function(i){return {name:i.food.name, grams:i.grams, carbs:i.carbs};}),
+      t:          t,
+      u:          u,
+    });
+    saveMealHistory();
+  }
+
+  // Eat reminder if bolus given
+  if (u > 0 && !carbsOnly) {
+    var bg   = dataAt(viewTime).bg;
+    var wait = suggestEatWait(bg);
+    var eatAt = t + wait * 60000;
+    if (_eatReminder) clearTimeout(_eatReminder);
+    _eatReminder = setTimeout(function() {
+      if (document.getElementById('sheet') && document.getElementById('sheet').classList.contains('open')) return;
+      showRiverPebble('time to eat (~' + wait + 'min since bolus)', 'eat');
+      if (navigator.vibrate) navigator.vibrate([200, 100, 200]);
+    }, Math.max(0, eatAt - Date.now()));
+  }
+
+  var parts = [];
+  if (totalCarbs > 0) parts.push(totalCarbs.toFixed(0) + 'g carbs');
+  if (u > 0) parts.push(u.toFixed(1) + 'U insulin');
+  showToast((parts.join(' + ') || 'logged') + '\nadded to the flow');
+  closeSheet();
+}
+
 
 function confirmBolus(units) {
   var t = typeof getEntryTime === 'function' ? getEntryTime() : Date.now();
@@ -3148,7 +3227,7 @@ function buildSetupScreen() {
         never to any third party. This app has no backend.
       </div>
     </div>
-    <div style="text-align:center;margin-top:10px;font-family:'DM Mono',monospace;font-size:8px;color:rgba(40,55,50,0.15);letter-spacing:1px">build 20260326-52</div>
+    <div style="text-align:center;margin-top:10px;font-family:'DM Mono',monospace;font-size:8px;color:rgba(40,55,50,0.15);letter-spacing:1px">build 20260326-53</div>
   </div>
 </div>`;
 }
