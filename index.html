@@ -190,7 +190,7 @@ html,body{width:100%;height:100%;overflow:hidden;background:#c8d8d0;touch-action
   <div class="ripwrap"><div class="rip"></div><div class="rip"></div><div class="rip"></div></div>
   <div class="ltitle">Oskar's River</div>
   <div class="lsub">finding the current</div>
-  <div style="font-family:'DM Mono',monospace;font-size:8px;color:rgba(40,55,50,0.2);margin-top:8px;letter-spacing:1px">build 20260326-51</div>
+  <div style="font-family:'DM Mono',monospace;font-size:8px;color:rgba(40,55,50,0.2);margin-top:8px;letter-spacing:1px">build 20260326-52</div>
 </div>
 
 <canvas id="c"></canvas>
@@ -1196,10 +1196,10 @@ function drawTimeLabels(pal) {
   );
   CX.globalAlpha=0.28;CX.fillStyle='rgba(200,220,240,1)';
   CX.font="300 9px 'DM Mono',monospace";CX.textAlign='right';
-  CX.fillText('build 51',W-10,H-8);
+  CX.fillText('build 52',W-10,H-8);
   CX.globalAlpha=0.28;CX.fillStyle='rgba(200,220,240,1)';
   CX.font="300 9px 'DM Mono',monospace";CX.textAlign='right';
-  CX.fillText('build 51',W-10,H-8);
+  CX.fillText('build 52',W-10,H-8);
   CX.restore();
 }
 
@@ -2153,7 +2153,7 @@ function renderSheet() {
     // Time row
     '<div style="display:flex;align-items:center;gap:8px;padding:0 18px;margin-bottom:14px">' +
       '<span style="font-family:\'DM Mono\',monospace;font-size:9px;color:rgba(40,55,50,0.3);letter-spacing:1px;text-transform:uppercase">when</span>' +
-      '<input id="in-time" type="datetime-local" style="flex:1;padding:8px 10px;border-radius:8px;border:1px solid rgba(40,55,50,0.12);background:rgba(255,255,255,0.55);font-family:\'DM Mono\',monospace;font-size:12px;color:rgba(40,55,50,0.7);outline:none" onchange="renderSheet()">' +
+      '<input id="in-time" type="datetime-local" style="flex:1;padding:8px 10px;border-radius:8px;border:1px solid rgba(40,55,50,0.12);background:rgba(255,255,255,0.55);font-family:\'DM Mono\',monospace;font-size:12px;color:rgba(40,55,50,0.7);outline:none" onchange="onTimeChange(this.value)">' +
       '<button onclick="setTimeNow();renderSheet()" style="padding:6px 10px;border-radius:7px;border:1px solid rgba(40,55,50,0.12);background:rgba(40,55,50,0.05);font-family:\'DM Mono\',monospace;font-size:9px;color:rgba(40,55,50,0.4);cursor:pointer">now</button>' +
     '</div>' +
 
@@ -2849,6 +2849,83 @@ const CGM_SOURCES = {
   }
 };
 
+
+// ── HYPO TREATMENT QUICK-LOG ──────────────────────────────────────
+var HYPO_TREATMENTS = [
+  {id:'glucose_tabs', name:'Glucose tabs', carbs:12, gi:100, desc:'4 tabs = 12g'},
+  {id:'jelly_babies', name:'Jelly babies', carbs:11, gi:80,  desc:'4 babies = 11g'},
+  {id:'apple_juice',  name:'Apple juice',  carbs:13, gi:85,  desc:'125ml carton'},
+  {id:'lucozade',     name:'Lucozade',     carbs:15, gi:95,  desc:'half bottle'},
+  {id:'dextro',       name:'Dextro tabs',  carbs:9,  gi:100, desc:'3 tabs = 9g'},
+];
+
+function openHypoLog() {
+  var ex=document.getElementById('hypo-overlay'); if(ex){ex.remove();return;}
+  var el=document.createElement('div'); el.id='hypo-overlay';
+  el.style.cssText='position:fixed;inset:0;z-index:60;background:rgba(3,5,20,0.9);backdrop-filter:blur(14px);display:flex;flex-direction:column;align-items:center;justify-content:center;padding:24px;transition:opacity .25s;opacity:0';
+  var s='<div style="max-width:360px;width:100%">';
+  s+='<div style="font-family:\'Fraunces\',serif;font-style:italic;font-weight:200;font-size:22px;color:rgba(100,150,255,0.9);text-align:center;margin-bottom:20px">hypo treatment</div>';
+  s+='<div style="display:flex;flex-direction:column;gap:8px">';
+  HYPO_TREATMENTS.forEach(function(t){
+    s+='<button onclick="logHypoTreatment(\''+t.id+'\')" style="display:flex;align-items:center;justify-content:space-between;padding:14px 16px;border-radius:10px;cursor:pointer;background:rgba(40,60,140,0.25);border:1px solid rgba(80,120,220,0.2);width:100%">';
+    s+='<div><div style="font-family:\'Fraunces\',serif;font-weight:200;font-size:16px;color:rgba(160,190,255,0.9)">'+t.name+'</div>';
+    s+='<div style="font-family:\'DM Mono\',monospace;font-size:10px;color:rgba(100,130,200,0.45);margin-top:2px">'+t.desc+'</div></div>';
+    s+='<div style="font-family:\'DM Mono\',monospace;font-size:13px;color:rgba(120,160,255,0.7)">'+t.carbs+'g</div></button>';
+  });
+  s+='</div><div style="text-align:center;margin-top:16px">';
+  s+='<button onclick="closeHypoLog()" style="background:none;border:none;cursor:pointer;font-family:\'DM Mono\',monospace;font-size:9px;letter-spacing:1px;text-transform:uppercase;color:rgba(100,130,200,0.25);padding:8px">cancel</button></div></div>';
+  el.innerHTML=s; document.body.appendChild(el);
+  requestAnimationFrame(function(){el.style.opacity='1';});
+}
+function closeHypoLog(){var el=document.getElementById('hypo-overlay');if(el){el.style.opacity='0';setTimeout(function(){el.remove();},250);}}
+function logHypoTreatment(id){
+  var t=HYPO_TREATMENTS.find(function(x){return x.id===id;});
+  if(!t) return;
+  var now=Date.now();
+  SESSION.push({t:now,c:t.carbs,u:0,note:'hypo:'+id});
+  try{sessionStorage.setItem('rv3',JSON.stringify(SESSION));}catch(e){}
+  BOLUS_EVENTS.push({t:now,c:t.carbs,u:0});
+  closeHypoLog();
+  showToast(t.name+'\n'+t.carbs+'g logged');
+}
+
+// ── CORRECTION QUICK-LOG ──────────────────────────────────────────
+function openCorrectionLog(){
+  var d=dataAt(viewTime);
+  var ISF=(new Date(viewTime).getHours()>=9&&new Date(viewTime).getHours()<15)?7.0:6.0;
+  var sug=Math.max(0,Math.round(((d.bg-6.0)/ISF)*2)/2);
+  var ex=document.getElementById('corr-overlay');if(ex){ex.remove();return;}
+  var el=document.createElement('div');el.id='corr-overlay';
+  el.style.cssText='position:fixed;inset:0;z-index:60;background:rgba(3,5,20,0.9);backdrop-filter:blur(14px);display:flex;flex-direction:column;align-items:center;justify-content:center;padding:24px;transition:opacity .25s;opacity:0';
+  var s='<div style="max-width:320px;width:100%">';
+  s+='<div style="font-family:\'Fraunces\',serif;font-style:italic;font-weight:200;font-size:22px;color:rgba(220,160,60,0.9);text-align:center;margin-bottom:6px">correction</div>';
+  s+='<div style="font-family:\'DM Mono\',monospace;font-size:9px;letter-spacing:1.5px;text-transform:uppercase;color:rgba(180,140,60,0.35);text-align:center;margin-bottom:20px">bg '+d.bg.toFixed(1)+' mmol &middot; isf 1:'+ISF.toFixed(0)+'</div>';
+  s+='<div style="text-align:center;margin-bottom:20px">';
+  s+='<div style="font-family:\'Fraunces\',serif;font-weight:200;font-size:52px;color:rgba(220,170,80,0.95);letter-spacing:-2px">'+sug.toFixed(1)+'</div>';
+  s+='<div style="font-family:\'DM Mono\',monospace;font-size:10px;color:rgba(180,140,60,0.4)">suggested units</div></div>';
+  s+='<div style="display:flex;align-items:center;gap:10px;margin-bottom:20px">';
+  s+='<span style="font-family:\'DM Mono\',monospace;font-size:9px;letter-spacing:1px;text-transform:uppercase;color:rgba(180,140,60,0.4)">actual</span>';
+  s+='<input id="corr-units" type="number" step="0.5" min="0" max="10" value="'+sug.toFixed(1)+'" style="flex:1;padding:10px;border-radius:8px;border:1px solid rgba(180,140,60,0.2);background:rgba(40,30,10,0.4);font-family:\'DM Mono\',monospace;font-size:18px;color:rgba(220,180,80,0.9);text-align:center;outline:none">';
+  s+='<span style="font-family:\'DM Mono\',monospace;font-size:13px;color:rgba(180,140,60,0.5)">U</span></div>';
+  s+='<button onclick="logCorrection()" style="width:100%;padding:14px;border-radius:10px;border:1px solid rgba(180,140,60,0.25);background:rgba(40,30,10,0.5);font-family:\'Fraunces\',serif;font-style:italic;font-weight:200;font-size:17px;color:rgba(220,170,80,0.85);cursor:pointer;margin-bottom:12px">log correction</button>';
+  s+='<div style="text-align:center"><button onclick="closeCorrectionLog()" style="background:none;border:none;cursor:pointer;font-family:\'DM Mono\',monospace;font-size:9px;letter-spacing:1px;text-transform:uppercase;color:rgba(180,140,60,0.25);padding:4px">cancel</button></div></div>';
+  el.innerHTML=s; document.body.appendChild(el);
+  requestAnimationFrame(function(){el.style.opacity='1';});
+}
+function closeCorrectionLog(){var el=document.getElementById('corr-overlay');if(el){el.style.opacity='0';setTimeout(function(){el.remove();},250);}}
+function logCorrection(){
+  var u=parseFloat(document.getElementById('corr-units').value)||0;
+  if(u<=0){closeCorrectionLog();return;}
+  var now=Date.now();
+  SESSION.push({t:now,c:0,u:u});
+  try{sessionStorage.setItem('rv3',JSON.stringify(SESSION));}catch(e){}
+  BOLUS_EVENTS.push({t:now,c:0,u:u});
+  ALERTS.snooze('corr_nudge',90*60000); ALERTS.snooze('corr_high',90*60000);
+  _riverPebble=null;
+  closeCorrectionLog();
+  showToast(u.toFixed(1)+'U correction\nlogged');
+}
+
 // ── CREDENTIAL STORAGE ────────────────────────────────────────────────────
 const CRED_KEY = 'river_cgm_cfg';
 
@@ -3071,7 +3148,7 @@ function buildSetupScreen() {
         never to any third party. This app has no backend.
       </div>
     </div>
-    <div style="text-align:center;margin-top:10px;font-family:'DM Mono',monospace;font-size:8px;color:rgba(40,55,50,0.15);letter-spacing:1px">build 20260326-51</div>
+    <div style="text-align:center;margin-top:10px;font-family:'DM Mono',monospace;font-size:8px;color:rgba(40,55,50,0.15);letter-spacing:1px">build 20260326-52</div>
   </div>
 </div>`;
 }
