@@ -204,7 +204,7 @@ html,body{width:100%;height:100%;overflow:hidden;background:#c8d8d0;touch-action
   <div class="ripwrap"><div class="rip"></div><div class="rip"></div><div class="rip"></div></div>
   <div class="ltitle">Oskar's River</div>
   <div class="lsub">finding the current</div>
-  <div style="font-family:'DM Mono',monospace;font-size:8px;color:rgba(40,55,50,0.2);margin-top:8px;letter-spacing:1px">build 20260326-58</div>
+  <div style="font-family:'DM Mono',monospace;font-size:8px;color:rgba(40,55,50,0.2);margin-top:8px;letter-spacing:1px">build 20260326-59</div>
 </div>
 
 <canvas id="c"></canvas>
@@ -309,6 +309,16 @@ html,body{width:100%;height:100%;overflow:hidden;background:#c8d8d0;touch-action
       <path d="M11 4 L11 14" stroke="rgba(220,160,60,0.7)" stroke-width="1.5" stroke-linecap="round"/>
       <path d="M8 11.5 L11 14 L14 11.5" stroke="rgba(220,160,60,0.7)" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
       <circle cx="11" cy="18" r="1.2" fill="rgba(220,160,60,0.7)"/>
+    </svg>
+  </button>
+
+  <!-- Food library -->
+  <button class="rail-btn" onclick="openFoodManager()" title="food library">
+    <svg viewBox="0 0 22 22" fill="none" xmlns="http://www.w3.org/2000/svg">
+      <rect x="5" y="4" width="12" height="14" rx="2" stroke="rgba(180,210,160,0.65)" stroke-width="1.4"/>
+      <line x1="8" y1="8.5" x2="14" y2="8.5" stroke="rgba(180,210,160,0.55)" stroke-width="1.1" stroke-linecap="round"/>
+      <line x1="8" y1="11" x2="14" y2="11" stroke="rgba(180,210,160,0.55)" stroke-width="1.1" stroke-linecap="round"/>
+      <line x1="8" y1="13.5" x2="11" y2="13.5" stroke="rgba(180,210,160,0.4)" stroke-width="1.1" stroke-linecap="round"/>
     </svg>
   </button>
 
@@ -1258,10 +1268,10 @@ function drawTimeLabels(pal) {
   CX.fillText('now', nowX, H - 35);
   CX.globalAlpha=0.28;CX.fillStyle='rgba(200,220,240,1)';
   CX.font="300 9px 'DM Mono',monospace";CX.textAlign='right';
-  CX.fillText('build 58',W-10,H-8);
+  CX.fillText('build 59',W-10,H-8);
   CX.globalAlpha=0.28;CX.fillStyle='rgba(200,220,240,1)';
   CX.font="300 9px 'DM Mono',monospace";CX.textAlign='right';
-  CX.fillText('build 58',W-10,H-8);
+  CX.fillText('build 59',W-10,H-8);
   CX.restore();
 }
 
@@ -1920,53 +1930,80 @@ function showToast(msg){
 // {name, carbs_per_100g, gi, category}
 // GI: low<55, medium 55-69, high>=70
 const FOOD_DB = [
-  // Breads
-  {name:'Wild bread / sourdough',  c100:42, gi:54, cat:'bread'},
-  {name:'White wrap / tortilla',   c100:52, gi:70, cat:'bread'},
-  {name:'Durum wrap',              c100:52, gi:70, cat:'bread'},
-  {name:'Mini white wrap',         c100:50, gi:70, cat:'bread'},
-  {name:'Wholemeal bread',         c100:41, gi:51, cat:'bread'},
-  {name:'White bread',             c100:49, gi:75, cat:'bread'},
-  {name:'Pitta white',             c100:57, gi:57, cat:'bread'},
-  {name:'Flatbread',               c100:50, gi:62, cat:'bread'},
-  // Cereals / breakfast
-  {name:'Surreal cereal',          c100:38, gi:47, cat:'cereal'},
-  {name:'Shreddies',               c100:72, gi:70, cat:'cereal'},
-  {name:'Weetabix',                c100:71, gi:69, cat:'cereal'},
-  {name:'Porridge oats (made up)', c100:12, gi:55, cat:'cereal'},
-  // Snacks
-  {name:'Quavers',                 c100:57, gi:74, cat:'snack'},
-  {name:'Mini cheddars',           c100:56, gi:65, cat:'snack'},
-  {name:'Amaretti biscuit',        c100:76, gi:65, cat:'snack'},
-  {name:'Digestive biscuit',       c100:64, gi:59, cat:'snack'},
-  {name:'Glucose tabs (each)',     c100:95, gi:100,cat:'hypo', g_each:4},
-  {name:'Lindor dark chocolate',   c100:50, gi:45, cat:'snack', g_each:12},
-  // Fruit
-  {name:'Apple',                   c100:14, gi:36, cat:'fruit'},
-  {name:'Satsuma / clementine',    c100:12, gi:43, cat:'fruit'},
-  {name:'Banana',                  c100:23, gi:51, cat:'fruit'},
-  {name:'Grapes',                  c100:17, gi:59, cat:'fruit'},
-  // Dairy
-  {name:'Yogurt drink Benecol',    c100:11, gi:35, cat:'dairy', g_each:100},
-  {name:'Greek yogurt',            c100:6,  gi:11, cat:'dairy'},
-  {name:'Milk whole',              c100:5,  gi:31, cat:'dairy'},
-  // Protein / low carb
-  {name:'Egg',                     c100:1,  gi:0,  cat:'protein', g_each:60},
-  {name:'Cheese',                  c100:0,  gi:0,  cat:'protein'},
-  {name:'Chicken breast',          c100:0,  gi:0,  cat:'protein'},
-  {name:'Peanut butter',           c100:20, gi:14, cat:'protein'},
-  // Mains
-  {name:'Pasta cooked',            c100:25, gi:49, cat:'main'},
-  {name:'Rice white cooked',       c100:28, gi:73, cat:'main'},
-  {name:'Pizza slice',             c100:30, gi:60, cat:'main', g_each:100},
-  {name:'Fish fingers (each)',     c100:17, gi:38, cat:'main', g_each:30},
-  {name:'Baked beans',             c100:13, gi:40, cat:'main'},
-  // Drinks
-  {name:'Apple juice',             c100:10, gi:44, cat:'drink', g_each:200},
-  {name:'Orange juice',            c100:9,  gi:50, cat:'drink', g_each:200},
-  {name:'Milk 200ml',              c100:5,  gi:31, cat:'drink', g_each:200},
+  // ── Breads ─────────────────────────────────────────────────────
+  {name:'Wild bread / sourdough',  c100:42, gi:54, cat:'bread',   g_serv:40,  note:'1 slice'},
+  {name:'White wrap / tortilla',   c100:52, gi:70, cat:'bread',   g_serv:64,  note:'1 wrap'},
+  {name:'Durum wrap',              c100:52, gi:68, cat:'bread',   g_serv:64,  note:'1 wrap'},
+  {name:'Mini white wrap',         c100:50, gi:68, cat:'bread',   g_serv:35,  note:'1 small wrap'},
+  {name:'Wholemeal bread',         c100:41, gi:51, cat:'bread',   g_serv:40,  note:'1 slice'},
+  {name:'White bread',             c100:49, gi:75, cat:'bread',   g_serv:40,  note:'1 slice'},
+  {name:'Pitta white',             c100:57, gi:57, cat:'bread',   g_serv:65,  note:'1 pitta'},
+  {name:'Flatbread',               c100:50, gi:62, cat:'bread',   g_serv:70,  note:'1 flatbread'},
+  {name:'Bagel white',             c100:51, gi:72, cat:'bread',   g_serv:105, note:'1 bagel'},
+  {name:'Tiger bread roll',        c100:49, gi:71, cat:'bread',   g_serv:70,  note:'1 roll'},
+  // ── Cereals & breakfast ────────────────────────────────────────
+  {name:'Porridge oats dry',       c100:66, gi:55, cat:'cereal',  g_serv:45,  note:'dry weight'},
+  {name:'Porridge made with milk', c100:11, gi:50, cat:'cereal',  g_serv:260, note:'1 bowl made up'},
+  {name:'Surreal cereal',          c100:38, gi:47, cat:'cereal',  g_serv:45,  note:'1 bowl (45g)'},
+  {name:'Shreddies',               c100:72, gi:70, cat:'cereal',  g_serv:40,  note:'small bowl'},
+  {name:'Weetabix',                c100:71, gi:69, cat:'cereal',  g_serv:37,  note:'2 biscuits'},
+  {name:'Cornflakes',              c100:84, gi:81, cat:'cereal',  g_serv:30,  note:'small bowl'},
+  {name:'Rice Krispies',           c100:87, gi:82, cat:'cereal',  g_serv:30,  note:'small bowl'},
+  {name:'Coco Pops',               c100:84, gi:77, cat:'cereal',  g_serv:30,  note:'small bowl'},
+  // ── Snacks ─────────────────────────────────────────────────────
+  {name:'Quavers (pack)',          c100:57, gi:74, cat:'snack',   g_serv:20,  note:'small bag'},
+  {name:'Mini cheddars (pack)',    c100:56, gi:65, cat:'snack',   g_serv:25,  note:'small bag'},
+  {name:'Amaretti biscuit',        c100:76, gi:65, cat:'snack',   g_serv:10,  note:'1 biscuit (10g)', g_each:10},
+  {name:'Digestive biscuit',       c100:64, gi:59, cat:'snack',   g_serv:14,  note:'1 biscuit', g_each:14},
+  {name:'Rich Tea biscuit',        c100:74, gi:55, cat:'snack',   g_serv:10,  note:'1 biscuit', g_each:10},
+  {name:'Oreo',                    c100:71, gi:61, cat:'snack',   g_serv:11,  note:'1 biscuit', g_each:11},
+  {name:'Jelly babies (each)',     c100:76, gi:80, cat:'hypo',    g_serv:10,  note:'1 sweet', g_each:10},
+  {name:'Glucose tabs (each)',     c100:95, gi:100,cat:'hypo',    g_serv:4,   note:'1 tab', g_each:4},
+  {name:'Dextrose tabs (each)',    c100:100,gi:100,cat:'hypo',    g_serv:3,   note:'1 tab', g_each:3},
+  {name:'Lucozade Sport 500ml',    c100:6,  gi:95, cat:'hypo',    g_serv:500, note:'1 bottle'},
+  {name:'Lindor dark choc (ball)', c100:50, gi:45, cat:'snack',   g_serv:12,  note:'1 ball', g_each:12},
+  {name:'Haribo (small bag)',      c100:77, gi:78, cat:'snack',   g_serv:25,  note:'small bag'},
+  {name:'Popcorn salted',          c100:56, gi:72, cat:'snack',   g_serv:20,  note:'small bag'},
+  {name:'Rice cake (plain)',       c100:78, gi:82, cat:'snack',   g_serv:9,   note:'1 cake', g_each:9},
+  // ── Fruit ──────────────────────────────────────────────────────
+  {name:'Apple (medium)',          c100:14, gi:36, cat:'fruit',   g_serv:130, note:'1 medium apple'},
+  {name:'Satsuma / clementine',    c100:12, gi:43, cat:'fruit',   g_serv:70,  note:'1 fruit', g_each:70},
+  {name:'Banana (medium)',         c100:23, gi:51, cat:'fruit',   g_serv:120, note:'1 peeled'},
+  {name:'Grapes (handful)',        c100:17, gi:59, cat:'fruit',   g_serv:80,  note:'small bunch'},
+  {name:'Strawberries',            c100:8,  gi:40, cat:'fruit',   g_serv:80,  note:'handful'},
+  {name:'Mango chunks',            c100:15, gi:51, cat:'fruit',   g_serv:80,  note:'handful'},
+  {name:'Melon (slice)',           c100:8,  gi:65, cat:'fruit',   g_serv:150, note:'1 slice'},
+  {name:'Raisins',                 c100:75, gi:64, cat:'fruit',   g_serv:30,  note:'small box'},
+  // ── Dairy ──────────────────────────────────────────────────────
+  {name:'Yogurt drink Benecol',    c100:11, gi:35, cat:'dairy',   g_serv:100, note:'1 bottle', g_each:100},
+  {name:'Greek yogurt',            c100:6,  gi:11, cat:'dairy',   g_serv:150, note:'small pot'},
+  {name:'Milk whole (200ml)',      c100:5,  gi:31, cat:'dairy',   g_serv:200, note:'1 glass'},
+  {name:'Fromage frais',           c100:8,  gi:28, cat:'dairy',   g_serv:60,  note:'1 pot'},
+  // ── Protein / low-carb ─────────────────────────────────────────
+  {name:'Egg',                     c100:1,  gi:0,  cat:'protein', g_serv:60,  note:'1 large egg', g_each:60},
+  {name:'Cheese (cheddar)',        c100:0,  gi:0,  cat:'protein', g_serv:30,  note:'small piece'},
+  {name:'Chicken breast',          c100:0,  gi:0,  cat:'protein', g_serv:130, note:'1 medium breast'},
+  {name:'Peanut butter',           c100:20, gi:14, cat:'protein', g_serv:20,  note:'1 tbsp'},
+  {name:'Hummus',                  c100:11, gi:6,  cat:'protein', g_serv:50,  note:'2 tbsp'},
+  {name:'Sausage (pork)',          c100:10, gi:28, cat:'protein', g_serv:50,  note:'1 sausage', g_each:50},
+  // ── Mains ──────────────────────────────────────────────────────
+  {name:'Pasta cooked',            c100:25, gi:49, cat:'main',    g_serv:180, note:'child portion cooked'},
+  {name:'Rice white cooked',       c100:28, gi:73, cat:'main',    g_serv:150, note:'child portion cooked'},
+  {name:'Pizza slice (margherita)',c100:30, gi:60, cat:'main',    g_serv:100, note:'1 slice (~100g)'},
+  {name:'Fish fingers (each)',     c100:17, gi:38, cat:'main',    g_serv:30,  note:'1 finger', g_each:30},
+  {name:'Baked beans',             c100:13, gi:40, cat:'main',    g_serv:200, note:'half tin'},
+  {name:'Chips / oven chips',      c100:30, gi:63, cat:'main',    g_serv:120, note:'child portion'},
+  {name:'Mashed potato',           c100:14, gi:74, cat:'main',    g_serv:150, note:'child portion'},
+  {name:'Jacket potato (medium)',  c100:17, gi:80, cat:'main',    g_serv:220, note:'1 medium jacket'},
+  {name:'Bolognese sauce',         c100:7,  gi:30, cat:'main',    g_serv:150, note:'with pasta portion'},
+  {name:'Tomato soup (tin half)',  c100:7,  gi:38, cat:'main',    g_serv:200, note:'1 bowl'},
+  // ── Drinks ─────────────────────────────────────────────────────
+  {name:'Apple juice (carton)',    c100:10, gi:44, cat:'drink',   g_serv:200, note:'1 carton', g_each:200},
+  {name:'Orange juice (glass)',    c100:9,  gi:50, cat:'drink',   g_serv:200, note:'1 glass', g_each:200},
+  {name:'Milk 200ml',              c100:5,  gi:31, cat:'drink',   g_serv:200, note:'1 glass', g_each:200},
+  {name:'Smoothie fruit (small)',  c100:11, gi:52, cat:'drink',   g_serv:150, note:'small bottle'},
+  {name:'Ribena (diluted glass)',  c100:6,  gi:45, cat:'drink',   g_serv:250, note:'diluted glass'},
 ];
-
 // ── MEAL STATE ─────────────────────────────────────────────────────────
 var _mealItems   = [];   // [{food, grams, carbs}]
 var _bolusGiven  = false;
@@ -2249,6 +2286,10 @@ function renderSheet() {
 
     // Time row
     '<div style="display:flex;align-items:center;gap:8px;padding:0 18px;margin-bottom:14px">' +
+      '<div style="margin-bottom:4px">' +
+      '<span id="time-display" style="font-family:\'Fraunces\',serif;font-style:italic;font-weight:200;font-size:16px;color:rgba(40,55,50,0.75)">' + 
+        (function(){ var d=_entryTimeVal?new Date(_entryTimeVal):new Date(); return d.toLocaleDateString('en-GB',{weekday:'short',day:'numeric',month:'short'}) + ' · ' + d.toLocaleTimeString('en-GB',{hour:'2-digit',minute:'2-digit'}); }()) +
+      '</span></div>' +
       '<span style="font-family:\'DM Mono\',monospace;font-size:9px;color:rgba(40,55,50,0.3);letter-spacing:1px;text-transform:uppercase">when</span>' +
       '<input id="in-time" type="datetime-local" style="flex:1;padding:8px 10px;border-radius:8px;border:1px solid rgba(40,55,50,0.12);background:rgba(255,255,255,0.55);font-family:\'DM Mono\',monospace;font-size:12px;color:rgba(40,55,50,0.7);outline:none" onchange="onTimeChange(this.value)">' +
       '<button onclick="setTimeNow()" style="padding:6px 10px;border-radius:7px;border:1px solid rgba(40,55,50,0.12);background:rgba(40,55,50,0.05);font-family:\'DM Mono\',monospace;font-size:9px;color:rgba(40,55,50,0.4);cursor:pointer">now</button>' +
@@ -3423,7 +3464,7 @@ function buildSetupScreen() {
         never to any third party. This app has no backend.
       </div>
     </div>
-    <div style="text-align:center;margin-top:10px;font-family:'DM Mono',monospace;font-size:8px;color:rgba(40,55,50,0.15);letter-spacing:1px">build 20260326-58</div>
+    <div style="text-align:center;margin-top:10px;font-family:'DM Mono',monospace;font-size:8px;color:rgba(40,55,50,0.15);letter-spacing:1px">build 20260326-59</div>
   </div>
 </div>`;
 }
@@ -3700,6 +3741,219 @@ function importData(file) {
     } catch(err) { showToast('import failed'); }
   };
   reader.readAsText(file);
+}
+
+
+// ── FOOD MANAGER ────────────────────────────────────────────────
+function openFoodManager() {
+  var ex = document.getElementById('food-mgr-overlay');
+  if (ex) { ex.remove(); return; }
+
+  var el = document.createElement('div');
+  el.id = 'food-mgr-overlay';
+  el.style.cssText = 'position:fixed;inset:0;z-index:70;background:rgba(3,5,15,0.96);overflow-y:auto;transition:opacity .2s;opacity:0;-webkit-overflow-scrolling:touch';
+
+  renderFoodManager(el);
+  document.body.appendChild(el);
+  requestAnimationFrame(function(){ el.style.opacity='1'; });
+}
+
+function closeFoodManager() {
+  var el = document.getElementById('food-mgr-overlay');
+  if (el) { el.style.opacity='0'; setTimeout(function(){el.remove();}, 200); }
+}
+
+function renderFoodManager(el) {
+  if (!el) el = document.getElementById('food-mgr-overlay');
+  if (!el) return;
+
+  var cats = ['bread','cereal','snack','hypo','fruit','dairy','protein','main','drink','custom'];
+  var catLabels = {bread:'breads',cereal:'cereals',snack:'snacks',hypo:'hypo treats',
+                   fruit:'fruit',dairy:'dairy',protein:'protein',main:'mains',
+                   drink:'drinks',custom:'your foods'};
+
+  var all = FOOD_DB.concat(FOOD_LIBRARY.filter(function(f){
+    return !FOOD_DB.some(function(d){ return d.name===f.name; });
+  }));
+
+  var html = '<div style="max-width:500px;margin:0 auto;padding:20px 16px 60px">';
+
+  // Header
+  html += '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:24px">';
+  html += '<div style="font-family:\'Fraunces\',serif;font-style:italic;font-weight:200;font-size:24px;color:rgba(180,220,200,0.9)">food library</div>';
+  html += '<div style="display:flex;gap:8px">';
+  html += '<button onclick="startAddFood()" style="padding:8px 14px;border-radius:9px;border:1px solid rgba(62,180,120,0.3);background:rgba(62,180,120,0.08);font-family:\'DM Mono\',monospace;font-size:10px;letter-spacing:.5px;color:rgba(62,180,120,0.8);cursor:pointer">+ add food</button>';
+  html += '<button onclick="closeFoodManager()" style="padding:8px 12px;border-radius:9px;border:1px solid rgba(255,255,255,0.1);background:transparent;font-family:\'DM Mono\',monospace;font-size:10px;color:rgba(255,255,255,0.3);cursor:pointer">close</button>';
+  html += '</div></div>';
+
+  // Group by category
+  cats.forEach(function(cat) {
+    var items = all.filter(function(f){ return (f.cat||'custom') === cat; });
+    if (items.length === 0) return;
+
+    html += '<div style="margin-bottom:20px">';
+    html += '<div style="font-family:\'DM Mono\',monospace;font-size:8px;letter-spacing:1.5px;text-transform:uppercase;color:rgba(255,255,255,0.2);margin-bottom:8px;padding-bottom:4px;border-bottom:1px solid rgba(255,255,255,0.06)">' + (catLabels[cat]||cat) + '</div>';
+
+    items.forEach(function(f, i) {
+      var isCustom = FOOD_LIBRARY.some(function(l){ return l.name===f.name; });
+      var gi = f.gi || 0;
+      var giC = gi>=70?'rgba(210,80,40,0.7)':gi>=55?'rgba(200,140,30,0.7)':'rgba(60,160,90,0.7)';
+      var giLabel = gi>=70?'high':gi>=55?'med':'low';
+      var servCarbs = f.g_serv ? (f.c100 * f.g_serv / 100).toFixed(1) : null;
+      var fid = encodeURIComponent(f.name);
+
+      html += '<div id="frow-' + fid + '" style="display:flex;align-items:center;gap:10px;padding:10px 8px;border-radius:10px;margin-bottom:4px;background:rgba(255,255,255,0.03)">';
+
+      // Name + note
+      html += '<div style="flex:1;min-width:0">';
+      html += '<div style="font-family:\'DM Mono\',monospace;font-size:12px;color:rgba(220,230,240,0.85);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">' + f.name + '</div>';
+      if (f.note) html += '<div style="font-family:\'DM Mono\',monospace;font-size:9px;color:rgba(255,255,255,0.2);margin-top:1px">' + f.note + '</div>';
+      html += '</div>';
+
+      // Serving carbs
+      if (servCarbs) {
+        html += '<div style="text-align:center;min-width:36px">';
+        html += '<div style="font-family:\'DM Mono\',monospace;font-size:13px;color:rgba(62,207,160,0.75)">' + servCarbs + 'g</div>';
+        html += '<div style="font-family:\'DM Mono\',monospace;font-size:7px;color:rgba(62,207,160,0.3);letter-spacing:.5px">carbs/serv</div>';
+        html += '</div>';
+      }
+
+      // GI badge
+      html += '<div style="text-align:center;min-width:28px">';
+      html += '<div style="font-family:\'DM Mono\',monospace;font-size:10px;color:' + giC + '">' + (gi||'—') + '</div>';
+      html += '<div style="font-family:\'DM Mono\',monospace;font-size:7px;color:rgba(255,255,255,0.15)">gi</div>';
+      html += '</div>';
+
+      // c100
+      html += '<div style="text-align:center;min-width:32px">';
+      html += '<div style="font-family:\'DM Mono\',monospace;font-size:10px;color:rgba(255,255,255,0.4)">' + f.c100 + '</div>';
+      html += '<div style="font-family:\'DM Mono\',monospace;font-size:7px;color:rgba(255,255,255,0.15)">c/100g</div>';
+      html += '</div>';
+
+      // Edit button
+      html += '<button onclick="editFood(\'' + fid + '\')" style="padding:5px 10px;border-radius:7px;border:1px solid rgba(255,255,255,0.08);background:transparent;font-family:\'DM Mono\',monospace;font-size:9px;color:rgba(255,255,255,0.3);cursor:pointer">edit</button>';
+
+      html += '</div>';
+    });
+    html += '</div>';
+  });
+
+  html += '</div>';
+  el.innerHTML = html;
+}
+
+function startAddFood() {
+  showFoodEditForm(null);
+}
+
+function editFood(encodedName) {
+  var name = decodeURIComponent(encodedName);
+  var all  = FOOD_DB.concat(FOOD_LIBRARY);
+  var f    = all.find(function(x){ return x.name===name; });
+  showFoodEditForm(f);
+}
+
+function showFoodEditForm(f) {
+  var isNew  = !f;
+  var el     = document.getElementById('food-mgr-overlay');
+  if (!el) return;
+
+  var cats = ['bread','cereal','snack','hypo','fruit','dairy','protein','main','drink','custom'];
+  var catOpts = cats.map(function(c){
+    return '<option value="'+c+'"'+(f&&f.cat===c?' selected':'')+'>'+c+'</option>';
+  }).join('');
+
+  var html = '<div style="max-width:420px;margin:0 auto;padding:20px 16px 60px">';
+  html += '<div style="display:flex;align-items:center;gap:12px;margin-bottom:24px">';
+  html += '<button onclick="renderFoodManager()" style="background:none;border:none;cursor:pointer;font-family:\'DM Mono\',monospace;font-size:10px;color:rgba(255,255,255,0.3);padding:4px">← back</button>';
+  html += '<div style="font-family:\'Fraunces\',serif;font-style:italic;font-weight:200;font-size:22px;color:rgba(180,220,200,0.9)">' + (isNew?'new food':'edit food') + '</div>';
+  html += '</div>';
+
+  var fld = function(id, label, val, type, placeholder, note) {
+    var v = (val!==undefined&&val!==null) ? val : '';
+    return '<div style="margin-bottom:14px">' +
+      '<div style="font-family:\'DM Mono\',monospace;font-size:8px;letter-spacing:1px;text-transform:uppercase;color:rgba(255,255,255,0.3);margin-bottom:5px">' + label + (note?'<span style="opacity:0.5;margin-left:6px;font-size:7px">'+note+'</span>':'') + '</div>' +
+      '<input id="fe-'+id+'" type="'+(type||'text')+'" value="'+v+'" placeholder="'+(placeholder||'')+'" ' +
+      'style="width:100%;padding:10px 12px;border-radius:9px;border:1px solid rgba(255,255,255,0.12);background:rgba(255,255,255,0.05);font-family:\'DM Mono\',monospace;font-size:14px;color:rgba(220,230,240,0.9);outline:none;box-sizing:border-box">' +
+      '</div>';
+  };
+
+  html += fld('name',   'food name',        f?f.name:'',     'text',   'e.g. Weetabix');
+  html += '<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">';
+  html += fld('c100',   'carbs per 100g',   f?f.c100:'',     'number', '0–100', 'g');
+  html += fld('gi',     'GI',               f?f.gi:'',       'number', '0–100', '0=none, 100=pure glucose');
+  html += fld('g_serv', 'serving weight',   f?f.g_serv:'',   'number', 'grams', 'typical serving in g');
+  html += fld('g_each', 'weight each',      f?f.g_each:'',   'number', 'grams', 'if sold individually');
+  html += '</div>';
+
+  // Calculated carbs per serving (live)
+  html += '<div id="fe-serv-preview" style="font-family:\'DM Mono\',monospace;font-size:11px;color:rgba(62,207,160,0.6);margin-bottom:14px;min-height:18px"></div>';
+
+  html += '<div style="margin-bottom:14px">';
+  html += '<div style="font-family:\'DM Mono\',monospace;font-size:8px;letter-spacing:1px;text-transform:uppercase;color:rgba(255,255,255,0.3);margin-bottom:5px">category</div>';
+  html += '<select id="fe-cat" style="width:100%;padding:10px 12px;border-radius:9px;border:1px solid rgba(255,255,255,0.12);background:rgba(255,255,255,0.05);font-family:\'DM Mono\',monospace;font-size:13px;color:rgba(220,230,240,0.8);outline:none">' + catOpts + '</select>';
+  html += '</div>';
+
+  html += fld('note', 'note / description', f?f.note:'', 'text', 'e.g. 1 slice, 1 bowl');
+
+  html += '<div style="display:flex;gap:8px;margin-top:24px">';
+  html += '<button onclick="saveFoodEdit(\'' + (f?encodeURIComponent(f.name):'') + '\',' + (isNew?'true':'false') + ')" style="flex:1;padding:12px;border-radius:9px;border:1px solid rgba(62,180,120,0.3);background:rgba(62,180,120,0.08);font-family:\'Fraunces\',serif;font-style:italic;font-weight:200;font-size:16px;color:rgba(62,180,120,0.9);cursor:pointer">save food</button>';
+  if (!isNew) {
+    html += '<button onclick="deleteFood(\'' + (f?encodeURIComponent(f.name):'') + '\')" style="padding:12px 16px;border-radius:9px;border:1px solid rgba(200,60,60,0.2);background:transparent;font-family:\'DM Mono\',monospace;font-size:10px;color:rgba(200,80,80,0.5);cursor:pointer">delete</button>';
+  }
+  html += '<button onclick="renderFoodManager()" style="padding:12px 16px;border-radius:9px;border:1px solid rgba(255,255,255,0.08);background:transparent;font-family:\'DM Mono\',monospace;font-size:10px;color:rgba(255,255,255,0.3);cursor:pointer">cancel</button>';
+  html += '</div>';
+
+  html += '</div>';
+  el.innerHTML = html;
+
+  // Live preview of carbs per serving
+  function updatePreview() {
+    var c = parseFloat(document.getElementById('fe-c100').value)||0;
+    var g = parseFloat(document.getElementById('fe-g_serv').value)||0;
+    var pr = document.getElementById('fe-serv-preview');
+    if (pr) pr.textContent = (c&&g) ? 'carbs per serving: ' + (c*g/100).toFixed(1) + 'g' : '';
+  }
+  var c100el = document.getElementById('fe-c100');
+  var gsel   = document.getElementById('fe-g_serv');
+  if (c100el) c100el.oninput = updatePreview;
+  if (gsel)   gsel.oninput   = updatePreview;
+  updatePreview();
+}
+
+function saveFoodEdit(encodedOldName, isNew) {
+  var name  = (document.getElementById('fe-name').value||'').trim();
+  var c100  = parseFloat(document.getElementById('fe-c100').value)||0;
+  var gi    = parseInt(document.getElementById('fe-gi').value)||0;
+  var gServ = parseFloat(document.getElementById('fe-g_serv').value)||null;
+  var gEach = parseFloat(document.getElementById('fe-g_each').value)||null;
+  var cat   = document.getElementById('fe-cat').value||'custom';
+  var note  = (document.getElementById('fe-note').value||'').trim();
+
+  if (!name || c100 < 0) { showToast('name and carbs required'); return; }
+
+  var f = {name:name, c100:c100, gi:gi, cat:cat};
+  if (gServ) f.g_serv = gServ;
+  if (gEach) f.g_each = gEach;
+  if (note)  f.note   = note;
+
+  // Remove old entry from library
+  var oldName = encodedOldName ? decodeURIComponent(encodedOldName) : null;
+  FOOD_LIBRARY = FOOD_LIBRARY.filter(function(x){ return x.name !== oldName && x.name !== name; });
+
+  // Also remove from FOOD_DB if editing a built-in (it goes into library as override)
+  FOOD_LIBRARY.push(f);
+  saveFoodLibrary();
+  showToast('saved: ' + name);
+  renderFoodManager();
+}
+
+function deleteFood(encodedName) {
+  var name = decodeURIComponent(encodedName);
+  FOOD_LIBRARY = FOOD_LIBRARY.filter(function(x){ return x.name !== name; });
+  saveFoodLibrary();
+  showToast('removed: ' + name);
+  renderFoodManager();
 }
 
 function openSettings() {
