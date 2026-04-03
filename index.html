@@ -41,18 +41,13 @@ html,body{width:100%;height:100%;overflow:hidden;background:#c8d8d0;touch-action
 
 /* Time scrub bar — very thin, bottom */
 #timebar{
-  position:absolute;
-  bottom:max(16px,env(safe-area-inset-bottom,16px));
-  left:20px;right:20px;
+  position:fixed;
+  bottom:max(8px,env(safe-area-inset-bottom,8px));
+  left:70px;right:70px;
+  z-index:15;pointer-events:none;
 }
-#timetrack{height:1px;background:rgba(40,55,50,0.15);border-radius:1px;position:relative}
-#timenow{
-  position:absolute;top:-4px;
-  width:9px;height:9px;border-radius:50%;
-  background:rgba(40,55,50,0.4);
-  transform:translateX(-50%);
-  box-shadow:0 0 0 2px rgba(255,255,255,0.5);
-}
+#timetrack{height:2px;background:rgba(255,255,255,0.06);border-radius:2px;position:relative;}
+#timenow{position:absolute;top:50%;transform:translate(-50%,-50%);width:14px;height:14px;display:flex;align-items:center;justify-content:center;}
 #timelabel{
   font-family:'DM Mono',monospace;font-size:8px;
   color:rgba(40,55,50,0.3);letter-spacing:1px;
@@ -183,6 +178,28 @@ html,body{width:100%;height:100%;overflow:hidden;background:#c8d8d0;touch-action
   transition:opacity .3s;
 }
 #cgm-clock:hover { opacity:1; }
+.rail-btn{
+  display:flex;flex-direction:column;align-items:center;justify-content:center;
+  width:52px;min-height:52px;padding:8px 4px 5px;border-radius:16px;
+  border:1px solid rgba(255,255,255,0.1);
+  background:rgba(8,12,28,0.72);
+  backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px);
+  cursor:pointer;pointer-events:auto;
+  touch-action:manipulation;
+  -webkit-tap-highlight-color:rgba(62,207,160,0.15);
+  transition:transform .12s, background .15s, border-color .15s;
+  gap:3px;
+}
+.rail-btn:active{transform:scale(0.91);background:rgba(8,12,28,0.92);border-color:rgba(255,255,255,0.2)}
+.rail-btn svg{width:22px;height:22px;overflow:visible;flex-shrink:0}
+.rail-label{
+  font-family:'DM Mono',monospace;
+  font-size:7px;letter-spacing:.6px;
+  text-transform:uppercase;
+  color:rgba(200,215,230,0.45);
+  line-height:1;
+  pointer-events:none;
+}
 </style>
 </head>
 <body>
@@ -191,7 +208,7 @@ html,body{width:100%;height:100%;overflow:hidden;background:#c8d8d0;touch-action
   <div class="ripwrap"><div class="rip"></div><div class="rip"></div><div class="rip"></div></div>
   <div class="ltitle">Oskar's River</div>
   <div class="lsub">finding the current</div>
-  <div style="font-family:'DM Mono',monospace;font-size:8px;color:rgba(40,55,50,0.2);margin-top:8px;letter-spacing:1px">build 20260326-63</div>
+  <div style="font-family:'DM Mono',monospace;font-size:8px;color:rgba(40,55,50,0.2);margin-top:8px;letter-spacing:1px">build 20260326-65</div>
 </div>
 
 <canvas id="c"></canvas>
@@ -228,7 +245,16 @@ html,body{width:100%;height:100%;overflow:hidden;background:#c8d8d0;touch-action
   </div>
 
   <div id="timebar">
-    <div id="timetrack"><div id="timenow"></div></div>
+    <div id="timetrack">
+      <div id="timenow">
+        <!-- Clock icon on the scrubber dot -->
+        <svg id="timenow-icon" viewBox="0 0 14 14" fill="none" xmlns="http://www.w3.org/2000/svg">
+          <circle cx="7" cy="7" r="5.5" stroke="rgba(180,210,230,0.7)" stroke-width="1.2"/>
+          <line x1="7" y1="4" x2="7" y2="7" stroke="rgba(180,210,230,0.8)" stroke-width="1" stroke-linecap="round"/>
+          <line x1="7" y1="7" x2="9.2" y2="8.2" stroke="rgba(180,210,230,0.8)" stroke-width="1" stroke-linecap="round"/>
+        </svg>
+      </div>
+    </div>
     <div id="timelabel">—</div>
   </div>
 </div>
@@ -247,10 +273,17 @@ html,body{width:100%;height:100%;overflow:hidden;background:#c8d8d0;touch-action
 </button>
 <div id="live-dot" style="
   position:fixed;
-  bottom:calc(max(20px,env(safe-area-inset-bottom,20px))+44px);
-  left:24px;
-  width:7px;height:7px;border-radius:50%;background:#c87832;opacity:0;
-  transition:background .5s,opacity .5s;z-index:20;pointer-events:none" title="CGM status"></div>
+  bottom:calc(max(20px,env(safe-area-inset-bottom,20px))+50px);
+  left:18px;
+  width:16px;height:16px;opacity:0;
+  transition:opacity .5s;z-index:20;pointer-events:none" title="CGM status">
+  <svg viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg" id="live-dot-svg">
+    <!-- Signal arcs -->
+    <path d="M3.5 11.5 Q8 4 12.5 11.5" stroke="rgba(200,120,50,0.5)" stroke-width="1.2" fill="none" stroke-linecap="round"/>
+    <path d="M5.5 11.5 Q8 6.5 10.5 11.5" stroke="rgba(200,120,50,0.7)" stroke-width="1.2" fill="none" stroke-linecap="round"/>
+    <circle cx="8" cy="11.5" r="1.5" fill="rgba(200,120,50,0.9)"/>
+  </svg>
+</div>
 
 <!-- Return to Now button — appears when scrolled back -->
 <button id="now-btn" onclick="returnToNow()" style="
@@ -271,61 +304,85 @@ html,body{width:100%;height:100%;overflow:hidden;background:#c8d8d0;touch-action
 
 <div id="action-rail" style="
   position:fixed;
-  right:14px;
+  right:10px;
   bottom:calc(max(20px,env(safe-area-inset-bottom,20px)) + 48px);
-  display:flex;flex-direction:column;gap:10px;
+  display:flex;flex-direction:column;gap:6px;
   align-items:center;
   z-index:20;pointer-events:auto">
 
-  <!-- Add to flow (meal/food) -->
-  <button id="logbtn" class="rail-btn" onclick="openSheet()" title="add to flow">
-    <svg viewBox="0 0 22 22" fill="none" xmlns="http://www.w3.org/2000/svg">
-      <path d="M11 4 C11 4 6 10 6 13.5 A5 5 0 0 0 16 13.5 C16 10 11 4 11 4Z"
-        fill="none" stroke="rgba(62,207,160,0.7)" stroke-width="1.5" stroke-linejoin="round"/>
-      <line x1="11" y1="11" x2="11" y2="18" stroke="rgba(62,207,160,0.5)" stroke-width="1.2" stroke-linecap="round"/>
-      <line x1="8" y1="14.5" x2="14" y2="14.5" stroke="rgba(62,207,160,0.5)" stroke-width="1.2" stroke-linecap="round"/>
+  <!-- Add food to flow -->
+  <button id="logbtn" class="rail-btn" onclick="openSheet()" title="add food">
+    <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+      <!-- Fork and knife -->
+      <line x1="7" y1="3" x2="7" y2="10" stroke="#4ecfa8" stroke-width="1.8" stroke-linecap="round"/>
+      <path d="M5 3 C5 3 5 7 7 8 C9 7 9 3 9 3" stroke="#4ecfa8" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+      <line x1="7" y1="10" x2="7" y2="21" stroke="#4ecfa8" stroke-width="1.8" stroke-linecap="round"/>
+      <path d="M14 3 L14 9 Q14 11 16 11 L16 21" stroke="#4ecfa8" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+      <line x1="12" y1="3" x2="12" y2="8" stroke="#4ecfa8" stroke-width="1.4" stroke-linecap="round" stroke-dasharray="1 2"/>
+      <!-- plus badge -->
+      <circle cx="20" cy="6" r="4" fill="#050e0a"/>
+      <line x1="20" y1="4" x2="20" y2="8" stroke="#4ecfa8" stroke-width="1.6" stroke-linecap="round"/>
+      <line x1="18" y1="6" x2="22" y2="6" stroke="#4ecfa8" stroke-width="1.6" stroke-linecap="round"/>
     </svg>
+    <span class="rail-label">food</span>
   </button>
 
   <!-- Hypo treatment -->
   <button class="rail-btn" onclick="openHypoLog()" title="hypo treatment">
-    <svg viewBox="0 0 22 22" fill="none" xmlns="http://www.w3.org/2000/svg">
-      <circle cx="11" cy="11" r="7" stroke="rgba(80,130,220,0.7)" stroke-width="1.5"/>
-      <line x1="11" y1="7.5" x2="11" y2="14.5" stroke="rgba(80,130,220,0.7)" stroke-width="1.5" stroke-linecap="round"/>
-      <line x1="7.5" y1="11" x2="14.5" y2="11" stroke="rgba(80,130,220,0.7)" stroke-width="1.5" stroke-linecap="round"/>
+    <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+      <!-- Sugar cube / glucose tab icon -->
+      <rect x="4" y="8" width="16" height="10" rx="2.5"
+        fill="rgba(80,130,230,0.25)" stroke="#6090e8" stroke-width="1.8"/>
+      <text x="12" y="16.5" font-family="sans-serif" font-size="8"
+        font-weight="700" fill="#6090e8" text-anchor="middle">hypo</text>
+      <!-- down arrow above box -->
+      <path d="M12 3 L12 7" stroke="#6090e8" stroke-width="1.8" stroke-linecap="round"/>
+      <path d="M9.5 5.5 L12 8 L14.5 5.5" stroke="#6090e8" stroke-width="1.8"
+        stroke-linecap="round" stroke-linejoin="round" fill="none"/>
     </svg>
+    <span class="rail-label">hypo</span>
   </button>
 
-  <!-- Correction -->
+  <!-- Correction bolus -->
   <button class="rail-btn" onclick="openCorrectionLog()" title="correction">
-    <svg viewBox="0 0 22 22" fill="none" xmlns="http://www.w3.org/2000/svg">
-      <path d="M11 4 L11 14" stroke="rgba(220,160,60,0.7)" stroke-width="1.5" stroke-linecap="round"/>
-      <path d="M8 11.5 L11 14 L14 11.5" stroke="rgba(220,160,60,0.7)" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
-      <circle cx="11" cy="18" r="1.2" fill="rgba(220,160,60,0.7)"/>
+    <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+      <!-- Syringe body -->
+      <rect x="9" y="6" width="6" height="11" rx="1.5"
+        fill="rgba(220,160,50,0.2)" stroke="#dca030" stroke-width="1.8"/>
+      <!-- Plunger -->
+      <line x1="12" y1="9" x2="12" y2="14" stroke="#dca030" stroke-width="2.5"
+        stroke-linecap="round"/>
+      <!-- Needle -->
+      <line x1="12" y1="17" x2="12" y2="21" stroke="#dca030" stroke-width="1.8"
+        stroke-linecap="round"/>
+      <!-- Needle tip -->
+      <path d="M10.5 19.5 L12 21 L13.5 19.5" stroke="#dca030" stroke-width="1.4"
+        stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+      <!-- Wings -->
+      <line x1="6" y1="10" x2="9" y2="10" stroke="#dca030" stroke-width="1.6" stroke-linecap="round"/>
+      <line x1="15" y1="10" x2="18" y2="10" stroke="#dca030" stroke-width="1.6" stroke-linecap="round"/>
     </svg>
+    <span class="rail-label">correct</span>
   </button>
 
   <!-- Food library -->
   <button class="rail-btn" onclick="openFoodManager()" title="food library">
-    <svg viewBox="0 0 22 22" fill="none" xmlns="http://www.w3.org/2000/svg">
-      <rect x="5" y="4" width="12" height="14" rx="2" stroke="rgba(180,210,160,0.65)" stroke-width="1.4"/>
-      <line x1="8" y1="8.5" x2="14" y2="8.5" stroke="rgba(180,210,160,0.55)" stroke-width="1.1" stroke-linecap="round"/>
-      <line x1="8" y1="11" x2="14" y2="11" stroke="rgba(180,210,160,0.55)" stroke-width="1.1" stroke-linecap="round"/>
-      <line x1="8" y1="13.5" x2="11" y2="13.5" stroke="rgba(180,210,160,0.4)" stroke-width="1.1" stroke-linecap="round"/>
+    <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+      <!-- Open book -->
+      <path d="M12 6 C12 6 8 5 4 6 L4 19 C8 18 12 19 12 19 C12 19 16 18 20 19 L20 6 C16 5 12 6 12 6Z"
+        fill="rgba(160,210,140,0.18)" stroke="#a0d28a" stroke-width="1.8"
+        stroke-linecap="round" stroke-linejoin="round"/>
+      <line x1="12" y1="6" x2="12" y2="19" stroke="#a0d28a" stroke-width="1.4" stroke-linecap="round"/>
+      <!-- Lines on pages -->
+      <line x1="6.5" y1="10" x2="10" y2="9.5" stroke="#a0d28a" stroke-width="1.1" stroke-linecap="round" opacity="0.7"/>
+      <line x1="6.5" y1="13" x2="10" y2="12.5" stroke="#a0d28a" stroke-width="1.1" stroke-linecap="round" opacity="0.7"/>
+      <line x1="14" y1="9.5" x2="17.5" y2="10" stroke="#a0d28a" stroke-width="1.1" stroke-linecap="round" opacity="0.7"/>
+      <line x1="14" y1="12.5" x2="17.5" y2="13" stroke="#a0d28a" stroke-width="1.1" stroke-linecap="round" opacity="0.7"/>
     </svg>
+    <span class="rail-label">library</span>
   </button>
 
-  <!-- Scenarios / demo -->
-  <button class="rail-btn" onclick="openScenarioSelector()" title="demo scenarios" style="opacity:0.45">
-    <svg viewBox="0 0 22 22" fill="none" xmlns="http://www.w3.org/2000/svg">
-      <circle cx="11" cy="11" r="7" stroke="rgba(180,180,210,0.6)" stroke-width="1.2" stroke-dasharray="2 2"/>
-      <path d="M8 11 Q11 7 14 11 Q11 15 8 11Z" fill="rgba(180,180,210,0.4)" stroke="rgba(180,180,210,0.5)" stroke-width="1"/>
-    </svg>
-  </button>
-
-</div
-
-<div id="overlay" onclick="closeSheet()"></div>
+</div>
 
 <div id="sheet">
   <div class="handle"></div>
@@ -1261,10 +1318,10 @@ function drawTimeLabels(pal) {
   CX.fillText('now', nowX, H - 35);
   CX.globalAlpha=0.28;CX.fillStyle='rgba(200,220,240,1)';
   CX.font="300 9px 'DM Mono',monospace";CX.textAlign='right';
-  CX.fillText('build 63',W-10,H-8);
+  CX.fillText('build 65',W-10,H-8);
   CX.globalAlpha=0.28;CX.fillStyle='rgba(200,220,240,1)';
   CX.font="300 9px 'DM Mono',monospace";CX.textAlign='right';
-  CX.fillText('build 63',W-10,H-8);
+  CX.fillText('build 65',W-10,H-8);
   CX.restore();
 }
 
@@ -1647,7 +1704,10 @@ function updateHUD(d, pal) {
   // Timebar scrubber
   var prog = (viewTime - CGM_START) / (CGM_END - CGM_START);
   var tnEl = document.getElementById('timenow');
-  if (tnEl) tnEl.style.left = (Math.max(0, Math.min(1, prog)) * 100).toFixed(1) + '%';
+  var tkEl = document.getElementById('timetrack');
+  var pct  = (Math.max(0, Math.min(1, prog)) * 100).toFixed(1) + '%';
+  if (tnEl) tnEl.style.left = pct;
+  if (tkEl) tkEl.style.setProperty('--prog', pct);
 }
 
 function returnToNow() {
@@ -3457,7 +3517,7 @@ function buildSetupScreen() {
         never to any third party. This app has no backend.
       </div>
     </div>
-    <div style="text-align:center;margin-top:10px;font-family:'DM Mono',monospace;font-size:8px;color:rgba(40,55,50,0.15);letter-spacing:1px">build 20260326-63</div>
+    <div style="text-align:center;margin-top:10px;font-family:'DM Mono',monospace;font-size:8px;color:rgba(40,55,50,0.15);letter-spacing:1px">build 20260326-65</div>
   </div>
 </div>`;
 }
@@ -3680,6 +3740,16 @@ function setLiveStatus(state, text) {
     dot.style.background = colors[state] || colors.connecting;
     dot.title = text || '';
     dot.style.opacity = state === 'live' ? '0' : '0.85';
+  }
+  // Update live-dot SVG colour
+  var dotSvg = document.getElementById('live-dot-svg');
+  if (dotSvg) {
+    var dotCol = state==='live' ? 'rgba(62,207,160,' : state==='connecting' ? 'rgba(200,140,50,' : 'rgba(200,60,60,';
+    dotSvg.querySelectorAll('path,circle').forEach(function(el,i) {
+      var a = i===0?'0.4':i===1?'0.6':'0.9';
+      el.setAttribute('stroke', dotCol+a+')');
+      if (i===2) el.setAttribute('fill', dotCol+'0.9)');
+    });
   }
   // Update CGM clock
   var ageMins = 0;
