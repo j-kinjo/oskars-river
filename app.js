@@ -25,7 +25,12 @@ let CGM_START = HISTORY_RAW[0].t;
 let CGM_END   = HISTORY_RAW[HISTORY_RAW.length-1].t;
 
 function updateCGMBounds() {
-  if (HISTORY_RAW.length === 0) return;
+  if (HISTORY_RAW.length === 0) {
+    // No history yet — set bounds to now so canvas renders
+    CGM_START = Date.now() - 2*3600000;
+    CGM_END   = Date.now();
+    return;
+  }
   CGM_START = HISTORY_RAW[0].t;
   CGM_END   = HISTORY_RAW[HISTORY_RAW.length-1].t;
 }
@@ -63,6 +68,8 @@ function xT(x) { return viewTime + (x-NOW_X*W)/W*viewSpan; }
 
 // ── HISTORY LOOKUP ───────────────────────────────────────────
 function histAt(t) {
+  const EMPTY = { bg: 7.0, iob: 0, cob: 0, pen: 1 };
+  if (HISTORY_RAW.length === 0) return EMPTY;
   if (t <= HISTORY_RAW[0].t) return HISTORY_RAW[0];
   if (t >= HISTORY_RAW[HISTORY_RAW.length-1].t) return HISTORY_RAW[HISTORY_RAW.length-1];
   let lo=0, hi=HISTORY_RAW.length-1;
@@ -223,6 +230,7 @@ const boatYfromBG = bgToY;
 
 // ── BG HISTORY TRACE — the life-line ──────────────────────────────────
 function drawBGTrail(pal) {
+  if (HISTORY_RAW.length === 0) return; // no data yet
   const leftT = Math.max(CGM_START, xT(0));
   const n     = Math.min(500, Math.max(120, Math.floor(W/1.2)));
   const pts   = [];
@@ -3252,7 +3260,7 @@ function buildSetupScreen() {
         never to any third party. This app has no backend.
       </div>
     </div>
-    <div style="text-align:center;margin-top:10px;font-family:'DM Mono',monospace;font-size:8px;color:rgba(40,55,50,0.15);letter-spacing:1px">build 20260326-71</div>
+    <div style="text-align:center;margin-top:10px;font-family:'DM Mono',monospace;font-size:8px;color:rgba(40,55,50,0.15);letter-spacing:1px">build 20260326-72</div>
   </div>
 </div>`;
 }
@@ -3780,7 +3788,10 @@ window.addEventListener('load',()=>{
   // Load any persisted CGM history from previous sessions
   loadPersistedReadings();
 
-  viewTime=CGM_END; viewSpan=2*3600000; // fixed 2h window
+  // If no embedded history, start at now
+  if (HISTORY_RAW.length === 0) updateCGMBounds();
+  viewTime = CGM_END || Date.now();
+  viewSpan = 2*3600000;
   try{
     SESSION=JSON.parse(localStorage.getItem('river_session')||'[]'); SESSION=SESSION.filter(s=>(Date.now()-s.t)<7*86400000);
   }catch(e){}
