@@ -1244,6 +1244,7 @@ function updateHUD(d, pal) {
 }
 
 function returnToNow() {
+  _isAtNow = true;
   viewTime = HISTORY_RAW[HISTORY_RAW.length-1].t;
   viewSpan = 2 * 3600000; // fixed 2h
   document.getElementById('now-btn').style.display='none';
@@ -1253,6 +1254,7 @@ function returnToNow() {
 let _isAtNow = true;
 
 function frame(ts) {
+  try {
   const dt=Math.min((ts-t0)/1000, 0.05); t0=ts;
   phi+=0.4*dt;
   treeScrollX+=10*dt; // river current speed
@@ -1318,6 +1320,10 @@ function frame(ts) {
   updateHUD(d, pal);
 
   requestAnimationFrame(frame);
+  } catch(e) {
+    console.error('[river] frame error:', e);
+    requestAnimationFrame(frame); // keep running even if a frame errors
+  }
 }
 
 // ── TOUCH / MOUSE ────────────────────────────────────────────
@@ -1335,7 +1341,7 @@ CV.addEventListener('touchmove',e=>{
   if(e.target.closest&&e.target.closest('#sheet,#action-rail,.rail-btn,#food-mgr-overlay,#hypo-overlay,#corr-overlay,#food-add-overlay')) return;
   e.preventDefault();
   if(drag.on&&e.touches.length===1) {
-    viewTime=Math.max(CGM_START,Math.min(CGM_END,drag.t0-(e.touches[0].clientX-drag.x0)*(viewSpan/W)));
+    viewTime=Math.max(CGM_START,Math.min(CGM_END,drag.t0-(e.touches[0].clientX-drag.x0)*(viewSpan/W))); _isAtNow=false;
   } else if(pinch.on&&e.touches.length===2) {
     const dx=e.touches[0].clientX-e.touches[1].clientX;
     const dy=e.touches[0].clientY-e.touches[1].clientY;
@@ -3065,6 +3071,9 @@ async function startLivePolling(sourceId, cfg) {
       // Merge in the fresh backfill data (fills gaps)
       ingestReadings(recent);
       setLiveStatus('live', `${recent.length} readings loaded`);
+      // Snap to now after first backfill
+      viewTime = CGM_END;
+      _isAtNow = true;
     }
   } catch(e) {
     setLiveStatus('error', e.message);
@@ -3141,8 +3150,13 @@ function ingestReadings(readings) {
   }
   HISTORY_RAW.sort((a,b) => a.t - b.t);
   updateCGMBounds();
-  viewTime = CGM_END;
-  if (changed) persistReadings(); // save whenever we get new data
+  // Only snap to now if user is already at now (within 10 min),
+  // or if this is the first real data coming in
+  const wasAtNow = _isAtNow || (CGM_END - viewTime) < 10 * 60000;
+  if (wasAtNow || viewTime < CGM_START) {
+    viewTime = CGM_END;
+  }
+  if (changed) persistReadings();
 }
 
 function formatAge(t) {
@@ -3238,7 +3252,7 @@ function buildSetupScreen() {
         never to any third party. This app has no backend.
       </div>
     </div>
-    <div style="text-align:center;margin-top:10px;font-family:'DM Mono',monospace;font-size:8px;color:rgba(40,55,50,0.15);letter-spacing:1px">build 20260326-70</div>
+    <div style="text-align:center;margin-top:10px;font-family:'DM Mono',monospace;font-size:8px;color:rgba(40,55,50,0.15);letter-spacing:1px">build 20260326-71</div>
   </div>
 </div>`;
 }
