@@ -2692,11 +2692,13 @@ const CGM_SOURCES = {
       const proxied = this._proxy + '/?url=' + encodeURIComponent(url);
       const headers = {
         'Content-Type':    'application/json',
+        'Accept':          'application/json',
         'product':         'llu.ios',
-        'version':         '4.7.0',
+        'version':         '4.12.0',
         'Accept-Encoding': 'gzip, deflate, br',
         'Pragma':          'no-cache',
         'Cache-Control':   'no-cache',
+        'User-Agent':      'LibreLinkUp/4.12.0 CFNetwork/1492.0.1 Darwin/23.3.0',
       };
       if (token) headers['Authorization'] = 'Bearer ' + token;
 
@@ -2707,6 +2709,20 @@ const CGM_SOURCES = {
           headers,
           body: body ? JSON.stringify(body) : undefined,
         });
+        // If iOS headers get 403 on login, retry with Android headers
+        if (r.status === 403 && path.includes('/auth/login')) {
+          const hdrs2 = Object.assign({}, headers, {
+            'product':    'llu.android',
+            'version':    '4.12.0',
+            'User-Agent': 'LibreLinkUp/4.12.0 (Android)',
+          });
+          const r2 = await fetch(proxied, {
+            method,
+            headers: hdrs2,
+            body: body ? JSON.stringify(body) : undefined,
+          });
+          if (r2.ok || r2.status !== 403) r = r2;
+        }
       } catch(netErr) {
         // Network-level failure — proxy unreachable or CORS
         const isPost = method === 'POST';
@@ -2730,7 +2746,20 @@ const CGM_SOURCES = {
         } catch(e) { detail = txt.slice(0, 120); }
 
         if (r.status === 401) throw new Error('Wrong email or password for LibreLinkUp follower account');
-        if (r.status === 403) throw new Error('LibreLinkUp account not authorised — check you accepted the follower invitation');
+        if (r.status === 403) {
+          // 403 with correct credentials usually means:
+          // 1. Terms not accepted in LibreLinkUp app
+          // 2. No active follower connection
+          // 3. Account exists but hasn't completed LibreLinkUp setup
+          throw new Error(
+            'Account not authorised (403). ' +
+            'Steps to fix: ' +
+            '(1) Open the LibreLinkUp app and check you can see readings there. ' +
+            '(2) Accept any pending terms or notifications in the app. ' +
+            '(3) In LibreLink → Connected Apps → LibreLinkUp, confirm the connection is active. ' +
+            '(4) Try logging out and back into the LibreLinkUp app.'
+          );
+        }
         if (r.status === 429) throw new Error('Too many requests — wait a few minutes and try again');
         if (r.status === 0)   throw new Error('Proxy blocked the request — the Cloudflare Worker needs updating to support POST');
         throw new Error('LibreLinkUp error ' + r.status + (detail ? ': ' + detail : ''));
@@ -3209,7 +3238,7 @@ function buildSetupScreen() {
         never to any third party. This app has no backend.
       </div>
     </div>
-    <div style="text-align:center;margin-top:10px;font-family:'DM Mono',monospace;font-size:8px;color:rgba(40,55,50,0.15);letter-spacing:1px">build 20260326-69</div>
+    <div style="text-align:center;margin-top:10px;font-family:'DM Mono',monospace;font-size:8px;color:rgba(40,55,50,0.15);letter-spacing:1px">build 20260326-70</div>
   </div>
 </div>`;
 }
