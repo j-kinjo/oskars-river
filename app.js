@@ -2746,26 +2746,66 @@ const CGM_SOURCES = {
         email:    cfg.email,
         password: cfg.password,
       });
+
+      // Log full response to console for debugging
+      console.log('[libre3] login response status:', data.status);
+      console.log('[libre3] login response keys:', Object.keys(data.data || {}));
+
+      // Region redirect
       if (data.data?.redirect) {
-        // Abbott is redirecting to a different region
         const redirect = data.data.region;
+        console.log('[libre3] Redirected to region:', redirect);
         if (redirect && redirect !== cfg.region) {
           cfg.region = redirect;
-          console.log('[libre3] Redirected to region:', redirect);
           return this._login(cfg);
         }
       }
-      // Some regions return a different status for wrong credentials
+
+      // Terms and conditions not accepted
+      if (data.data?.step?.type === 'tou' || data.data?.step?.type === 'legal') {
+        throw new Error(
+          'You need to accept LibreLinkUp terms in the app first. ' +
+          'Open LibreLinkUp on your phone, accept the terms, then try again.'
+        );
+      }
+
+      // Wrong credentials
       if (data.status === 2 || data.status === 4) {
-        throw new Error('Wrong email or password — use your LibreLinkUp follower account credentials, not your LibreLink / LibreView account');
+        throw new Error(
+          'Wrong email or password. ' +
+          'Use your LibreLinkUp follower account — the one that received the invitation email. ' +
+          'This is NOT the same as your LibreLink or LibreView login.'
+        );
       }
+
+      // Account not found or other auth error
       if (data.status !== 0) {
-        throw new Error('LibreLinkUp login failed (status ' + data.status + ') — check your credentials and region');
+        // Try to extract a message from the response
+        const msg = data.error?.message || data.message || '';
+        throw new Error(
+          'LibreLinkUp login failed (code ' + data.status + ')' +
+          (msg ? ': ' + msg : '') +
+          '. Check your email, password, and region.'
+        );
       }
+
+      // Check for token
       const token = data.data?.authTicket?.token;
-      if (!token) throw new Error('No auth token in response — try again');
+      if (!token) {
+        // Log the actual response data to help debug
+        const dataStr = JSON.stringify(data.data || {}).slice(0, 200);
+        console.warn('[libre3] No token in response. data:', dataStr);
+        throw new Error(
+          'LibreLinkUp connected but returned no session token. ' +
+          'Response: ' + dataStr + '. ' +
+          'This may mean you need to accept terms in the LibreLinkUp app, ' +
+          'or the account needs to complete setup.'
+        );
+      }
+
       this._token = token;
-      this._tokenExpiry = Date.now() + 50 * 60000; // tokens last ~1h
+      this._tokenExpiry = Date.now() + 50 * 60000;
+      console.log('[libre3] Login successful, token expires in 50min');
       return token;
     },
 
@@ -3159,7 +3199,7 @@ function buildSetupScreen() {
         never to any third party. This app has no backend.
       </div>
     </div>
-    <div style="text-align:center;margin-top:10px;font-family:'DM Mono',monospace;font-size:8px;color:rgba(40,55,50,0.15);letter-spacing:1px">build 20260326-67</div>
+    <div style="text-align:center;margin-top:10px;font-family:'DM Mono',monospace;font-size:8px;color:rgba(40,55,50,0.15);letter-spacing:1px">build 20260326-68</div>
   </div>
 </div>`;
 }
