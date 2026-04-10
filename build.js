@@ -1,21 +1,16 @@
 #!/usr/bin/env node
-/**
- * Oskar's River — build script
- * Assembles dist/index.html from app.js + style.css + data files.
- * Does NOT depend on index.template.html having specific placeholder strings —
- * it rebuilds the HTML shell from scratch to be safe.
- */
+// Oskar's River — build script
+// Wraps app.js + style.css + data into dist/index.html
+// Does NOT depend on index.template.html
 
 const fs   = require('fs');
 const path = require('path');
 const ROOT = __dirname;
 const DIST = path.join(ROOT, 'dist');
 
-// Check required files
 for (const f of ['app.js', 'style.css', 'foods.json']) {
   if (!fs.existsSync(path.join(ROOT, f))) {
-    console.error(`ERROR: missing ${f} at repo root`);
-    process.exit(1);
+    console.error(`ERROR: missing ${f}`); process.exit(1);
   }
 }
 
@@ -31,55 +26,67 @@ const buildNum  = process.env.BUILD_NUMBER || process.env.GITHUB_RUN_NUMBER || '
 const buildDate = new Date().toISOString().slice(0,10).replace(/-/g,'');
 const buildId   = `${buildDate}-${buildNum}`;
 
-// Stamp build number everywhere it appears
 let js = appJs;
-js = js.replace(/build 2026\d{4}-\d+/g, `build ${buildId}`);
-js = js.replace(/fillText\('build [^']+'/g, `fillText('build ${buildId}'`);
-
-// Inject data globals
+// app.js uses __BUILD_ID__ as a placeholder token
+js = js.replace(/__BUILD_ID__/g, `build ${buildId}`);
 js = `window.__RIVER_HISTORY__ = ${history};\nwindow.__RIVER_FOODS__ = ${foods};\n\n` + js;
 
-// Read the template if it exists and has placeholders, otherwise use a minimal shell
-let html;
+// Read favicon from index.template.html if it exists, otherwise use default
+let favicon = `<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><circle cx='16' cy='16' r='15' fill='%23050912' stroke='%233ecfa0' stroke-width='1.5'/><path d='M8 22 Q10 16 16 16 Q22 16 24 10' fill='none' stroke='%233ecfa0' stroke-width='2' stroke-linecap='round'/><circle cx='16' cy='16' r='2.5' fill='%233ecfa0'/></svg>" type="image/svg+xml">`;
+
+// Try to get the meta/link tags from the template
 const tmplPath = path.join(ROOT, 'index.template.html');
+let extraHead = '';
 if (fs.existsSync(tmplPath)) {
-  html = fs.readFileSync(tmplPath, 'utf8');
-  // Only use template if it has the expected placeholders
-  const hasStylePlaceholder  = html.includes('href="style.css"');
-  const hasScriptPlaceholder = html.includes('src="app.bundle.js"');
-  if (hasStylePlaceholder && hasScriptPlaceholder) {
-    html = html.replace('<link rel="stylesheet" href="style.css">', `<style>\n${css}\n</style>`);
-    html = html.replace('<script src="app.bundle.js"></script>', `<script>\n${js}\n</script>`);
-    console.log('  Used index.template.html');
-  } else if (html.includes('</style>') && html.includes('</script>')) {
-    // Template already has inline content — inject into it by replacing the script block
-    html = html.replace(/<style>[\s\S]*?<\/style>/, `<style>\n${css}\n</style>`);
-    html = html.replace(/<script>[\s\S]*?<\/script>/, `<script>\n${js}\n</script>`);
-    console.log('  Used index.template.html (inline replacement)');
-  } else {
-    console.log('  Template found but no recognisable placeholders — rebuilding shell');
-    html = null;
+  const tmpl = fs.readFileSync(tmplPath, 'utf8');
+  // Extract everything between <head> and </head> except style/script
+  const headMatch = tmpl.match(/<head>([\s\S]*?)<\/head>/);
+  if (headMatch) {
+    extraHead = headMatch[1]
+      .replace(/<link[^>]*stylesheet[^>]*href="style\.css"[^>]*>/g, '')
+      .replace(/<script[^>]*app\.bundle\.js[^>]*><\/script>/g, '')
+      .replace(/<style>[\s\S]*?<\/style>/g, '')
+      .replace(/<script>[\s\S]*?<\/script>/g, '')
+      .replace(/<title>[^<]*<\/title>/g, '')
+      .trim();
   }
 }
 
-// Fallback: extract shell from template or build minimal one
-if (!html && fs.existsSync(tmplPath)) {
-  const raw = fs.readFileSync(tmplPath, 'utf8');
-  // Strip existing style and script blocks, inject fresh ones
-  html = raw
-    .replace(/<style>[\s\S]*?<\/style>/g, `<style>\n${css}\n</style>`)
-    .replace(/<script[^>]*>[\s\S]*?<\/script>/g, `<script>\n${js}\n</script>`);
-  console.log('  Rebuilt from template (stripped old inline content)');
+// Extract body content from template (without script/style)
+let bodyContent = '';
+if (fs.existsSync(tmplPath)) {
+  const tmpl = fs.readFileSync(tmplPath, 'utf8');
+  const bodyMatch = tmpl.match(/<body[^>]*>([\s\S]*?)<\/body>/);
+  if (bodyMatch) {
+    bodyContent = bodyMatch[1]
+      .replace(/<script[^>]*>[\s\S]*?<\/script>/g, '')
+      .trim();
+  }
 }
 
-if (!html) {
-  console.error('ERROR: could not produce output HTML');
-  process.exit(1);
-}
+const html = `<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<title>Oskar's River</title>
+${extraHead}
+<style>
+${css}
+</style>
+</head>
+<body>
+${bodyContent}
+<script>
+${js}
+</script>
+</body>
+</html>`;
 
 fs.writeFileSync(path.join(DIST, 'index.html'), html);
-const kb = (html.length / 1024).toFixed(0);
+const kb = (html.length/1024).toFixed(0);
 console.log(`✓ dist/index.html: ${kb}KB  [build ${buildId}]`);
-console.log(`  libre3: ${html.includes('libre3') ? 'YES' : 'NO'}`);
-console.log(`  build stamp: ${(html.match(/build 2026[\d-]+/) || ['missing'])[0]}`);
-console.log(`Build complete → dist/index.html`);
+console.log(`  history: ${JSON.parse(history).length} entries`);
+console.log(`  foods: ${JSON.parse(foods).length} items`);
+console.log(`  fixes present: histAt=${js.includes('EMPTY = { bg: 7.0')}, updateHUD=${js.includes("isNaN(d.bg)")}`);
+console.log(`Build complete`);
