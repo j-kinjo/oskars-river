@@ -1,0 +1,539 @@
+[
+  {
+    "name": "Wild bread / sourdough",
+    "c100": 42,
+    "gi": 54,
+    "cat": "bread",
+    "g_serv": 40,
+    "note": "1 slice"
+  },
+  {
+    "name": "White wrap / tortilla",
+    "c100": 52,
+    "gi": 70,
+    "cat": "bread",
+    "g_serv": 64,
+    "note": "1 wrap"
+  },
+  {
+    "name": "Durum wrap",
+    "c100": 52,
+    "gi": 68,
+    "cat": "bread",
+    "g_serv": 64,
+    "note": "1 wrap"
+  },
+  {
+    "name": "Mini white wrap",
+    "c100": 50,
+    "gi": 68,
+    "cat": "bread",
+    "g_serv": 35,
+    "note": "1 small wrap"
+  },
+  {
+    "name": "Wholemeal bread",
+    "c100": 41,
+    "gi": 51,
+    "cat": "bread",
+    "g_serv": 40,
+    "note": "1 slice"
+  },
+  {
+    "name": "White bread",
+    "c100": 49,
+    "gi": 75,
+    "cat": "bread",
+    "g_serv": 40,
+    "note": "1 slice"
+  },
+  {
+    "name": "Pitta white",
+    "c100": 57,
+    "gi": 57,
+    "cat": "bread",
+    "g_serv": 65,
+    "note": "1 pitta"
+  },
+  {
+    "name": "Flatbread",
+    "c100": 50,
+    "gi": 62,
+    "cat": "bread",
+    "g_serv": 70,
+    "note": "1 flatbread"
+  },
+  {
+    "name": "Bagel white",
+    "c100": 51,
+    "gi": 72,
+    "cat": "bread",
+    "g_serv": 105,
+    "note": "1 bagel"
+  },
+  {
+    "name": "Tiger bread roll",
+    "c100": 49,
+    "gi": 71,
+    "cat": "bread",
+    "g_serv": 70,
+    "note": "1 roll"
+  },
+  {
+    "name": "Porridge oats dry",
+    "c100": 66,
+    "gi": 55,
+    "cat": "cereal",
+    "g_serv": 45,
+    "note": "dry weight"
+  },
+  {
+    "name": "Porridge made with milk",
+    "c100": 11,
+    "gi": 50,
+    "cat": "cereal",
+    "g_serv": 260,
+    "note": "1 bowl made up"
+  },
+  {
+    "name": "Surreal cereal",
+    "c100": 38,
+    "gi": 47,
+    "cat": "cereal",
+    "g_serv": 45,
+    "note": "1 bowl (45g)"
+  },
+  {
+    "name": "Shreddies",
+    "c100": 72,
+    "gi": 70,
+    "cat": "cereal",
+    "g_serv": 40,
+    "note": "small bowl"
+  },
+  {
+    "name": "Weetabix",
+    "c100": 71,
+    "gi": 69,
+    "cat": "cereal",
+    "g_serv": 37,
+    "note": "2 biscuits"
+  },
+  {
+    "name": "Cornflakes",
+    "c100": 84,
+    "gi": 81,
+    "cat": "cereal",
+    "g_serv": 30,
+    "note": "small bowl"
+  },
+  {
+    "name": "Rice Krispies",
+    "c100": 87,
+    "gi": 82,
+    "cat": "cereal",
+    "g_serv": 30,
+    "note": "small bowl"
+  },
+  {
+    "name": "Coco Pops",
+    "c100": 84,
+    "gi": 77,
+    "cat": "cereal",
+    "g_serv": 30,
+    "note": "small bowl"
+  },
+  {
+    "name": "Quavers (pack)",
+    "c100": 57,
+    "gi": 74,
+    "cat": "snack",
+    "g_serv": 20,
+    "note": "small bag"
+  },
+  {
+    "name": "Mini cheddars (pack)",
+    "c100": 56,
+    "gi": 65,
+    "cat": "snack",
+    "g_serv": 25,
+    "note": "small bag"
+  },
+  {
+    "name": "Amaretti biscuit",
+    "c100": 76,
+    "gi": 65,
+    "cat": "snack",
+    "g_serv": 10,
+    "note": "1 biscuit (10g)",
+    "g_each": 10
+  },
+  {
+    "name": "Digestive biscuit",
+    "c100": 64,
+    "gi": 59,
+    "cat": "snack",
+    "g_serv": 14,
+    "note": "1 biscuit",
+    "g_each": 14
+  },
+  {
+    "name": "Rich Tea biscuit",
+    "c100": 74,
+    "gi": 55,
+    "cat": "snack",
+    "g_serv": 10,
+    "note": "1 biscuit",
+    "g_each": 10
+  },
+  {
+    "name": "Oreo",
+    "c100": 71,
+    "gi": 61,
+    "cat": "snack",
+    "g_serv": 11,
+    "note": "1 biscuit",
+    "g_each": 11
+  },
+  {
+    "name": "Jelly babies (each)",
+    "c100": 76,
+    "gi": 80,
+    "cat": "hypo",
+    "g_serv": 10,
+    "note": "1 sweet",
+    "g_each": 10
+  },
+  {
+    "name": "Glucose tabs (each)",
+    "c100": 95,
+    "gi": 100,
+    "cat": "hypo",
+    "g_serv": 4,
+    "note": "1 tab",
+    "g_each": 4
+  },
+  {
+    "name": "Dextrose tabs (each)",
+    "c100": 100,
+    "gi": 100,
+    "cat": "hypo",
+    "g_serv": 3,
+    "note": "1 tab",
+    "g_each": 3
+  },
+  {
+    "name": "Lucozade Sport 500ml",
+    "c100": 6,
+    "gi": 95,
+    "cat": "hypo",
+    "g_serv": 500,
+    "note": "1 bottle"
+  },
+  {
+    "name": "Lindor dark choc (ball)",
+    "c100": 50,
+    "gi": 45,
+    "cat": "snack",
+    "g_serv": 12,
+    "note": "1 ball",
+    "g_each": 12
+  },
+  {
+    "name": "Haribo (small bag)",
+    "c100": 77,
+    "gi": 78,
+    "cat": "snack",
+    "g_serv": 25,
+    "note": "small bag"
+  },
+  {
+    "name": "Popcorn salted",
+    "c100": 56,
+    "gi": 72,
+    "cat": "snack",
+    "g_serv": 20,
+    "note": "small bag"
+  },
+  {
+    "name": "Rice cake (plain)",
+    "c100": 78,
+    "gi": 82,
+    "cat": "snack",
+    "g_serv": 9,
+    "note": "1 cake",
+    "g_each": 9
+  },
+  {
+    "name": "Apple (medium)",
+    "c100": 14,
+    "gi": 36,
+    "cat": "fruit",
+    "g_serv": 130,
+    "note": "1 medium apple"
+  },
+  {
+    "name": "Satsuma / clementine",
+    "c100": 12,
+    "gi": 43,
+    "cat": "fruit",
+    "g_serv": 70,
+    "note": "1 fruit",
+    "g_each": 70
+  },
+  {
+    "name": "Banana (medium)",
+    "c100": 23,
+    "gi": 51,
+    "cat": "fruit",
+    "g_serv": 120,
+    "note": "1 peeled"
+  },
+  {
+    "name": "Grapes (handful)",
+    "c100": 17,
+    "gi": 59,
+    "cat": "fruit",
+    "g_serv": 80,
+    "note": "small bunch"
+  },
+  {
+    "name": "Strawberries",
+    "c100": 8,
+    "gi": 40,
+    "cat": "fruit",
+    "g_serv": 80,
+    "note": "handful"
+  },
+  {
+    "name": "Mango chunks",
+    "c100": 15,
+    "gi": 51,
+    "cat": "fruit",
+    "g_serv": 80,
+    "note": "handful"
+  },
+  {
+    "name": "Melon (slice)",
+    "c100": 8,
+    "gi": 65,
+    "cat": "fruit",
+    "g_serv": 150,
+    "note": "1 slice"
+  },
+  {
+    "name": "Raisins",
+    "c100": 75,
+    "gi": 64,
+    "cat": "fruit",
+    "g_serv": 30,
+    "note": "small box"
+  },
+  {
+    "name": "Yogurt drink Benecol",
+    "c100": 11,
+    "gi": 35,
+    "cat": "dairy",
+    "g_serv": 100,
+    "note": "1 bottle",
+    "g_each": 100
+  },
+  {
+    "name": "Greek yogurt",
+    "c100": 6,
+    "gi": 11,
+    "cat": "dairy",
+    "g_serv": 150,
+    "note": "small pot"
+  },
+  {
+    "name": "Milk whole (200ml)",
+    "c100": 5,
+    "gi": 31,
+    "cat": "dairy",
+    "g_serv": 200,
+    "note": "1 glass"
+  },
+  {
+    "name": "Fromage frais",
+    "c100": 8,
+    "gi": 28,
+    "cat": "dairy",
+    "g_serv": 60,
+    "note": "1 pot"
+  },
+  {
+    "name": "Egg",
+    "c100": 1,
+    "gi": 0,
+    "cat": "protein",
+    "g_serv": 60,
+    "note": "1 large egg",
+    "g_each": 60
+  },
+  {
+    "name": "Cheese (cheddar)",
+    "c100": 0,
+    "gi": 0,
+    "cat": "protein",
+    "g_serv": 30,
+    "note": "small piece"
+  },
+  {
+    "name": "Chicken breast",
+    "c100": 0,
+    "gi": 0,
+    "cat": "protein",
+    "g_serv": 130,
+    "note": "1 medium breast"
+  },
+  {
+    "name": "Peanut butter",
+    "c100": 20,
+    "gi": 14,
+    "cat": "protein",
+    "g_serv": 20,
+    "note": "1 tbsp"
+  },
+  {
+    "name": "Hummus",
+    "c100": 11,
+    "gi": 6,
+    "cat": "protein",
+    "g_serv": 50,
+    "note": "2 tbsp"
+  },
+  {
+    "name": "Sausage (pork)",
+    "c100": 10,
+    "gi": 28,
+    "cat": "protein",
+    "g_serv": 50,
+    "note": "1 sausage",
+    "g_each": 50
+  },
+  {
+    "name": "Pasta cooked",
+    "c100": 25,
+    "gi": 49,
+    "cat": "main",
+    "g_serv": 180,
+    "note": "child portion cooked"
+  },
+  {
+    "name": "Rice white cooked",
+    "c100": 28,
+    "gi": 73,
+    "cat": "main",
+    "g_serv": 150,
+    "note": "child portion cooked"
+  },
+  {
+    "name": "Pizza slice (margherita)",
+    "c100": 30,
+    "gi": 60,
+    "cat": "main",
+    "g_serv": 100,
+    "note": "1 slice (~100g)"
+  },
+  {
+    "name": "Fish fingers (each)",
+    "c100": 17,
+    "gi": 38,
+    "cat": "main",
+    "g_serv": 30,
+    "note": "1 finger",
+    "g_each": 30
+  },
+  {
+    "name": "Baked beans",
+    "c100": 13,
+    "gi": 40,
+    "cat": "main",
+    "g_serv": 200,
+    "note": "half tin"
+  },
+  {
+    "name": "Chips / oven chips",
+    "c100": 30,
+    "gi": 63,
+    "cat": "main",
+    "g_serv": 120,
+    "note": "child portion"
+  },
+  {
+    "name": "Mashed potato",
+    "c100": 14,
+    "gi": 74,
+    "cat": "main",
+    "g_serv": 150,
+    "note": "child portion"
+  },
+  {
+    "name": "Jacket potato (medium)",
+    "c100": 17,
+    "gi": 80,
+    "cat": "main",
+    "g_serv": 220,
+    "note": "1 medium jacket"
+  },
+  {
+    "name": "Bolognese sauce",
+    "c100": 7,
+    "gi": 30,
+    "cat": "main",
+    "g_serv": 150,
+    "note": "with pasta portion"
+  },
+  {
+    "name": "Tomato soup (tin half)",
+    "c100": 7,
+    "gi": 38,
+    "cat": "main",
+    "g_serv": 200,
+    "note": "1 bowl"
+  },
+  {
+    "name": "Apple juice (carton)",
+    "c100": 10,
+    "gi": 44,
+    "cat": "drink",
+    "g_serv": 200,
+    "note": "1 carton",
+    "g_each": 200
+  },
+  {
+    "name": "Orange juice (glass)",
+    "c100": 9,
+    "gi": 50,
+    "cat": "drink",
+    "g_serv": 200,
+    "note": "1 glass",
+    "g_each": 200
+  },
+  {
+    "name": "Milk 200ml",
+    "c100": 5,
+    "gi": 31,
+    "cat": "drink",
+    "g_serv": 200,
+    "note": "1 glass",
+    "g_each": 200
+  },
+  {
+    "name": "Smoothie fruit (small)",
+    "c100": 11,
+    "gi": 52,
+    "cat": "drink",
+    "g_serv": 150,
+    "note": "small bottle"
+  },
+  {
+    "name": "Ribena (diluted glass)",
+    "c100": 6,
+    "gi": 45,
+    "cat": "drink",
+    "g_serv": 250,
+    "note": "diluted glass"
+  }
+]

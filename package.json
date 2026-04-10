@@ -1,0 +1,14 @@
+{
+  "name": "oskars-river",
+  "version": "1.0.0",
+  "description": "Oskar's River — T1D glycaemic companion",
+  "private": true,
+  "scripts": {
+    "build":   "node build.js",
+    "dev":     "node build.js && npx serve dist",
+    "watch":   "node -e \"const{watch}=require('fs');const{execSync}=require('child_process');const run=()=>{try{execSync('node build.js',{stdio:'inherit'});}catch(e){}};run();['src','data'].forEach(d=>watch(d,{recursive:true},run));console.log('Watching src/ and data/ ...')\""
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}

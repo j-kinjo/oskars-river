@@ -1,0 +1,275 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<title>Oskar's River</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><circle cx='16' cy='16' r='15' fill='%23050912' stroke='%233ecfa0' stroke-width='1.5'/><path d='M8 22 Q10 16 16 16 Q22 16 24 10' fill='none' stroke='%233ecfa0' stroke-width='2' stroke-linecap='round'/><path d='M8 22 Q10 28 16 28 Q22 28 24 22' fill='none' stroke='%232855c8' stroke-width='2' stroke-linecap='round' opacity='0.7'/><circle cx='16' cy='16' r='2.5' fill='%233ecfa0'/></svg>" type="image/svg+xml">
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,wght@0,200;0,300;1,200;1,300&family=DM+Mono:wght@300;400&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<div id="loading">
+  <div class="ripwrap"><div class="rip"></div><div class="rip"></div><div class="rip"></div></div>
+  <div class="ltitle">Oskar's River</div>
+  <div class="lsub">finding the current</div>
+  <div style="font-family:'DM Mono',monospace;font-size:8px;color:rgba(40,55,50,0.2);margin-top:8px;letter-spacing:1px">build 20260326-65</div>
+</div>
+
+<canvas id="c"></canvas>
+
+<div id="hud">
+  <!-- BG — top centre, clear of safe area -->
+  <div id="bg-wrap">
+    <div id="bg-num">—<span id="bg-arrow"></span></div>
+    <div id="bg-unit">mmol/L</div>
+    <div id="stale-warn" style="display:none;font-family:'DM Mono',monospace;
+      font-size:10px;color:rgba(255,160,60,0.9);letter-spacing:.5px;
+      margin-top:4px;text-align:center"></div>
+  </div>
+
+  <!-- COB/IOB pill — bottom centre above timebar -->
+  <div id="mana-pill" style="
+    position:absolute;
+    bottom:calc(max(16px,env(safe-area-inset-bottom,16px))+28px);
+    left:50%;transform:translateX(-50%);
+    display:flex;gap:14px;align-items:center;pointer-events:none">
+    <div style="display:flex;flex-direction:column;align-items:center;gap:1px">
+      <span id="mc-val" style="font-family:'DM Mono',monospace;font-size:16px;font-weight:500;color:rgba(200,140,60,0.7);transition:all .4s;letter-spacing:-0.5px">—</span>
+      <span id="mc-label" style="font-family:'DM Mono',monospace;font-size:8px;color:rgba(200,140,60,0.35);letter-spacing:1px;text-transform:uppercase;transition:color .4s">carbs</span>
+    </div>
+    <div style="width:1px;height:24px;background:rgba(255,255,255,0.08)"></div>
+    <div style="display:flex;flex-direction:column;align-items:center;gap:1px">
+      <span id="mi-val" style="font-family:'DM Mono',monospace;font-size:16px;font-weight:500;color:rgba(80,120,220,0.7);transition:all .4s;letter-spacing:-0.5px">—</span>
+      <span id="mi-label" style="font-family:'DM Mono',monospace;font-size:8px;color:rgba(80,120,220,0.35);letter-spacing:1px;text-transform:uppercase;transition:color .4s">insulin</span>
+    </div>
+  </div>
+      <span style="font-family:'DM Mono',monospace;font-size:9px;color:rgba(255,255,255,0.4);letter-spacing:.5px">IOB</span>
+      <span id="mi-val" style="font-family:'DM Mono',monospace;font-size:13px;font-weight:500;color:rgba(255,255,255,0.75)">—U</span>
+    </div>
+  </div>
+
+  <div id="timebar">
+    <div id="timetrack">
+      <div id="timenow">
+        <!-- Clock icon on the scrubber dot -->
+        <svg id="timenow-icon" viewBox="0 0 14 14" fill="none" xmlns="http://www.w3.org/2000/svg">
+          <circle cx="7" cy="7" r="5.5" stroke="rgba(180,210,230,0.7)" stroke-width="1.2"/>
+          <line x1="7" y1="4" x2="7" y2="7" stroke="rgba(180,210,230,0.8)" stroke-width="1" stroke-linecap="round"/>
+          <line x1="7" y1="7" x2="9.2" y2="8.2" stroke="rgba(180,210,230,0.8)" stroke-width="1" stroke-linecap="round"/>
+        </svg>
+      </div>
+    </div>
+    <div id="timelabel">—</div>
+  </div>
+</div>
+
+</div>
+
+<!-- Interactive controls — outside HUD, pointer-events work -->
+<canvas id="cgm-clock" width="72" height="72" title="tap to configure CGM" onclick="openSettings()" style="touch-action:manipulation;pointer-events:auto;z-index:20"></canvas>
+<!-- Settings + live dot — bottom left, stacked cleanly -->
+<button onclick="openSettings()" class="rail-btn" style="
+  position:fixed;
+  bottom:calc(max(20px,env(safe-area-inset-bottom,20px)));
+  left:14px;
+  touch-action:manipulation;">
+  
+</button>
+<div id="live-dot" style="
+  position:fixed;
+  bottom:calc(max(20px,env(safe-area-inset-bottom,20px))+50px);
+  left:18px;
+  width:16px;height:16px;opacity:0;
+  transition:opacity .5s;z-index:20;pointer-events:none" title="CGM status">
+  <svg viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg" id="live-dot-svg">
+    <!-- Signal arcs -->
+    <path d="M3.5 11.5 Q8 4 12.5 11.5" stroke="rgba(200,120,50,0.5)" stroke-width="1.2" fill="none" stroke-linecap="round"/>
+    <path d="M5.5 11.5 Q8 6.5 10.5 11.5" stroke="rgba(200,120,50,0.7)" stroke-width="1.2" fill="none" stroke-linecap="round"/>
+    <circle cx="8" cy="11.5" r="1.5" fill="rgba(200,120,50,0.9)"/>
+  </svg>
+</div>
+
+<!-- Return to Now button — appears when scrolled back -->
+<button id="now-btn" onclick="returnToNow()" style="
+  position:fixed;
+  bottom:calc(max(20px,env(safe-area-inset-bottom,20px)) + 54px);
+  left:14px;
+  pointer-events:auto;touch-action:manipulation;z-index:20;
+  padding:7px 14px;border-radius:20px;
+  border:1px solid rgba(255,255,255,0.2);
+  background:rgba(0,0,0,0.22);
+  backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px);
+  font-family:'DM Mono',monospace;font-size:10px;letter-spacing:.8px;
+  color:rgba(255,255,255,0.6);text-transform:uppercase;
+  cursor:pointer;z-index:20;pointer-events:auto;
+  opacity:0;transition:opacity .3s">
+  ◉ now
+</button>
+
+<div id="action-rail" style="
+  position:fixed;
+  right:10px;
+  bottom:calc(max(20px,env(safe-area-inset-bottom,20px)) + 48px);
+  display:flex;flex-direction:column;gap:6px;
+  align-items:center;
+  z-index:20;pointer-events:auto">
+
+  <!-- Add food to flow -->
+  <button id="logbtn" class="rail-btn" onclick="openSheet()" title="add food">
+    <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+      <!-- Fork and knife -->
+      <line x1="7" y1="3" x2="7" y2="10" stroke="#4ecfa8" stroke-width="1.8" stroke-linecap="round"/>
+      <path d="M5 3 C5 3 5 7 7 8 C9 7 9 3 9 3" stroke="#4ecfa8" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+      <line x1="7" y1="10" x2="7" y2="21" stroke="#4ecfa8" stroke-width="1.8" stroke-linecap="round"/>
+      <path d="M14 3 L14 9 Q14 11 16 11 L16 21" stroke="#4ecfa8" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+      <line x1="12" y1="3" x2="12" y2="8" stroke="#4ecfa8" stroke-width="1.4" stroke-linecap="round" stroke-dasharray="1 2"/>
+      <!-- plus badge -->
+      <circle cx="20" cy="6" r="4" fill="#050e0a"/>
+      <line x1="20" y1="4" x2="20" y2="8" stroke="#4ecfa8" stroke-width="1.6" stroke-linecap="round"/>
+      <line x1="18" y1="6" x2="22" y2="6" stroke="#4ecfa8" stroke-width="1.6" stroke-linecap="round"/>
+    </svg>
+    <span class="rail-label">food</span>
+  </button>
+
+  <!-- Hypo treatment -->
+  <button class="rail-btn" onclick="openHypoLog()" title="hypo treatment">
+    <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+      <!-- Sugar cube / glucose tab icon -->
+      <rect x="4" y="8" width="16" height="10" rx="2.5"
+        fill="rgba(80,130,230,0.25)" stroke="#6090e8" stroke-width="1.8"/>
+      <text x="12" y="16.5" font-family="sans-serif" font-size="8"
+        font-weight="700" fill="#6090e8" text-anchor="middle">hypo</text>
+      <!-- down arrow above box -->
+      <path d="M12 3 L12 7" stroke="#6090e8" stroke-width="1.8" stroke-linecap="round"/>
+      <path d="M9.5 5.5 L12 8 L14.5 5.5" stroke="#6090e8" stroke-width="1.8"
+        stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+    </svg>
+    <span class="rail-label">hypo</span>
+  </button>
+
+  <!-- Correction bolus -->
+  <button class="rail-btn" onclick="openCorrectionLog()" title="correction">
+    <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+      <!-- Syringe body -->
+      <rect x="9" y="6" width="6" height="11" rx="1.5"
+        fill="rgba(220,160,50,0.2)" stroke="#dca030" stroke-width="1.8"/>
+      <!-- Plunger -->
+      <line x1="12" y1="9" x2="12" y2="14" stroke="#dca030" stroke-width="2.5"
+        stroke-linecap="round"/>
+      <!-- Needle -->
+      <line x1="12" y1="17" x2="12" y2="21" stroke="#dca030" stroke-width="1.8"
+        stroke-linecap="round"/>
+      <!-- Needle tip -->
+      <path d="M10.5 19.5 L12 21 L13.5 19.5" stroke="#dca030" stroke-width="1.4"
+        stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+      <!-- Wings -->
+      <line x1="6" y1="10" x2="9" y2="10" stroke="#dca030" stroke-width="1.6" stroke-linecap="round"/>
+      <line x1="15" y1="10" x2="18" y2="10" stroke="#dca030" stroke-width="1.6" stroke-linecap="round"/>
+    </svg>
+    <span class="rail-label">correct</span>
+  </button>
+
+  <!-- Food library -->
+  <button class="rail-btn" onclick="openFoodManager()" title="food library">
+    <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+      <!-- Open book -->
+      <path d="M12 6 C12 6 8 5 4 6 L4 19 C8 18 12 19 12 19 C12 19 16 18 20 19 L20 6 C16 5 12 6 12 6Z"
+        fill="rgba(160,210,140,0.18)" stroke="#a0d28a" stroke-width="1.8"
+        stroke-linecap="round" stroke-linejoin="round"/>
+      <line x1="12" y1="6" x2="12" y2="19" stroke="#a0d28a" stroke-width="1.4" stroke-linecap="round"/>
+      <!-- Lines on pages -->
+      <line x1="6.5" y1="10" x2="10" y2="9.5" stroke="#a0d28a" stroke-width="1.1" stroke-linecap="round" opacity="0.7"/>
+      <line x1="6.5" y1="13" x2="10" y2="12.5" stroke="#a0d28a" stroke-width="1.1" stroke-linecap="round" opacity="0.7"/>
+      <line x1="14" y1="9.5" x2="17.5" y2="10" stroke="#a0d28a" stroke-width="1.1" stroke-linecap="round" opacity="0.7"/>
+      <line x1="14" y1="12.5" x2="17.5" y2="13" stroke="#a0d28a" stroke-width="1.1" stroke-linecap="round" opacity="0.7"/>
+    </svg>
+    <span class="rail-label">library</span>
+  </button>
+
+</div>
+
+<div id="sheet">
+  <div class="handle"></div>
+  <div class="sheet-title">add to the flow</div>
+  <div class="sheet-sub">carbs · bolus · or both</div>
+
+  <!-- Type selector -->
+  <div class="type-row">
+    <button class="tbtn" id="tb-c" onclick="selType('c')"><span class="ico">🌾</span>carbs</button>
+    <button class="tbtn" id="tb-b" onclick="selType('b')"><span class="ico">🍃</span>meal</button>
+    <button class="tbtn" id="tb-i" onclick="selType('i')"><span class="ico">💧</span>bolus</button>
+  </div>
+
+  <!-- Time — always visible, defaults to now -->
+  <div style="display:flex;align-items:center;gap:8px;padding:0 18px;margin-bottom:12px">
+    <span style="font-family:'DM Mono',monospace;font-size:9px;color:rgba(40,55,50,0.35);
+      letter-spacing:1px;text-transform:uppercase;white-space:nowrap">when</span>
+    <input id="in-time" type="datetime-local"
+      style="flex:1;padding:8px 10px;border-radius:8px;
+      border:1px solid rgba(40,55,50,0.12);background:rgba(255,255,255,0.55);
+      font-family:'DM Mono',monospace;font-size:12px;color:rgba(40,55,50,0.7);outline:none">
+    <button onclick="setTimeNow()" style="padding:6px 10px;border-radius:7px;
+      border:1px solid rgba(40,55,50,0.12);background:rgba(40,55,50,0.05);
+      font-family:'DM Mono',monospace;font-size:9px;color:rgba(40,55,50,0.4);
+      cursor:pointer;letter-spacing:.5px">now</button>
+  </div>
+
+  <!-- Carbs -->
+  <div class="isec" id="sec-c">
+    <div class="irow">
+      <div class="idot" style="background:rgba(62,207,160,0.8)"></div>
+      <input class="ifield" id="in-c" type="number" inputmode="decimal"
+        placeholder="grams" min="0" max="200" step="1" oninput="onInp()">
+      <span class="iunit">g</span>
+    </div>
+  </div>
+
+  <!-- Insulin -->
+  <div class="isec" id="sec-i">
+    <div class="irow">
+      <div class="idot" style="background:rgba(40,85,200,0.8)"></div>
+      <input class="ifield" id="in-i" type="number" inputmode="decimal"
+        placeholder="units" min="0" max="20" step="0.5" oninput="onInp()">
+      <span class="iunit">U</span>
+    </div>
+  </div>
+
+  <!-- BG -->
+  <div class="isec" id="sec-bg">
+    <div class="irow">
+      <div class="idot" style="background:rgba(40,55,50,0.3)"></div>
+      <input class="ifield" id="in-bg" type="number" inputmode="decimal"
+        placeholder="BG now" min="2" max="25" step="0.1" oninput="onInp()">
+      <span class="iunit">mmol</span>
+    </div>
+    <div class="bgchips">
+      <div class="bgchip" onclick="setBG(4)">4.0</div>
+      <div class="bgchip" onclick="setBG(5.5)">5.5</div>
+      <div class="bgchip" onclick="setBG(7)">7.0</div>
+      <div class="bgchip" onclick="setBG(9)">9.0</div>
+      <div class="bgchip" onclick="setBG(12)">12.0</div>
+    </div>
+  </div>
+
+  <!-- Saved meals -->
+  <div id="saved-meals-row" style="display:none;padding:0 18px;margin-bottom:10px">
+    <div style="font-family:'DM Mono',monospace;font-size:9px;color:rgba(40,55,50,0.3);
+      letter-spacing:1px;text-transform:uppercase;margin-bottom:6px">recent meals</div>
+    <div id="saved-meals-chips" style="display:flex;flex-wrap:wrap;gap:5px"></div>
+  </div>
+
+  <!-- Bolus suggestion -->
+  <div class="sugbox" id="sugbox">
+    <div class="sugval" id="sugval">—</div>
+    <div class="sugnote" id="sugnote"></div>
+  </div>
+
+  <button id="dropbtn" onclick="commitDrop()" disabled>flow it in</button>
+
+<div id="toast"></div>
+
+<script src="app.bundle.js"></script>
+</body>
+</html>
