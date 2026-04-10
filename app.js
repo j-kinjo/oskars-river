@@ -1,4 +1,3 @@
-
 // ═══════════════════════════════════════════════════════════════
 //  OSKAR'S RIVER  v3
 //  Mood: zenful Japanese ink-wash river
@@ -9,7 +8,7 @@
 // ═══════════════════════════════════════════════════════════════
 
 // ── DATA PLACEHOLDER (injected at build time) ─────────────────
-// ── CGM HISTORY — injected by build/fetch at runtime ─────────────
+// ── CGM HISTORY — injected by build.js ─────────────────────────
 const HISTORY_RAW = window.__RIVER_HISTORY__ || [];
 
 var LOGGED_EVENTS = [];
@@ -853,10 +852,10 @@ function drawTimeLabels(pal) {
   CX.fillText('now', nowX, H - 35);
   CX.globalAlpha=0.28;CX.fillStyle='rgba(200,220,240,1)';
   CX.font="300 9px 'DM Mono',monospace";CX.textAlign='right';
-  CX.fillText('build 65',W-10,H-8);
+  CX.fillText('build 66',W-10,H-8);
   CX.globalAlpha=0.28;CX.fillStyle='rgba(200,220,240,1)';
   CX.font="300 9px 'DM Mono',monospace";CX.textAlign='right';
-  CX.fillText('build 65',W-10,H-8);
+  CX.fillText('build 66',W-10,H-8);
   CX.restore();
 }
 
@@ -1517,7 +1516,7 @@ function showToast(msg){
 // ── FOOD DATABASE ──────────────────────────────────────────────────────
 // {name, carbs_per_100g, gi, category}
 // GI: low<55, medium 55-69, high>=70
-// ── FOOD DATABASE — injected by build at runtime ──────────────────
+// ── FOOD DATABASE — injected by build.js ────────────────────────
 const FOOD_DB = window.__RIVER_FOODS__ || [];
 
 var FOOD_LIBRARY = (function() {
@@ -2646,6 +2645,160 @@ const CGM_SOURCES = {
     }
   },
 
+  libre3: {
+    name: 'Libre 3 (LibreLinkUp)',
+    icon: '💙',
+    description: 'Uses your LibreLinkUp follower account. In the LibreLink app: Menu → Connected Apps → LibreLinkUp → invite yourself as a follower. Then log in here with your LibreLinkUp credentials (the follower account, not the sensor account).',
+    fields: [
+      { key: 'email',    label: 'LibreLinkUp Email',    placeholder: 'you@email.com',  type: 'text'     },
+      { key: 'password', label: 'LibreLinkUp Password', placeholder: '••••••••',        type: 'password' },
+      { key: 'region',   label: 'Region',               placeholder: '',                type: 'select',
+        options: [
+          { value: 'eu',  label: 'Europe (UK, EU)' },
+          { value: 'us',  label: 'United States'   },
+          { value: 'au',  label: 'Australia'        },
+          { value: 'ap',  label: 'Asia Pacific'     },
+          { value: 'ca',  label: 'Canada'           },
+          { value: 'de',  label: 'Germany'          },
+          { value: 'fr',  label: 'France'           },
+          { value: 'jp',  label: 'Japan'            },
+          { value: 'us2', label: 'United States 2'  },
+        ]
+      },
+    ],
+    _proxy: 'https://orange-surf-6f98.john-king-uk.workers.dev',
+    _token: null,
+    _tokenExpiry: 0,
+    _patientId: null,
+
+    _baseUrl(region) {
+      const hosts = {
+        us:  'api.libreview.io',
+        eu:  'api-eu.libreview.io',
+        au:  'api-au.libreview.io',
+        ap:  'api-ap.libreview.io',
+        ca:  'api-ca.libreview.io',
+        de:  'api-de.libreview.io',
+        fr:  'api-fr.libreview.io',
+        jp:  'api-jp.libreview.io',
+        us2: 'api2.libreview.io',
+      };
+      return 'https://' + (hosts[region] || hosts.eu);
+    },
+
+    async _req(region, path, method, body, token) {
+      const url = this._baseUrl(region) + path;
+      const proxied = this._proxy + '/?url=' + encodeURIComponent(url);
+      const headers = {
+        'Content-Type':    'application/json',
+        'product':         'llu.ios',
+        'version':         '4.7.0',
+        'Accept-Encoding': 'gzip, deflate, br',
+        'Connection':      'keep-alive',
+        'Pragma':          'no-cache',
+        'Cache-Control':   'no-cache',
+      };
+      if (token) headers['Authorization'] = 'Bearer ' + token;
+      const r = await fetch(proxied, {
+        method,
+        headers,
+        body: body ? JSON.stringify(body) : undefined,
+      });
+      if (!r.ok) {
+        const txt = await r.text().catch(() => '');
+        throw new Error('LibreLinkUp ' + r.status + (txt ? ': ' + txt.slice(0,80) : ''));
+      }
+      return r.json();
+    },
+
+    async _login(cfg) {
+      if (this._token && Date.now() < this._tokenExpiry) return this._token;
+      const data = await this._req(cfg.region, '/llu/auth/login', 'POST', {
+        email:    cfg.email,
+        password: cfg.password,
+      });
+      if (data.status !== 0) {
+        throw new Error('Login failed — check your LibreLinkUp email and password');
+      }
+      if (data.data?.redirect) {
+        // Abbott is redirecting to a different region
+        const redirect = data.data.region;
+        if (redirect && redirect !== cfg.region) {
+          // Auto-retry with correct region
+          cfg.region = redirect;
+          return this._login(cfg);
+        }
+      }
+      const token = data.data?.authTicket?.token;
+      if (!token) throw new Error('No auth token in response — try again');
+      this._token = token;
+      this._tokenExpiry = Date.now() + 50 * 60000; // tokens last ~1h
+      return token;
+    },
+
+    async _getPatient(cfg, token) {
+      if (this._patientId) return this._patientId;
+      const data = await this._req(cfg.region, '/llu/connections', 'GET', null, token);
+      if (!data.data || data.data.length === 0) {
+        throw new Error('No connections found — make sure LibreLinkUp follower is set up in the LibreLink app');
+      }
+      this._patientId = data.data[0].patientId;
+      return this._patientId;
+    },
+
+    _parseReading(r) {
+      // Libre timestamps are in local time as Unix seconds (not ms)
+      // ValueInMgPerDl → mmol/L
+      const t  = r.FactoryTimestamp
+        ? new Date(r.FactoryTimestamp + ' UTC').getTime()
+        : r.Timestamp
+          ? new Date(r.Timestamp).getTime()
+          : Date.now();
+      const bg = r.ValueInMgPerDl
+        ? +(r.ValueInMgPerDl / 18.016).toFixed(1)
+        : r.Value
+          ? +(r.Value).toFixed(1)
+          : 0;
+      const trendMap = { 1:'DoubleUp', 2:'SingleUp', 3:'FortyFiveUp', 4:'Flat',
+                         5:'FortyFiveDown', 6:'SingleDown', 7:'DoubleDown' };
+      return { t, bg, trend: trendMap[r.TrendArrow] || 'Flat', src: 'libre3' };
+    },
+
+    async fetch(cfg, count) {
+      const token = await this._login(cfg);
+      const pid   = await this._getPatient(cfg, token);
+      const data  = await this._req(cfg.region, '/llu/connections/' + pid + '/graph', 'GET', null, token);
+      if (!data.data) throw new Error('No data in response');
+      // Current reading
+      const current = data.data.connection?.glucoseMeasurement;
+      if (!current) throw new Error('No current reading — is the sensor active?');
+      return [this._parseReading(current)];
+    },
+
+    async fetchRecent(cfg, hours) {
+      const token = await this._login(cfg);
+      const pid   = await this._getPatient(cfg, token);
+      const data  = await this._req(cfg.region, '/llu/connections/' + pid + '/graph', 'GET', null, token);
+      if (!data.data) throw new Error('No data in response');
+      const readings = [];
+      // Graph data (historical)
+      const graphData = data.data.graphData || [];
+      for (const r of graphData) {
+        const parsed = this._parseReading(r);
+        if (parsed.bg > 0) readings.push(parsed);
+      }
+      // Add current reading
+      const current = data.data.connection?.glucoseMeasurement;
+      if (current) {
+        const parsed = this._parseReading(current);
+        if (parsed.bg > 0) readings.push(parsed);
+      }
+      readings.sort((a,b) => a.t - b.t);
+      return readings;
+    },
+  },
+
+
   manual: {
     name: 'Manual only',
     icon: '✏️',
@@ -2973,7 +3126,7 @@ function buildSetupScreen() {
         never to any third party. This app has no backend.
       </div>
     </div>
-    <div style="text-align:center;margin-top:10px;font-family:'DM Mono',monospace;font-size:8px;color:rgba(40,55,50,0.15);letter-spacing:1px">build 20260326-65</div>
+    <div style="text-align:center;margin-top:10px;font-family:'DM Mono',monospace;font-size:8px;color:rgba(40,55,50,0.15);letter-spacing:1px">build 20260326-66</div>
   </div>
 </div>`;
 }
