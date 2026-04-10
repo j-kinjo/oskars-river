@@ -2661,6 +2661,7 @@ const CGM_SOURCES = {
           { value: 'fr',  label: 'France'           },
           { value: 'jp',  label: 'Japan'            },
           { value: 'us2', label: 'United States 2'  },
+          { value: 'eu2', label: 'Europe 2 (EU2)'   },
         ]
       },
     ],
@@ -2673,6 +2674,7 @@ const CGM_SOURCES = {
       const hosts = {
         us:  'api.libreview.io',
         eu:  'api-eu.libreview.io',
+        eu2: 'api-eu2.libreview.io',
         au:  'api-au.libreview.io',
         ap:  'api-ap.libreview.io',
         ca:  'api-ca.libreview.io',
@@ -2751,13 +2753,21 @@ const CGM_SOURCES = {
       console.log('[libre3] login response status:', data.status);
       console.log('[libre3] login response keys:', Object.keys(data.data || {}));
 
-      // Region redirect
+      // Region redirect — Abbott tells us which server to use
       if (data.data?.redirect) {
         const redirect = data.data.region;
         console.log('[libre3] Redirected to region:', redirect);
-        if (redirect && redirect !== cfg.region) {
+        if (redirect) {
+          if (redirect === cfg.region) {
+            // Already on the right region but still redirecting — unknown region
+            throw new Error(
+              'LibreLinkUp redirected to region "' + redirect + '" but could not connect. ' +
+              'Try selecting "Europe 2 (EU2)" from the region dropdown.'
+            );
+          }
           cfg.region = redirect;
-          return this._login(cfg);
+          this._token = null; // clear cached token
+          return this._login(cfg); // retry with correct region
         }
       }
 
@@ -3199,7 +3209,7 @@ function buildSetupScreen() {
         never to any third party. This app has no backend.
       </div>
     </div>
-    <div style="text-align:center;margin-top:10px;font-family:'DM Mono',monospace;font-size:8px;color:rgba(40,55,50,0.15);letter-spacing:1px">build 20260326-68</div>
+    <div style="text-align:center;margin-top:10px;font-family:'DM Mono',monospace;font-size:8px;color:rgba(40,55,50,0.15);letter-spacing:1px">build 20260326-69</div>
   </div>
 </div>`;
 }
