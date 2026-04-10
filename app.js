@@ -1,3 +1,4 @@
+
 // ═══════════════════════════════════════════════════════════════
 //  OSKAR'S RIVER  v3
 //  Mood: zenful Japanese ink-wash river
@@ -810,6 +811,7 @@ function drawTransition(pal) {
 // ── TIME LABELS — on the void ──────────────────────────────────────────
 const DNAMES = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
 function drawTimeLabels(pal) {
+  if (!pal || CGM_END === CGM_START) return;
   const mspp   = viewSpan/W;
   let tickMs   = 3600000;
   if (mspp*W > 20*3600000) tickMs = 6*3600000;
@@ -1194,6 +1196,7 @@ function drawHypoPulse(pal) {
 let lastHUD = 0;
 function updateHUD(d, pal) {
   if (Date.now()-lastHUD < 300) return; lastHUD = Date.now();
+  if (!d || !pal || typeof d.bg !== 'number' || isNaN(d.bg)) return;
 
   // Stale data warning
   var staleWarn = document.getElementById('stale-warn');
@@ -1243,7 +1246,8 @@ function updateHUD(d, pal) {
   }
 
   // Timebar scrubber
-  var prog = (viewTime - CGM_START) / (CGM_END - CGM_START);
+  var timeRange = CGM_END - CGM_START;
+  var prog = timeRange > 0 ? (viewTime - CGM_START) / timeRange : 1;
   var tnEl = document.getElementById('timenow');
   var tkEl = document.getElementById('timetrack');
   var pct  = (Math.max(0, Math.min(1, prog)) * 100).toFixed(1) + '%';
@@ -1269,6 +1273,7 @@ function frame(ts) {
 
   const d   = dataAt(viewTime);
   const pal = palette(viewTime);
+  if (!d || !pal) { requestAnimationFrame(frame); return; }
 
   // ── ANIMATION STATE ──────────────────────────────────────────
   window._bgDots=[];
@@ -3066,7 +3071,7 @@ async function startLivePolling(sourceId, cfg) {
   // Full backfill — fetch up to 24h of real history to replace static data
   try {
     setLiveStatus('connecting', 'Loading history…');
-    const recent = await source.fetchRecent(cfg, 24);
+    const recent = await source.fetchRecent(cfg, 12); // 12h of backfill on connect
     if (recent.length > 0) {
       // Remove only the old static embedded data (pre-2026-03-20)
       // Keep any persisted live readings
@@ -3158,11 +3163,11 @@ function ingestReadings(readings) {
   }
   HISTORY_RAW.sort((a,b) => a.t - b.t);
   updateCGMBounds();
-  // Only snap to now if user is already at now (within 10 min),
-  // or if this is the first real data coming in
+  // Snap to now if: user is at now, first data arriving, or viewTime is out of range
   const wasAtNow = _isAtNow || (CGM_END - viewTime) < 10 * 60000;
-  if (wasAtNow || viewTime < CGM_START) {
+  if (wasAtNow || viewTime < CGM_START || viewTime > CGM_END + 60000) {
     viewTime = CGM_END;
+    _isAtNow = true;
   }
   if (changed) persistReadings();
 }
@@ -3260,7 +3265,7 @@ function buildSetupScreen() {
         never to any third party. This app has no backend.
       </div>
     </div>
-    <div style="text-align:center;margin-top:10px;font-family:'DM Mono',monospace;font-size:8px;color:rgba(40,55,50,0.15);letter-spacing:1px">build 20260326-72</div>
+    <div style="text-align:center;margin-top:10px;font-family:'DM Mono',monospace;font-size:8px;color:rgba(40,55,50,0.15);letter-spacing:1px">build 20260326-73</div>
   </div>
 </div>`;
 }
