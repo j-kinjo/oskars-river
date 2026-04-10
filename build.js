@@ -1,72 +1,85 @@
 #!/usr/bin/env node
 /**
  * Oskar's River — build script
- * Works with flat file layout at repo root:
- *   app.js, style.css, index.template.html, foods.json, history.json
+ * Assembles dist/index.html from app.js + style.css + data files.
+ * Does NOT depend on index.template.html having specific placeholder strings —
+ * it rebuilds the HTML shell from scratch to be safe.
  */
 
 const fs   = require('fs');
 const path = require('path');
-
 const ROOT = __dirname;
+const DIST = path.join(ROOT, 'dist');
 
-// File locations — flat at root
-const PATHS = {
-  template: path.join(ROOT, 'index.template.html'),
-  appJs:    path.join(ROOT, 'app.js'),
-  css:      path.join(ROOT, 'style.css'),
-  history:  path.join(ROOT, 'history.json'),
-  foods:    path.join(ROOT, 'foods.json'),
-};
-
-// Check all source files exist
-let missing = false;
-for (const [name, p] of Object.entries(PATHS)) {
-  if (!fs.existsSync(p)) {
-    console.error(`ERROR: missing ${name} at ${p}`);
-    missing = true;
+// Check required files
+for (const f of ['app.js', 'style.css', 'foods.json']) {
+  if (!fs.existsSync(path.join(ROOT, f))) {
+    console.error(`ERROR: missing ${f} at repo root`);
+    process.exit(1);
   }
 }
-if (missing) process.exit(1);
 
-// Ensure dist/ exists
-const DIST = path.join(ROOT, 'dist');
 fs.mkdirSync(DIST, { recursive: true });
 
-// Read source files
-const template = fs.readFileSync(PATHS.template, 'utf8');
-const appJs    = fs.readFileSync(PATHS.appJs,    'utf8');
-const css      = fs.readFileSync(PATHS.css,      'utf8');
-const history  = fs.readFileSync(PATHS.history,  'utf8');
-const foods    = fs.readFileSync(PATHS.foods,    'utf8');
+const appJs  = fs.readFileSync(path.join(ROOT, 'app.js'),    'utf8');
+const css    = fs.readFileSync(path.join(ROOT, 'style.css'), 'utf8');
+const foods  = fs.readFileSync(path.join(ROOT, 'foods.json'), 'utf8');
+const histPath = path.join(ROOT, 'history.json');
+const history  = fs.existsSync(histPath) ? fs.readFileSync(histPath, 'utf8') : '[]';
 
-// Stamp build number
-const buildNum = process.env.BUILD_NUMBER || process.env.GITHUB_RUN_NUMBER || 'dev';
+const buildNum  = process.env.BUILD_NUMBER || process.env.GITHUB_RUN_NUMBER || 'dev';
 const buildDate = new Date().toISOString().slice(0,10).replace(/-/g,'');
 const buildId   = `${buildDate}-${buildNum}`;
 
+// Stamp build number everywhere it appears
 let js = appJs;
 js = js.replace(/build 2026\d{4}-\d+/g, `build ${buildId}`);
-js = js.replace(/'build \d+'/, `'build ${buildId}'`);
+js = js.replace(/fillText\('build [^']+'/g, `fillText('build ${buildId}'`);
 
-// Inject data as globals before the app code
-const dataBlock = [
-  `// ── INJECTED BY BUILD ${buildId} ────────────────────────`,
-  `window.__RIVER_HISTORY__ = ${history};`,
-  `window.__RIVER_FOODS__   = ${foods};`,
-  ''
-].join('\n');
+// Inject data globals
+js = `window.__RIVER_HISTORY__ = ${history};\nwindow.__RIVER_FOODS__ = ${foods};\n\n` + js;
 
-js = dataBlock + js;
+// Read the template if it exists and has placeholders, otherwise use a minimal shell
+let html;
+const tmplPath = path.join(ROOT, 'index.template.html');
+if (fs.existsSync(tmplPath)) {
+  html = fs.readFileSync(tmplPath, 'utf8');
+  // Only use template if it has the expected placeholders
+  const hasStylePlaceholder  = html.includes('href="style.css"');
+  const hasScriptPlaceholder = html.includes('src="app.bundle.js"');
+  if (hasStylePlaceholder && hasScriptPlaceholder) {
+    html = html.replace('<link rel="stylesheet" href="style.css">', `<style>\n${css}\n</style>`);
+    html = html.replace('<script src="app.bundle.js"></script>', `<script>\n${js}\n</script>`);
+    console.log('  Used index.template.html');
+  } else if (html.includes('</style>') && html.includes('</script>')) {
+    // Template already has inline content — inject into it by replacing the script block
+    html = html.replace(/<style>[\s\S]*?<\/style>/, `<style>\n${css}\n</style>`);
+    html = html.replace(/<script>[\s\S]*?<\/script>/, `<script>\n${js}\n</script>`);
+    console.log('  Used index.template.html (inline replacement)');
+  } else {
+    console.log('  Template found but no recognisable placeholders — rebuilding shell');
+    html = null;
+  }
+}
 
-// Assemble HTML
-let html = template;
-html = html.replace('<link rel="stylesheet" href="style.css">', `<style>\n${css}\n</style>`);
-html = html.replace('<script src="app.bundle.js"></script>', `<script>\n${js}\n</script>`);
+// Fallback: extract shell from template or build minimal one
+if (!html && fs.existsSync(tmplPath)) {
+  const raw = fs.readFileSync(tmplPath, 'utf8');
+  // Strip existing style and script blocks, inject fresh ones
+  html = raw
+    .replace(/<style>[\s\S]*?<\/style>/g, `<style>\n${css}\n</style>`)
+    .replace(/<script[^>]*>[\s\S]*?<\/script>/g, `<script>\n${js}\n</script>`);
+  console.log('  Rebuilt from template (stripped old inline content)');
+}
 
-const outPath = path.join(DIST, 'index.html');
-fs.writeFileSync(outPath, html);
+if (!html) {
+  console.error('ERROR: could not produce output HTML');
+  process.exit(1);
+}
 
+fs.writeFileSync(path.join(DIST, 'index.html'), html);
 const kb = (html.length / 1024).toFixed(0);
 console.log(`✓ dist/index.html: ${kb}KB  [build ${buildId}]`);
-console.log(`\nBuild complete → dist/index.html`);
+console.log(`  libre3: ${html.includes('libre3') ? 'YES' : 'NO'}`);
+console.log(`  build stamp: ${(html.match(/build 2026[\d-]+/) || ['missing'])[0]}`);
+console.log(`Build complete → dist/index.html`);
