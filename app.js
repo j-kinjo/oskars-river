@@ -8,7 +8,6 @@
 // ═══════════════════════════════════════════════════════════════
 
 // ── DATA PLACEHOLDER (injected at build time) ─────────────────
-// ── CGM HISTORY — injected by build.js ─────────────────────────
 const HISTORY_RAW = window.__RIVER_HISTORY__ || [];
 
 var LOGGED_EVENTS = [];
@@ -1516,7 +1515,6 @@ function showToast(msg){
 // ── FOOD DATABASE ──────────────────────────────────────────────────────
 // {name, carbs_per_100g, gi, category}
 // GI: low<55, medium 55-69, high>=70
-// ── FOOD DATABASE — injected by build.js ────────────────────────
 const FOOD_DB = window.__RIVER_FOODS__ || [];
 
 var FOOD_LIBRARY = (function() {
@@ -2648,7 +2646,7 @@ const CGM_SOURCES = {
   libre3: {
     name: 'Libre 3 (LibreLinkUp)',
     icon: '💙',
-    description: 'Uses your LibreLinkUp follower account. In the LibreLink app: Menu → Connected Apps → LibreLinkUp → invite yourself as a follower. Then log in here with your LibreLinkUp credentials (the follower account, not the sensor account).',
+    description: 'LibreLinkUp follower account credentials. Setup: LibreLink app → Menu → Connected Apps → LibreLinkUp → invite an email as follower → accept invite from that email → use those credentials here. Important: this is the FOLLOWER account email/password, not your main LibreLink or LibreView login.',
     fields: [
       { key: 'email',    label: 'LibreLinkUp Email',    placeholder: 'you@email.com',  type: 'text'     },
       { key: 'password', label: 'LibreLinkUp Password', placeholder: '••••••••',        type: 'password' },
@@ -2688,27 +2686,58 @@ const CGM_SOURCES = {
 
     async _req(region, path, method, body, token) {
       const url = this._baseUrl(region) + path;
+      // Send everything to the proxy — it must forward method, headers, and body
       const proxied = this._proxy + '/?url=' + encodeURIComponent(url);
       const headers = {
         'Content-Type':    'application/json',
         'product':         'llu.ios',
         'version':         '4.7.0',
         'Accept-Encoding': 'gzip, deflate, br',
-        'Connection':      'keep-alive',
         'Pragma':          'no-cache',
         'Cache-Control':   'no-cache',
       };
       if (token) headers['Authorization'] = 'Bearer ' + token;
-      const r = await fetch(proxied, {
-        method,
-        headers,
-        body: body ? JSON.stringify(body) : undefined,
-      });
-      if (!r.ok) {
-        const txt = await r.text().catch(() => '');
-        throw new Error('LibreLinkUp ' + r.status + (txt ? ': ' + txt.slice(0,80) : ''));
+
+      let r;
+      try {
+        r = await fetch(proxied, {
+          method,
+          headers,
+          body: body ? JSON.stringify(body) : undefined,
+        });
+      } catch(netErr) {
+        // Network-level failure — proxy unreachable or CORS
+        const isPost = method === 'POST';
+        throw new Error(
+          'Cannot reach LibreLinkUp proxy.' +
+          (isPost ? ' The proxy may not support POST requests with a body — ' +
+            'update your Cloudflare Worker (see Settings → CGM → help).' : '') +
+          ' (' + netErr.message + ')'
+        );
       }
-      return r.json();
+
+      if (!r.ok) {
+        let txt = '';
+        try { txt = await r.text(); } catch(e) {}
+        // Parse Abbott error codes
+        let detail = '';
+        try {
+          const j = JSON.parse(txt);
+          if (j.error) detail = j.error.message || j.error;
+          else if (j.message) detail = j.message;
+        } catch(e) { detail = txt.slice(0, 120); }
+
+        if (r.status === 401) throw new Error('Wrong email or password for LibreLinkUp follower account');
+        if (r.status === 403) throw new Error('LibreLinkUp account not authorised — check you accepted the follower invitation');
+        if (r.status === 429) throw new Error('Too many requests — wait a few minutes and try again');
+        if (r.status === 0)   throw new Error('Proxy blocked the request — the Cloudflare Worker needs updating to support POST');
+        throw new Error('LibreLinkUp error ' + r.status + (detail ? ': ' + detail : ''));
+      }
+
+      let json;
+      try { json = await r.json(); }
+      catch(e) { throw new Error('Bad response from LibreLinkUp — unexpected format'); }
+      return json;
     },
 
     async _login(cfg) {
@@ -2717,17 +2746,21 @@ const CGM_SOURCES = {
         email:    cfg.email,
         password: cfg.password,
       });
-      if (data.status !== 0) {
-        throw new Error('Login failed — check your LibreLinkUp email and password');
-      }
       if (data.data?.redirect) {
         // Abbott is redirecting to a different region
         const redirect = data.data.region;
         if (redirect && redirect !== cfg.region) {
-          // Auto-retry with correct region
           cfg.region = redirect;
+          console.log('[libre3] Redirected to region:', redirect);
           return this._login(cfg);
         }
+      }
+      // Some regions return a different status for wrong credentials
+      if (data.status === 2 || data.status === 4) {
+        throw new Error('Wrong email or password — use your LibreLinkUp follower account credentials, not your LibreLink / LibreView account');
+      }
+      if (data.status !== 0) {
+        throw new Error('LibreLinkUp login failed (status ' + data.status + ') — check your credentials and region');
       }
       const token = data.data?.authTicket?.token;
       if (!token) throw new Error('No auth token in response — try again');
@@ -3126,7 +3159,7 @@ function buildSetupScreen() {
         never to any third party. This app has no backend.
       </div>
     </div>
-    <div style="text-align:center;margin-top:10px;font-family:'DM Mono',monospace;font-size:8px;color:rgba(40,55,50,0.15);letter-spacing:1px">build 20260326-66</div>
+    <div style="text-align:center;margin-top:10px;font-family:'DM Mono',monospace;font-size:8px;color:rgba(40,55,50,0.15);letter-spacing:1px">build 20260326-67</div>
   </div>
 </div>`;
 }
@@ -3213,8 +3246,8 @@ async function connectCGM() {
 
   btn.textContent    = 'connecting…';
   btn.disabled       = true;
-  const base2 = fields.url ? fields.url.replace(/\/+$/, '') : '';
-  status.textContent = 'Testing: ' + base2 + '/api/v1/entries.json…';
+  const srcName = src.name || _selectedSource;
+  status.textContent = 'Connecting to ' + srcName + '…';
   status.style.color = 'rgba(40,55,50,0.4)';
 
   try {
