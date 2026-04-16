@@ -14,7 +14,7 @@
   <div class="ripwrap"><div class="rip"></div><div class="rip"></div><div class="rip"></div></div>
   <div class="ltitle">Oskar's River</div>
   <div class="lsub">finding the current</div>
-  <div style="font-family:'DM Mono',monospace;font-size:8px;color:rgba(40,55,50,0.2);margin-top:8px;letter-spacing:1px">build 20260326-65</div>
+  <div style="font-family:'DM Mono',monospace;font-size:8px;color:rgba(40,55,50,0.2);margin-top:8px;letter-spacing:1px">build 20260326-79</div>
 </div>
 
 <canvas id="c"></canvas>
@@ -40,14 +40,7 @@
       <span id="mc-label" style="font-family:'DM Mono',monospace;font-size:8px;color:rgba(200,140,60,0.35);letter-spacing:1px;text-transform:uppercase;transition:color .4s">carbs</span>
     </div>
     <div style="width:1px;height:24px;background:rgba(255,255,255,0.08)"></div>
-    <div style="display:flex;flex-direction:column;align-items:center;gap:1px">
-      <span id="mi-val" style="font-family:'DM Mono',monospace;font-size:16px;font-weight:500;color:rgba(80,120,220,0.7);transition:all .4s;letter-spacing:-0.5px">—</span>
-      <span id="mi-label" style="font-family:'DM Mono',monospace;font-size:8px;color:rgba(80,120,220,0.35);letter-spacing:1px;text-transform:uppercase;transition:color .4s">insulin</span>
-    </div>
-  </div>
-      <span style="font-family:'DM Mono',monospace;font-size:9px;color:rgba(255,255,255,0.4);letter-spacing:.5px">IOB</span>
-      <span id="mi-val" style="font-family:'DM Mono',monospace;font-size:13px;font-weight:500;color:rgba(255,255,255,0.75)">—U</span>
-    </div>
+    
   </div>
 
   <div id="timebar">
@@ -68,6 +61,7 @@
 </div>
 
 <!-- Interactive controls — outside HUD, pointer-events work -->
+<canvas id="flick-canvas"></canvas>
 <canvas id="cgm-clock" width="72" height="72" title="tap to configure CGM" onclick="openSettings()" style="touch-action:manipulation;pointer-events:auto;z-index:20"></canvas>
 <!-- Settings + live dot — bottom left, stacked cleanly -->
 <button onclick="openSettings()" class="rail-btn" style="
@@ -108,90 +102,58 @@
   ◉ now
 </button>
 
-<div id="action-rail" style="
+<div id="flow-dock" style="
   position:fixed;
-  right:10px;
-  bottom:calc(max(20px,env(safe-area-inset-bottom,20px)) + 48px);
-  display:flex;flex-direction:column;gap:6px;
-  align-items:center;
-  z-index:20;pointer-events:auto">
+  bottom:calc(max(16px,env(safe-area-inset-bottom,16px)));
+  left:0;right:0;
+  display:flex;gap:16px;
+  justify-content:center;
+  align-items:flex-end;
+  z-index:25;pointer-events:none;
+  touch-action:manipulation;">
 
-  <!-- Add food to flow -->
-  <button id="logbtn" class="rail-btn" onclick="openSheet()" title="add food">
-    <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
-      <!-- Fork and knife -->
-      <line x1="7" y1="3" x2="7" y2="10" stroke="#4ecfa8" stroke-width="1.8" stroke-linecap="round"/>
-      <path d="M5 3 C5 3 5 7 7 8 C9 7 9 3 9 3" stroke="#4ecfa8" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
-      <line x1="7" y1="10" x2="7" y2="21" stroke="#4ecfa8" stroke-width="1.8" stroke-linecap="round"/>
-      <path d="M14 3 L14 9 Q14 11 16 11 L16 21" stroke="#4ecfa8" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
-      <line x1="12" y1="3" x2="12" y2="8" stroke="#4ecfa8" stroke-width="1.4" stroke-linecap="round" stroke-dasharray="1 2"/>
-      <!-- plus badge -->
-      <circle cx="20" cy="6" r="4" fill="#050e0a"/>
-      <line x1="20" y1="4" x2="20" y2="8" stroke="#4ecfa8" stroke-width="1.6" stroke-linecap="round"/>
-      <line x1="18" y1="6" x2="22" y2="6" stroke="#4ecfa8" stroke-width="1.6" stroke-linecap="round"/>
+  <!-- Food — flick up into flow -->
+  <div class="dock-btn" id="dock-food" style="pointer-events:auto" ontouchstart="dockTouchStart(event,'food')" ontouchend="dockTouchEnd(event,'food')" onclick="openSheet()" title="add food">
+    <svg viewBox="0 0 28 28" fill="none">
+      <line x1="9" y1="4" x2="9" y2="13" stroke="rgba(255,140,50,0.9)" stroke-width="2" stroke-linecap="round"/>
+      <path d="M7 4 C7 4 7 9 9 10.5 C11 9 11 4 11 4" stroke="rgba(255,140,50,0.9)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+      <line x1="9" y1="13" x2="9" y2="24" stroke="rgba(255,140,50,0.9)" stroke-width="2" stroke-linecap="round"/>
+      <line x1="17" y1="4" x2="17" y2="24" stroke="rgba(255,140,50,0.85)" stroke-width="2" stroke-linecap="round"/>
+      <line x1="14" y1="4" x2="14" y2="11" stroke="rgba(255,140,50,0.6)" stroke-width="1.5" stroke-linecap="round" stroke-dasharray="1.5 3"/>
+      <circle cx="23" cy="7" r="5" fill="rgba(5,9,15,0.9)"/>
+      <line x1="23" y1="5" x2="23" y2="9" stroke="rgba(255,140,50,0.9)" stroke-width="1.8" stroke-linecap="round"/>
+      <line x1="21" y1="7" x2="25" y2="7" stroke="rgba(255,140,50,0.9)" stroke-width="1.8" stroke-linecap="round"/>
     </svg>
-    <span class="rail-label">food</span>
-  </button>
+    <span class="dock-label">food</span>
+  </div>
 
-  <!-- Hypo treatment -->
-  <button class="rail-btn" onclick="openHypoLog()" title="hypo treatment">
-    <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
-      <!-- Sugar cube / glucose tab icon -->
-      <rect x="4" y="8" width="16" height="10" rx="2.5"
-        fill="rgba(80,130,230,0.25)" stroke="#6090e8" stroke-width="1.8"/>
-      <text x="12" y="16.5" font-family="sans-serif" font-size="8"
-        font-weight="700" fill="#6090e8" text-anchor="middle">hypo</text>
-      <!-- down arrow above box -->
-      <path d="M12 3 L12 7" stroke="#6090e8" stroke-width="1.8" stroke-linecap="round"/>
-      <path d="M9.5 5.5 L12 8 L14.5 5.5" stroke="#6090e8" stroke-width="1.8"
-        stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+  <!-- Hypo — golden lightning flick up -->
+  <div class="dock-btn dock-btn--hypo" id="dock-hypo" style="pointer-events:auto" ontouchstart="dockTouchStart(event,'hypo')" ontouchend="dockTouchEnd(event,'hypo')" onclick="openHypoLog()" title="hypo treatment">
+    <svg viewBox="0 0 28 28" fill="none">
+      <path d="M16 4 L10 15 L14 15 L12 24 L20 11 L16 11 Z" fill="rgba(255,210,40,0.85)" stroke="rgba(255,220,60,0.9)" stroke-width="1" stroke-linejoin="round"/>
     </svg>
-    <span class="rail-label">hypo</span>
-  </button>
+    <span class="dock-label">hypo</span>
+  </div>
 
-  <!-- Correction bolus -->
-  <button class="rail-btn" onclick="openCorrectionLog()" title="correction">
-    <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
-      <!-- Syringe body -->
-      <rect x="9" y="6" width="6" height="11" rx="1.5"
-        fill="rgba(220,160,50,0.2)" stroke="#dca030" stroke-width="1.8"/>
-      <!-- Plunger -->
-      <line x1="12" y1="9" x2="12" y2="14" stroke="#dca030" stroke-width="2.5"
-        stroke-linecap="round"/>
-      <!-- Needle -->
-      <line x1="12" y1="17" x2="12" y2="21" stroke="#dca030" stroke-width="1.8"
-        stroke-linecap="round"/>
-      <!-- Needle tip -->
-      <path d="M10.5 19.5 L12 21 L13.5 19.5" stroke="#dca030" stroke-width="1.4"
-        stroke-linecap="round" stroke-linejoin="round" fill="none"/>
-      <!-- Wings -->
-      <line x1="6" y1="10" x2="9" y2="10" stroke="#dca030" stroke-width="1.6" stroke-linecap="round"/>
-      <line x1="15" y1="10" x2="18" y2="10" stroke="#dca030" stroke-width="1.6" stroke-linecap="round"/>
+  <!-- Correction — long press, blue descending pulse -->
+  <div class="dock-btn dock-btn--correction" id="dock-correct" style="pointer-events:auto"
+    ontouchstart="correctionPressStart(event)"
+    ontouchend="correctionPressEnd(event)"
+    onclick="correctionTap()"
+    title="correction bolus (hold)">
+    <svg viewBox="0 0 28 28" fill="none">
+      <rect x="11" y="5" width="6" height="12" rx="2" fill="rgba(60,130,220,0.2)" stroke="rgba(60,130,220,0.9)" stroke-width="1.8"/>
+      <line x1="14" y1="8" x2="14" y2="14" stroke="rgba(60,130,220,0.9)" stroke-width="3" stroke-linecap="round"/>
+      <line x1="14" y1="17" x2="14" y2="22" stroke="rgba(60,130,220,0.9)" stroke-width="1.8" stroke-linecap="round"/>
+      <path d="M11.5 20 L14 22.5 L16.5 20" stroke="rgba(60,130,220,0.9)" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+      <line x1="7" y1="9" x2="11" y2="9" stroke="rgba(60,130,220,0.8)" stroke-width="1.6" stroke-linecap="round"/>
+      <line x1="17" y1="9" x2="21" y2="9" stroke="rgba(60,130,220,0.8)" stroke-width="1.6" stroke-linecap="round"/>
     </svg>
-    <span class="rail-label">correct</span>
-  </button>
-
-  <!-- Food library -->
-  <button class="rail-btn" onclick="openFoodManager()" title="food library">
-    <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
-      <!-- Open book -->
-      <path d="M12 6 C12 6 8 5 4 6 L4 19 C8 18 12 19 12 19 C12 19 16 18 20 19 L20 6 C16 5 12 6 12 6Z"
-        fill="rgba(160,210,140,0.18)" stroke="#a0d28a" stroke-width="1.8"
-        stroke-linecap="round" stroke-linejoin="round"/>
-      <line x1="12" y1="6" x2="12" y2="19" stroke="#a0d28a" stroke-width="1.4" stroke-linecap="round"/>
-      <!-- Lines on pages -->
-      <line x1="6.5" y1="10" x2="10" y2="9.5" stroke="#a0d28a" stroke-width="1.1" stroke-linecap="round" opacity="0.7"/>
-      <line x1="6.5" y1="13" x2="10" y2="12.5" stroke="#a0d28a" stroke-width="1.1" stroke-linecap="round" opacity="0.7"/>
-      <line x1="14" y1="9.5" x2="17.5" y2="10" stroke="#a0d28a" stroke-width="1.1" stroke-linecap="round" opacity="0.7"/>
-      <line x1="14" y1="12.5" x2="17.5" y2="13" stroke="#a0d28a" stroke-width="1.1" stroke-linecap="round" opacity="0.7"/>
-    </svg>
-    <span class="rail-label">library</span>
-  </button>
+    <span class="dock-label">correct</span>
+    <div id="corr-hold-ring" style="position:absolute;inset:-4px;border-radius:18px;border:2px solid rgba(60,130,220,0);transition:border-color .1s;pointer-events:none"></div>
+  </div>
 
 </div>
-
-<div id="sheet">
-  <div class="handle"></div>
   <div class="sheet-title">add to the flow</div>
   <div class="sheet-sub">carbs · bolus · or both</div>
 
