@@ -2080,7 +2080,10 @@ function renderSheet() {
 
   sheet.innerHTML =
     '<div class="handle"></div>' +
+    '<div style="display:flex;align-items:center;justify-content:space-between;padding:0 8px 0 0">' +
     '<div class="sheet-title">add to the flow</div>' +
+    '<button onclick="closeSheet()" style="background:none;border:none;cursor:pointer;font-size:26px;color:rgba(40,55,50,0.3);padding:4px 8px;line-height:1;touch-action:manipulation">×</button>' +
+    '</div>' +
 
     // Time row
     '<div style="display:flex;align-items:center;gap:8px;padding:0 18px;margin-bottom:14px">' +
@@ -3540,7 +3543,7 @@ function buildSetupScreen() {
         never to any third party. This app has no backend.
       </div>
     </div>
-    <div style="text-align:center;margin-top:10px;font-family:'DM Mono',monospace;font-size:8px;color:rgba(40,55,50,0.15);letter-spacing:1px">build 20260326-76</div>
+    <div style="text-align:center;margin-top:10px;font-family:'DM Mono',monospace;font-size:8px;color:rgba(40,55,50,0.15);letter-spacing:1px">build 20260326-79</div>
   </div>
 </div>`;
 }
