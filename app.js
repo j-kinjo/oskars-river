@@ -1615,7 +1615,7 @@ function frame(ts) {
 // ── TOUCH / MOUSE ────────────────────────────────────────────
 let drag={on:false,x0:0,t0:0}, pinch={on:false,d0:0,s0:0};
 CV.addEventListener('touchstart',e=>{
-  if(e.target.closest&&e.target.closest('#sheet,#flow-dock,.dock-btn,#whisper-overlay,#food-mgr-overlay,#hypo-overlay,#corr-overlay,#food-add-overlay')) return;
+  if(e.target.closest&&e.target.closest('#sheet,#flow-dock,.dock-btn,#whisper-overlay,#food-mgr-overlay,#hypo-overlay,#corr-overlay,#food-add-overlay,[id$=-overlay],button,input,textarea,select')) return;
   if(e.touches.length===1) drag={on:true,x0:e.touches[0].clientX,t0:viewTime};
   else if(e.touches.length===2) {
     const dx=e.touches[0].clientX-e.touches[1].clientX;
@@ -1624,7 +1624,7 @@ CV.addEventListener('touchstart',e=>{
   }
 },{passive:true});
 CV.addEventListener('touchmove',e=>{
-  if(e.target.closest&&e.target.closest('#sheet,#flow-dock,.dock-btn,#whisper-overlay,#food-mgr-overlay,#hypo-overlay,#corr-overlay,#food-add-overlay')) return;
+  if(e.target.closest&&e.target.closest('#sheet,#flow-dock,.dock-btn,#whisper-overlay,#food-mgr-overlay,#hypo-overlay,#corr-overlay,#food-add-overlay,[id$=-overlay],button,input,textarea,select')) return;
   e.preventDefault();
   if(drag.on&&e.touches.length===1) {
     viewTime=Math.max(CGM_START,Math.min(CGM_END,drag.t0-(e.touches[0].clientX-drag.x0)*(viewSpan/W))); _isAtNow=false;
@@ -1636,7 +1636,7 @@ CV.addEventListener('touchmove',e=>{
 },{passive:false});
 CV.addEventListener('touchend',()=>{drag.on=false;pinch.on=false;},{passive:true});
 let md={on:false,x0:0,t0:0};
-CV.addEventListener('mousedown',e=>{if(!e.target.closest('#sheet,#flow-dock,.dock-btn,#whisper-overlay,#food-mgr-overlay,#hypo-overlay,#corr-overlay,#food-add-overlay'))md={on:true,x0:e.clientX,t0:viewTime}});
+CV.addEventListener('mousedown',e=>{if(!e.target.closest('#sheet,#flow-dock,.dock-btn,#whisper-overlay,#food-mgr-overlay,#hypo-overlay,#corr-overlay,#food-add-overlay,[id$=-overlay],button,input,textarea,select'))md={on:true,x0:e.clientX,t0:viewTime}});
 CV.addEventListener('mousemove',e=>{if(md.on)viewTime=Math.max(CGM_START,Math.min(CGM_END,md.t0-(e.clientX-md.x0)*(viewSpan/W)))});
 CV.addEventListener('mouseup',()=>md.on=false);
 // wheel zoom disabled — fixed 2h view
@@ -3245,6 +3245,8 @@ function openHypoLog() {
   var ex=document.getElementById('hypo-overlay'); if(ex){ex.remove();return;}
   var el=document.createElement('div'); el.id='hypo-overlay';
   el.style.cssText='position:fixed;inset:0;z-index:60;background:rgba(3,5,20,0.9);backdrop-filter:blur(14px);display:flex;flex-direction:column;align-items:center;justify-content:center;padding:24px;transition:opacity .25s;opacity:0;touch-action:pan-y;pointer-events:auto';
+  el.addEventListener('touchstart',function(e){e.stopPropagation();},{passive:true});
+  el.addEventListener('click',function(e){if(e.target===el)closeHypoLog();});
   var s='<div style="max-width:360px;width:100%">';
   s+='<div style="font-family:\'Fraunces\',serif;font-style:italic;font-weight:200;font-size:22px;color:rgba(100,150,255,0.9);text-align:center;margin-bottom:20px">hypo treatment</div>';
   s+='<div style="display:flex;flex-direction:column;gap:8px">';
@@ -3538,7 +3540,7 @@ function buildSetupScreen() {
         never to any third party. This app has no backend.
       </div>
     </div>
-    <div style="text-align:center;margin-top:10px;font-family:'DM Mono',monospace;font-size:8px;color:rgba(40,55,50,0.15);letter-spacing:1px">build 20260326-75</div>
+    <div style="text-align:center;margin-top:10px;font-family:'DM Mono',monospace;font-size:8px;color:rgba(40,55,50,0.15);letter-spacing:1px">build 20260326-76</div>
   </div>
 </div>`;
 }
@@ -4219,11 +4221,16 @@ function openWhisper() {
 
   var el = document.createElement('div');
   el.id  = 'whisper-overlay';
-  el.style.cssText = 'position:fixed;inset:0;z-index:75;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:32px;pointer-events:auto;touch-action:pan-y';
+  el.style.cssText = 'position:fixed;inset:0;z-index:75;background:rgba(3,8,20,0.92);backdrop-filter:blur(20px);display:flex;flex-direction:column;overflow-y:auto;-webkit-overflow-scrolling:touch;padding:0;pointer-events:auto;touch-action:pan-y';
+  el.addEventListener('touchstart',function(e){e.stopPropagation();},{passive:true});
 
   el.innerHTML =
-    '<div style="max-width:340px;width:100%;text-align:center">' +
-    '<div style="font-family:\'Fraunces\',serif;font-style:italic;font-weight:200;font-size:22px;color:rgba(180,220,200,0.7);margin-bottom:6px;letter-spacing:-.5px">ask the river</div>' +
+    '<div style="min-height:100%;display:flex;flex-direction:column;align-items:center;justify-content:flex-start;padding:48px 24px 40px;box-sizing:border-box">' +
+    '<div style="max-width:340px;width:100%">' +
+    '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px">' +
+    '<div style="font-family:\'Fraunces\',serif;font-style:italic;font-weight:200;font-size:22px;color:rgba(180,220,200,0.7);letter-spacing:-.5px">ask the river</div>' +
+    '<button onclick="closeWhisper()" style="background:none;border:none;cursor:pointer;font-size:24px;color:rgba(255,255,255,0.25);padding:4px;line-height:1;touch-action:manipulation">×</button>' +
+    '</div>' +
     '<div style="font-family:\'DM Mono\',monospace;font-size:9px;color:rgba(100,160,140,0.3);letter-spacing:1.5px;text-transform:uppercase;margin-bottom:24px">' +
       (dataAt ? dataAt(viewTime).bg.toFixed(1) + ' mmol · ' + new Date().toLocaleTimeString('en-GB',{hour:'2-digit',minute:'2-digit'}) : '') +
     '</div>' +
@@ -4233,9 +4240,9 @@ function openWhisper() {
       'color:rgba(180,220,200,0.9);resize:none;outline:none;box-sizing:border-box;' +
       'backdrop-filter:blur(20px);line-height:1.5"></textarea>' +
     '<div id="whisper-response" style="min-height:60px;margin-top:16px;font-family:\'Fraunces\',serif;font-weight:200;font-style:italic;font-size:15px;color:rgba(180,220,200,0.6);line-height:1.6;text-align:left"></div>' +
-    '<div style="display:flex;gap:10px;margin-top:20px;justify-content:center">' +
-      '<button onclick="sendWhisper()" style="padding:10px 24px;border-radius:10px;border:1px solid rgba(62,180,120,0.25);background:rgba(62,180,120,0.07);font-family:\'Fraunces\',serif;font-style:italic;font-weight:200;font-size:15px;color:rgba(62,180,120,0.8);cursor:pointer">ask</button>' +
-      '<button onclick="closeWhisper()" style="padding:10px 16px;border-radius:10px;border:1px solid rgba(255,255,255,0.06);background:transparent;font-family:\'DM Mono\',monospace;font-size:9px;color:rgba(255,255,255,0.2);cursor:pointer">close</button>' +
+    '<div style="display:flex;gap:10px;margin-top:20px">' +
+      '<button onclick="sendWhisper()" style="flex:1;padding:14px;border-radius:10px;border:1px solid rgba(62,180,120,0.25);background:rgba(62,180,120,0.07);font-family:\'Fraunces\',serif;font-style:italic;font-weight:200;font-size:17px;color:rgba(62,180,120,0.8);cursor:pointer;touch-action:manipulation">ask</button>' +
+    '</div>' +
     '</div></div>';
 
   document.body.appendChild(el);
@@ -4271,9 +4278,16 @@ async function sendWhisper() {
   ].join('\n');
 
   try {
-    var r = await fetch('https://api.anthropic.com/v1/messages', {
+    // Route through Cloudflare proxy — add anthropic-version header
+    var proxyUrl = 'https://orange-surf-6f98.john-king-uk.workers.dev/?url=' +
+      encodeURIComponent('https://api.anthropic.com/v1/messages');
+    var r = await fetch(proxyUrl, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: {
+        'Content-Type': 'application/json',
+        'anthropic-version': '2023-06-01',
+        'anthropic-dangerous-direct-browser-access': 'true',
+      },
       body: JSON.stringify({
         model: 'claude-sonnet-4-20250514',
         max_tokens: 180,
@@ -4281,11 +4295,21 @@ async function sendWhisper() {
         messages: [{ role: 'user', content: 'Clinical context:\n' + ctx + '\n\nQuestion: ' + q }]
       })
     });
+    if (!r.ok) {
+      var errTxt = await r.text().catch(()=>'');
+      resp.textContent = 'River is quiet right now (' + r.status + '). Try again shortly.';
+      console.warn('[whisper] API error:', r.status, errTxt.slice(0,100));
+      return;
+    }
     var data = await r.json();
     var text = ((data.content||[])[0]||{}).text || 'No response';
+    resp.style.opacity = '0';
+    resp.style.transition = 'opacity .4s';
     resp.textContent = text;
+    setTimeout(function(){ resp.style.opacity = '1'; }, 50);
   } catch(e) {
-    resp.textContent = 'Could not reach the river. Check your connection.';
+    console.warn('[whisper] fetch error:', e);
+    resp.textContent = 'River is quiet. Check your connection and try again.';
   }
 }
 
