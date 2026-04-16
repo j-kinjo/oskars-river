@@ -10,7 +10,6 @@
 // ── DATA PLACEHOLDER (injected at build time) ─────────────────
 const HISTORY_RAW = window.__RIVER_HISTORY__ || [];
 
-var BOLUS_EVENTS = [];
 var LOGGED_EVENTS = [];
 try { LOGGED_EVENTS = JSON.parse(localStorage.getItem('river_logged')||'[]');
   LOGGED_EVENTS = LOGGED_EVENTS.filter(function(e){return (Date.now()-e.t)<30*86400000;});
@@ -38,6 +37,13 @@ function updateCGMBounds() {
 
 // ── CONSTANTS ─────────────────────────────────────────────────
 const BG_LOW  = 3.9, BG_HIGH = 10.0;
+
+// ── FORCE COLOURS ─────────────────────────────────────────────────
+const COL_IOB   = [60,  130, 220];  // cool blue   — insulin gravity
+const COL_COB   = [255, 140,  50];  // warm orange  — carb buoyancy
+const COL_HYPO  = [255, 210,  40];  // golden yellow — hypo lightning
+const COL_BGLOW = [80,  130, 220];  // blue when low
+const COL_BGHIGH= [230, 140,  40];  // amber when high
 const BG_MIN  = 2.0, BG_MAX  = 18.0;
 const MAX_IOB = 6.0, MAX_COB = 80.0;
 const NOW_X   = 0.62;
@@ -562,6 +568,272 @@ function drawForceRibbon(pts, colorR, direction) {
 // ── EQUILIBRIUM ZONE — the calm corridor between forces ───────────────
 // When BG is in range and forces are roughly balanced, draw a soft
 // glowing band showing the target zone — the zone of equilibrium
+// ── GAS CLOUD — living ethereal force field ───────────────────────────
+// direction:  1 = carbs rising from below BG line toward bottom of screen
+//            -1 = insulin falling from above BG line toward top of screen
+// The cloud fills the space between the BG line and the screen edge
+// in the direction of the force, with animated wispy tendrils
+
+function drawGasCloud(pts, col, direction, d) {
+  if (!pts || pts.length < 2) return;
+  const past = pts.filter(p => !p.future);
+  if (past.length < 2) return;
+
+  const peakVal = Math.max(...past.map(p => p.val));
+  if (peakVal < 0.01) return; // void — no force active
+
+  const [r, g, b] = col;
+  const tipFrac = Math.min(1, Math.sqrt(peakVal / (direction > 0 ? 50 : 3.0)));
+
+  CX.save();
+
+  const nowX  = NOW_X * W;
+  const edgeY = direction > 0 ? H : 0; // screen edge toward which cloud expands
+
+  // ── MAIN CLOUD BODY — gaussian fill from BG line to screen edge ──
+  // Build the cloud polygon: BG line on one side, screen edge on other
+  const topEdge = past.map(p => ({ x: p.x, y: p.bgY }));         // BG line
+  const botEdge = past.map(p => {                                   // cloud extent
+    // Cloud height scales with force value and tapers toward left (older)
+    const ageFrac  = Math.max(0, Math.min(1, (viewTime - p.t) / (2*3600000)));
+    const strength = Math.min(1, Math.sqrt(Math.max(0, p.val) / (direction > 0 ? 50 : 3.0)));
+    const maxH     = H * 0.45 * strength * (0.2 + 0.8 * ageFrac);
+    return { x: p.x, y: p.bgY + direction * maxH };
+  });
+
+  // Gradient from BG line (transparent) to screen edge (peak opacity)
+  const gradY0 = past[past.length-1].bgY;
+  const gradY1 = gradY0 + direction * H * 0.45;
+  const grad   = CX.createLinearGradient(0, gradY0, 0, gradY1);
+  grad.addColorStop(0,    `rgba(${r},${g},${b},0)`);
+  grad.addColorStop(0.15, `rgba(${r},${g},${b},${0.04 * tipFrac})`);
+  grad.addColorStop(0.4,  `rgba(${r},${g},${b},${0.10 * tipFrac})`);
+  grad.addColorStop(0.7,  `rgba(${r},${g},${b},${0.16 * tipFrac})`);
+  grad.addColorStop(1.0,  `rgba(${r},${g},${b},${0.22 * tipFrac})`);
+
+  CX.globalAlpha = 1;
+  CX.fillStyle   = grad;
+  CX.beginPath();
+  CX.moveTo(topEdge[0].x, topEdge[0].y);
+  _drawSmoothLine(topEdge);
+  // Across to cloud extent
+  for (let i = botEdge.length-1; i >= 0; i--) {
+    CX.lineTo(botEdge[i].x, botEdge[i].y);
+  }
+  CX.closePath();
+  CX.fill();
+
+  // ── WISPS — animated tendrils floating in the gas ─────────────
+  const wispCount = Math.floor(3 + tipFrac * 6);
+  const rng = seededRand(direction > 0 ? 77 : 33);
+  for (let w = 0; w < wispCount; w++) {
+    const wIdx   = Math.floor(past.length * (0.2 + rng() * 0.8));
+    if (wIdx >= past.length) continue;
+    const wp     = past[wIdx];
+    const wStrength = Math.min(1, Math.sqrt(Math.max(0, wp.val) / (direction > 0 ? 50 : 3.0)));
+    if (wStrength < 0.05) continue;
+
+    const wPhase  = phi * (0.4 + rng() * 0.6) + w * 1.3;
+    const wOffset = Math.sin(wPhase) * 8 * wStrength;
+    const wH      = wp.bgY + direction * H * 0.35 * wStrength + wOffset;
+    const wAlpha  = wStrength * tipFrac * (0.08 + 0.12 * Math.abs(Math.sin(wPhase)));
+    const wWidth  = 20 + rng() * 40;
+
+    const wg = CX.createRadialGradient(wp.x, wH, 0, wp.x, wH, wWidth);
+    wg.addColorStop(0,   `rgba(${r},${g},${b},${wAlpha})`);
+    wg.addColorStop(0.5, `rgba(${r},${g},${b},${wAlpha * 0.4})`);
+    wg.addColorStop(1,   `rgba(${r},${g},${b},0)`);
+    CX.globalAlpha = 1;
+    CX.fillStyle   = wg;
+    CX.beginPath();
+    CX.ellipse(wp.x, wH, wWidth, wWidth * 0.4, 0, 0, Math.PI * 2);
+    CX.fill();
+  }
+
+  // ── BOUNDARY FILAMENT — glowing edge at the BG line interface ──
+  const filAlpha = Math.max(0.15, tipFrac * 0.55);
+  CX.globalAlpha = filAlpha;
+  CX.strokeStyle = `rgba(${r},${g},${b},1)`;
+  CX.lineWidth   = 1.2;
+  CX.shadowColor = `rgba(${r},${g},${b},0.7)`;
+  CX.shadowBlur  = 6;
+  _drawSmoothLine(topEdge);
+  CX.stroke();
+  CX.shadowBlur  = 0;
+
+  // ── TIP CONVERGENCE — where the force meets now ────────────────
+  const tip = past[past.length - 1];
+  if (tipFrac > 0.02 && tip) {
+    const tipR = 2 + tipFrac * 6;
+    const tg   = CX.createRadialGradient(tip.x, tip.y, 0, tip.x, tip.y, tipR * 4);
+    tg.addColorStop(0,   `rgba(${r},${g},${b},${0.7 * tipFrac})`);
+    tg.addColorStop(0.5, `rgba(${r},${g},${b},${0.2 * tipFrac})`);
+    tg.addColorStop(1,   `rgba(${r},${g},${b},0)`);
+    CX.globalAlpha = 1;
+    CX.fillStyle   = tg;
+    CX.shadowColor = `rgba(${r},${g},${b},0.8)`;
+    CX.shadowBlur  = 12;
+    CX.beginPath(); CX.arc(tip.x, tip.y, tipR * 4, 0, Math.PI * 2); CX.fill();
+
+    // Solid core spark
+    CX.fillStyle   = `rgba(${r},${g},${b},${0.9 * tipFrac})`;
+    CX.shadowBlur  = 4;
+    CX.beginPath(); CX.arc(tip.x, tip.y, Math.max(0.5, tipFrac * 2.5), 0, Math.PI * 2); CX.fill();
+    CX.shadowBlur  = 0;
+  }
+
+  CX.restore();
+}
+
+// ── FUTURE CLOUDS — projected gas beyond now ─────────────────────────
+function drawFutureClouds(cobPts, iobPts, d, pal) {
+  const nowX = NOW_X * W;
+
+  // Subtle void deepening ahead
+  const mg = CX.createLinearGradient(nowX, 0, W, 0);
+  mg.addColorStop(0,    'rgba(0,0,0,0)');
+  mg.addColorStop(0.08, 'rgba(0,0,0,0.06)');
+  mg.addColorStop(1,    'rgba(0,0,0,0.20)');
+  CX.fillStyle = mg;
+  CX.fillRect(nowX, 0, W - nowX, H);
+
+  // Project COB cloud forward
+  const cobFuture = cobPts.filter(p => p.future);
+  if (cobFuture.length > 1) {
+    const [r,g,b] = COL_COB;
+    const peakCob = Math.max(...cobPts.filter(p=>!p.future).map(p=>p.val));
+    const tf = Math.min(0.5, Math.sqrt(peakCob / 50));
+    CX.save();
+    const grad = CX.createLinearGradient(nowX, 0, W, 0);
+    grad.addColorStop(0,   `rgba(${r},${g},${b},${0.12 * tf})`);
+    grad.addColorStop(1,   `rgba(${r},${g},${b},0)`);
+    CX.globalAlpha = 1;
+    CX.fillStyle   = grad;
+    CX.beginPath();
+    CX.moveTo(nowX, d ? bgToY(d.bg) : H/2);
+    for (const p of cobFuture) CX.lineTo(p.x, p.bgY);
+    for (let i = cobFuture.length-1; i >= 0; i--) CX.lineTo(cobFuture[i].x, cobFuture[i].y);
+    CX.closePath(); CX.fill();
+    // Wispy filament
+    CX.globalAlpha = tf * 0.3;
+    CX.strokeStyle = `rgba(${r},${g},${b},1)`;
+    CX.lineWidth   = 0.8;
+    CX.setLineDash([3, 9]);
+    CX.beginPath();
+    CX.moveTo(nowX, d ? bgToY(d.bg) : H/2);
+    for (const p of cobFuture) CX.lineTo(p.x, p.y);
+    CX.stroke();
+    CX.setLineDash([]);
+    CX.restore();
+  }
+
+  // Project IOB cloud forward
+  const iobFuture = iobPts.filter(p => p.future);
+  if (iobFuture.length > 1) {
+    const [r,g,b] = COL_IOB;
+    const peakIob = Math.max(...iobPts.filter(p=>!p.future).map(p=>p.val));
+    const tf = Math.min(0.5, Math.sqrt(peakIob / 3.0));
+    CX.save();
+    const grad = CX.createLinearGradient(nowX, 0, W, 0);
+    grad.addColorStop(0,   `rgba(${r},${g},${b},${0.12 * tf})`);
+    grad.addColorStop(1,   `rgba(${r},${g},${b},0)`);
+    CX.globalAlpha = 1;
+    CX.fillStyle   = grad;
+    CX.beginPath();
+    CX.moveTo(nowX, d ? bgToY(d.bg) : H/2);
+    for (const p of iobFuture) CX.lineTo(p.x, p.bgY);
+    for (let i = iobFuture.length-1; i >= 0; i--) CX.lineTo(iobFuture[i].x, iobFuture[i].y);
+    CX.closePath(); CX.fill();
+    CX.globalAlpha = tf * 0.3;
+    CX.strokeStyle = `rgba(${r},${g},${b},1)`;
+    CX.lineWidth   = 0.8;
+    CX.setLineDash([3, 9]);
+    CX.beginPath();
+    CX.moveTo(nowX, d ? bgToY(d.bg) : H/2);
+    for (const p of iobFuture) CX.lineTo(p.x, p.y);
+    CX.stroke();
+    CX.setLineDash([]);
+    CX.restore();
+  }
+}
+
+// ── ORB — the present moment, buoyant on the BG line ─────────────────
+function drawOrb(pal, d) {
+  if (!d) return;
+  const x    = NOW_X * W;
+  const y    = bgToY(d.bg);
+  const t    = Date.now() / 1000;
+
+  // Colour shifts with BG value
+  const [r, g, b] = d.bg < BG_LOW  ? COL_BGLOW :
+                    d.bg > BG_HIGH  ? COL_BGHIGH :
+                    pal.bgLine;
+
+  // Breathing pulse — slow living rhythm
+  const breath = 0.7 + Math.sin(phi * 0.8) * 0.3;
+  const orbR   = 6 + breath * 3;
+
+  CX.save();
+
+  // Outer glow — wide, soft, colour-coded
+  const og = CX.createRadialGradient(x, y, 0, x, y, orbR * 5);
+  og.addColorStop(0,   `rgba(${r},${g},${b},${0.25 * breath})`);
+  og.addColorStop(0.4, `rgba(${r},${g},${b},${0.10 * breath})`);
+  og.addColorStop(1,   `rgba(${r},${g},${b},0)`);
+  CX.globalAlpha = 1;
+  CX.fillStyle   = og;
+  CX.beginPath(); CX.arc(x, y, orbR * 5, 0, Math.PI * 2); CX.fill();
+
+  // Mid glow
+  const mg = CX.createRadialGradient(x, y, 0, x, y, orbR * 2.5);
+  mg.addColorStop(0,   `rgba(${r},${g},${b},${0.6 * breath})`);
+  mg.addColorStop(0.6, `rgba(${r},${g},${b},${0.2 * breath})`);
+  mg.addColorStop(1,   `rgba(${r},${g},${b},0)`);
+  CX.fillStyle   = mg;
+  CX.shadowColor = `rgba(${r},${g},${b},0.9)`;
+  CX.shadowBlur  = 16;
+  CX.beginPath(); CX.arc(x, y, orbR * 2.5, 0, Math.PI * 2); CX.fill();
+  CX.shadowBlur  = 0;
+
+  // Core — solid, bright
+  CX.fillStyle   = `rgba(${r},${g},${b},0.95)`;
+  CX.shadowColor = `rgba(${r},${g},${b},1)`;
+  CX.shadowBlur  = 8;
+  CX.beginPath(); CX.arc(x, y, Math.max(2, orbR * 0.5), 0, Math.PI * 2); CX.fill();
+  CX.shadowBlur  = 0;
+
+  // Sparkle — tiny rotating satellites
+  const sparkCount = 3;
+  for (let i = 0; i < sparkCount; i++) {
+    const angle  = phi * 0.6 + (i / sparkCount) * Math.PI * 2;
+    const dist   = orbR * 1.8;
+    const sx     = x + Math.cos(angle) * dist;
+    const sy     = y + Math.sin(angle) * dist;
+    const sa     = 0.3 + Math.sin(phi * 1.2 + i * 2.1) * 0.2;
+    CX.globalAlpha = Math.max(0, sa);
+    CX.fillStyle   = `rgba(${r},${g},${b},1)`;
+    CX.shadowColor = `rgba(${r},${g},${b},0.8)`;
+    CX.shadowBlur  = 3;
+    CX.beginPath(); CX.arc(sx, sy, Math.max(0.5, orbR * 0.12), 0, Math.PI * 2); CX.fill();
+    CX.shadowBlur  = 0;
+  }
+
+  // Long-press hint — very subtle ring
+  if (_orbLongPressHint > 0) {
+    CX.globalAlpha = _orbLongPressHint * 0.4;
+    CX.strokeStyle = `rgba(${r},${g},${b},1)`;
+    CX.lineWidth   = 1;
+    CX.beginPath(); CX.arc(x, y, orbR * 3.5, 0, Math.PI * 2); CX.stroke();
+    _orbLongPressHint *= 0.96;
+  }
+
+  CX.globalAlpha = 1;
+  CX.restore();
+}
+
+let _orbLongPressHint = 0;
+
+
 function drawEquilibriumZone(pal) {
   const loY = bgToY(BG_HIGH); // top of target (high mmol = higher on screen)
   const hiY = bgToY(BG_LOW);  // bottom of target
@@ -861,10 +1133,10 @@ function drawTimeLabels(pal) {
   CX.fillText('now', nowX, H - 35);
   CX.globalAlpha=0.28;CX.fillStyle='rgba(200,220,240,1)';
   CX.font="300 9px 'DM Mono',monospace";CX.textAlign='right';
-  CX.fillText('__BUILD_ID__',W-10,H-8);
+  CX.fillText('build 66',W-10,H-8);
   CX.globalAlpha=0.28;CX.fillStyle='rgba(200,220,240,1)';
   CX.font="300 9px 'DM Mono',monospace";CX.textAlign='right';
-  CX.fillText('__BUILD_ID__',W-10,H-8);
+  CX.fillText('build 66',W-10,H-8);
   CX.restore();
 }
 
@@ -1283,11 +1555,11 @@ function frame(ts) {
   // ── EQUILIBRIUM ZONE — soft target corridor ────────────────────
   drawEquilibriumZone(pal);
 
-  // ── FORCE RIBBONS — carbs above, insulin below ─────────────────
-  const cobPts = buildForcePts('cob',  1, 90);  // buoyancy: upward (+1)
-  const iobPts = buildForcePts('iob', -1, 90);  // gravity:  downward (-1)
-  drawForceRibbon(cobPts, pal.cobR,  1);
-  drawForceRibbon(iobPts, pal.iobR, -1);
+  // ── GAS CLOUDS — living forces above and below the BG line ──────
+  const cobPts = buildForcePts('cob',  1, 90);
+  const iobPts = buildForcePts('iob', -1, 90);
+  drawGasCloud(cobPts, COL_COB,  1, d);   // carbs: warm orange rising
+  drawGasCloud(iobPts, COL_IOB, -1, d);   // insulin: cool blue falling
 
   // ── BG TRACE — the life-line ────────────────────────────────────
   drawBGTrail(pal);
@@ -1297,11 +1569,11 @@ function frame(ts) {
 
   // ── CONTEXT ─────────────────────────────────────────────────────
   drawTransition(pal);
-  drawFutureMist(pal);
+  drawFutureClouds(cobPts, iobPts, d, pal);
   drawTimeLabels(pal);
 
-  // ── THE BOAT ────────────────────────────────────────────────────
-  drawBoat(pal, d);
+  // ── THE ORB — buoyant on BG line ────────────────────────────────
+  drawOrb(pal, d);
 
   // ── NOW PULSE — breath at current moment ─────────────────────
   drawNowPulse(pal, d);
@@ -1342,7 +1614,7 @@ function frame(ts) {
 // ── TOUCH / MOUSE ────────────────────────────────────────────
 let drag={on:false,x0:0,t0:0}, pinch={on:false,d0:0,s0:0};
 CV.addEventListener('touchstart',e=>{
-  if(e.target.closest&&e.target.closest('#sheet,#logbtn,#action-rail,.rail-btn,#food-mgr-overlay,#hypo-overlay,#corr-overlay,#food-add-overlay')) return;
+  if(e.target.closest&&e.target.closest('#sheet,#flow-dock,.dock-btn,#whisper-overlay,#food-mgr-overlay,#hypo-overlay,#corr-overlay,#food-add-overlay')) return;
   if(e.touches.length===1) drag={on:true,x0:e.touches[0].clientX,t0:viewTime};
   else if(e.touches.length===2) {
     const dx=e.touches[0].clientX-e.touches[1].clientX;
@@ -1351,7 +1623,7 @@ CV.addEventListener('touchstart',e=>{
   }
 },{passive:true});
 CV.addEventListener('touchmove',e=>{
-  if(e.target.closest&&e.target.closest('#sheet,#action-rail,.rail-btn,#food-mgr-overlay,#hypo-overlay,#corr-overlay,#food-add-overlay')) return;
+  if(e.target.closest&&e.target.closest('#sheet,#flow-dock,.dock-btn,#whisper-overlay,#food-mgr-overlay,#hypo-overlay,#corr-overlay,#food-add-overlay')) return;
   e.preventDefault();
   if(drag.on&&e.touches.length===1) {
     viewTime=Math.max(CGM_START,Math.min(CGM_END,drag.t0-(e.touches[0].clientX-drag.x0)*(viewSpan/W))); _isAtNow=false;
@@ -1363,7 +1635,7 @@ CV.addEventListener('touchmove',e=>{
 },{passive:false});
 CV.addEventListener('touchend',()=>{drag.on=false;pinch.on=false;},{passive:true});
 let md={on:false,x0:0,t0:0};
-CV.addEventListener('mousedown',e=>{if(!e.target.closest('#sheet,#logbtn,#action-rail,.rail-btn,#food-mgr-overlay,#hypo-overlay,#corr-overlay,#food-add-overlay'))md={on:true,x0:e.clientX,t0:viewTime}});
+CV.addEventListener('mousedown',e=>{if(!e.target.closest('#sheet,#flow-dock,.dock-btn,#whisper-overlay,#food-mgr-overlay,#hypo-overlay,#corr-overlay,#food-add-overlay'))md={on:true,x0:e.clientX,t0:viewTime}});
 CV.addEventListener('mousemove',e=>{if(md.on)viewTime=Math.max(CGM_START,Math.min(CGM_END,md.t0-(e.clientX-md.x0)*(viewSpan/W)))});
 CV.addEventListener('mouseup',()=>md.on=false);
 // wheel zoom disabled — fixed 2h view
@@ -3265,7 +3537,7 @@ function buildSetupScreen() {
         never to any third party. This app has no backend.
       </div>
     </div>
-    <div style="text-align:center;margin-top:10px;font-family:'DM Mono',monospace;font-size:8px;color:rgba(40,55,50,0.15);letter-spacing:1px">__BUILD_ID__</div>
+    <div style="text-align:center;margin-top:10px;font-family:'DM Mono',monospace;font-size:8px;color:rgba(40,55,50,0.15);letter-spacing:1px">build 20260326-75</div>
   </div>
 </div>`;
 }
@@ -3768,6 +4040,258 @@ function deleteFood(encodedName) {
   showToast('removed: ' + name);
   renderFoodManager();
 }
+
+// ── DOCK GESTURES & FLICK ANIMATIONS ─────────────────────────────────
+let _dockTouch = {};
+let _corrHoldTimer = null;
+
+function dockTouchStart(e, type) {
+  const t = e.touches[0];
+  _dockTouch[type] = { y: t.clientY, x: t.clientX, time: Date.now() };
+}
+
+function dockTouchEnd(e, type) {
+  const start = _dockTouch[type];
+  if (!start) return;
+  const t = e.changedTouches[0];
+  const dy = start.y - t.clientY;
+  const dt = Date.now() - start.time;
+  // Flick = upward movement > 30px in < 400ms
+  if (dy > 30 && dt < 400) {
+    const startX = t.clientX;
+    const startY = start.y;
+    if (type === 'food')  { flickAnimation(startX, startY, COL_COB,  1); openSheet(); }
+    if (type === 'hypo')  { flickAnimation(startX, startY, COL_HYPO, 1); openHypoLog(); }
+  }
+  delete _dockTouch[type];
+}
+
+function correctionTap() {
+  // Single tap — show the correction log (no flick needed)
+  openCorrectionLog();
+}
+
+let _corrPressStart = 0;
+function correctionPressStart(e) {
+  _corrPressStart = Date.now();
+  const ring = document.getElementById('corr-hold-ring');
+  if (ring) ring.style.borderColor = 'rgba(60,130,220,0.5)';
+  _corrHoldTimer = setTimeout(function() {
+    // Long hold = confirmed correction entry
+    const ring = document.getElementById('corr-hold-ring');
+    if (ring) ring.style.borderColor = 'rgba(60,130,220,0)';
+    const btn = document.getElementById('dock-correct');
+    if (btn) {
+      const rect = btn.getBoundingClientRect();
+      flickAnimation(rect.left + rect.width/2, rect.top, COL_IOB, -1);
+    }
+    openCorrectionLog();
+  }, 600);
+}
+
+function correctionPressEnd(e) {
+  if (_corrHoldTimer) { clearTimeout(_corrHoldTimer); _corrHoldTimer = null; }
+  const ring = document.getElementById('corr-hold-ring');
+  if (ring) ring.style.borderColor = 'rgba(60,130,220,0)';
+  const held = Date.now() - _corrPressStart;
+  if (held < 600) correctionTap(); // short press = open log
+}
+
+// ── FLICK ANIMATION — particles enter the flow ────────────────────────
+const _flickParticles = [];
+
+function flickAnimation(startX, startY, col, direction) {
+  // direction: 1 = rising (food/hypo), -1 = falling (correction)
+  const count = 18;
+  for (let i = 0; i < count; i++) {
+    const angle  = -Math.PI/2 + (Math.random()-0.5) * 0.8; // mostly vertical
+    const speed  = 4 + Math.random() * 8;
+    _flickParticles.push({
+      x:    startX + (Math.random()-0.5)*20,
+      y:    startY,
+      vx:   Math.cos(angle) * speed * (Math.random()-0.5),
+      vy:   Math.sin(angle) * speed * direction,
+      life: 1.0,
+      decay:0.025 + Math.random()*0.02,
+      r:    1.5 + Math.random()*2.5,
+      col:  col,
+    });
+  }
+  // Ripple at BG line (orb position)
+  const orbX = NOW_X * (window.innerWidth || 390);
+  const d = dataAt ? dataAt(viewTime) : null;
+  const orbY = d ? bgToY(d.bg) : (window.innerHeight || 844) * 0.6;
+  _flickRipples.push({ x: orbX, y: orbY, r: 0, maxR: 55, alpha: 0.7, col });
+  requestAnimationFrame(animateFlick);
+}
+
+const _flickRipples = [];
+
+function animateFlick() {
+  const fc = document.getElementById('flick-canvas');
+  if (!fc) return;
+  fc.width  = window.innerWidth;
+  fc.height = window.innerHeight;
+  const ctx = fc.getContext('2d');
+  ctx.clearRect(0, 0, fc.width, fc.height);
+
+  let alive = false;
+
+  // Draw particles
+  for (const p of _flickParticles) {
+    if (p.life <= 0) continue;
+    alive = true;
+    p.x  += p.vx;
+    p.y  += p.vy;
+    p.vy *= 0.96; // gentle deceleration
+    p.vx *= 0.96;
+    p.life -= p.decay;
+    const [r,g,b] = p.col;
+    ctx.globalAlpha = Math.max(0, p.life);
+    ctx.fillStyle   = `rgba(${r},${g},${b},1)`;
+    ctx.shadowColor = `rgba(${r},${g},${b},0.8)`;
+    ctx.shadowBlur  = 6;
+    ctx.beginPath(); ctx.arc(p.x, p.y, Math.max(0.3, p.r * p.life), 0, Math.PI*2); ctx.fill();
+    ctx.shadowBlur  = 0;
+  }
+
+  // Draw ripples
+  for (const rp of _flickRipples) {
+    if (rp.alpha <= 0.01) continue;
+    alive = true;
+    rp.r     += (rp.maxR - rp.r) * 0.12;
+    rp.alpha *= 0.88;
+    const [r,g,b] = rp.col;
+    ctx.globalAlpha  = Math.max(0, rp.alpha);
+    ctx.strokeStyle  = `rgba(${r},${g},${b},1)`;
+    ctx.lineWidth    = 1.5;
+    ctx.shadowColor  = `rgba(${r},${g},${b},0.6)`;
+    ctx.shadowBlur   = 8;
+    ctx.beginPath(); ctx.arc(rp.x, rp.y, Math.max(0.5, rp.r), 0, Math.PI*2); ctx.stroke();
+    ctx.shadowBlur   = 0;
+  }
+
+  ctx.globalAlpha = 1;
+
+  // Clean up dead particles/ripples
+  for (let i = _flickParticles.length-1; i >= 0; i--) {
+    if (_flickParticles[i].life <= 0) _flickParticles.splice(i, 1);
+  }
+  for (let i = _flickRipples.length-1; i >= 0; i--) {
+    if (_flickRipples[i].alpha <= 0.01) _flickRipples.splice(i, 1);
+  }
+
+  if (alive) requestAnimationFrame(animateFlick);
+  else ctx.clearRect(0, 0, fc.width, fc.height);
+}
+
+// ── ORB LONG PRESS — whisper to the River ─────────────────────────────
+let _orbPressTimer = null;
+let _whisperOpen   = false;
+
+function setupOrbLongPress() {
+  const cv = document.getElementById('c');
+  if (!cv) return;
+  cv.addEventListener('touchstart', function(e) {
+    const t = e.touches[0];
+    const orbX = NOW_X * W;
+    const d    = dataAt ? dataAt(viewTime) : null;
+    const orbY = d ? bgToY(d.bg) : H * 0.6;
+    const dist = Math.hypot(t.clientX - orbX, t.clientY - orbY);
+    if (dist < 44) {
+      _orbLongPressHint = 1.0;
+      _orbPressTimer = setTimeout(function() {
+        openWhisper();
+      }, 700);
+    }
+  }, {passive:true});
+  cv.addEventListener('touchend', function() {
+    if (_orbPressTimer) { clearTimeout(_orbPressTimer); _orbPressTimer = null; }
+  }, {passive:true});
+}
+
+function openWhisper() {
+  if (_whisperOpen) return;
+  _whisperOpen = true;
+  var ex = document.getElementById('whisper-overlay');
+  if (ex) ex.remove();
+
+  var el = document.createElement('div');
+  el.id  = 'whisper-overlay';
+  el.style.cssText = 'position:fixed;inset:0;z-index:75;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:32px;pointer-events:auto;touch-action:pan-y';
+
+  el.innerHTML =
+    '<div style="max-width:340px;width:100%;text-align:center">' +
+    '<div style="font-family:\'Fraunces\',serif;font-style:italic;font-weight:200;font-size:22px;color:rgba(180,220,200,0.7);margin-bottom:6px;letter-spacing:-.5px">ask the river</div>' +
+    '<div style="font-family:\'DM Mono\',monospace;font-size:9px;color:rgba(100,160,140,0.3);letter-spacing:1.5px;text-transform:uppercase;margin-bottom:24px">' +
+      (dataAt ? dataAt(viewTime).bg.toFixed(1) + ' mmol · ' + new Date().toLocaleTimeString('en-GB',{hour:'2-digit',minute:'2-digit'}) : '') +
+    '</div>' +
+    '<textarea id="whisper-input" rows="3" placeholder="what do you want to know…" ' +
+      'style="width:100%;padding:14px;border-radius:12px;border:1px solid rgba(62,180,120,0.2);' +
+      'background:rgba(3,8,20,0.85);font-family:\'DM Mono\',monospace;font-size:13px;' +
+      'color:rgba(180,220,200,0.9);resize:none;outline:none;box-sizing:border-box;' +
+      'backdrop-filter:blur(20px);line-height:1.5"></textarea>' +
+    '<div id="whisper-response" style="min-height:60px;margin-top:16px;font-family:\'Fraunces\',serif;font-weight:200;font-style:italic;font-size:15px;color:rgba(180,220,200,0.6);line-height:1.6;text-align:left"></div>' +
+    '<div style="display:flex;gap:10px;margin-top:20px;justify-content:center">' +
+      '<button onclick="sendWhisper()" style="padding:10px 24px;border-radius:10px;border:1px solid rgba(62,180,120,0.25);background:rgba(62,180,120,0.07);font-family:\'Fraunces\',serif;font-style:italic;font-weight:200;font-size:15px;color:rgba(62,180,120,0.8);cursor:pointer">ask</button>' +
+      '<button onclick="closeWhisper()" style="padding:10px 16px;border-radius:10px;border:1px solid rgba(255,255,255,0.06);background:transparent;font-family:\'DM Mono\',monospace;font-size:9px;color:rgba(255,255,255,0.2);cursor:pointer">close</button>' +
+    '</div></div>';
+
+  document.body.appendChild(el);
+  setTimeout(function(){ var inp = document.getElementById('whisper-input'); if(inp) inp.focus(); }, 300);
+}
+
+function closeWhisper() {
+  _whisperOpen = false;
+  var el = document.getElementById('whisper-overlay');
+  if (el) el.remove();
+}
+
+async function sendWhisper() {
+  var q = (document.getElementById('whisper-input').value || '').trim();
+  if (!q) return;
+  var resp = document.getElementById('whisper-response');
+  if (!resp) return;
+  resp.textContent = '…';
+
+  // Build context
+  var d   = dataAt ? dataAt(viewTime) : {};
+  var now = new Date();
+  var ctx = [
+    'Current time: ' + now.toLocaleTimeString('en-GB',{hour:'2-digit',minute:'2-digit'}),
+    'BG: ' + (d.bg||'?').toFixed(1) + ' mmol/L',
+    'IOB: ' + (d.iob||0).toFixed(2) + 'U',
+    'COB: ' + (d.cob||0).toFixed(1) + 'g',
+    'Trend: last 5min Δ ' + (dataAt ? (d.bg - dataAt(viewTime-5*60000).bg).toFixed(1) : '?') + ' mmol',
+    'Patient: Oskar, age 9, T1D, MDI, Degludec 9U basal, Novorapid bolus',
+    'Overnight carb sensitivity at 3:30am: ~0.55 mmol/g (from historical data)',
+    'ISF: ~1:6.5 mmol/U overnight, 1:7.0 daytime',
+    'Recent history: ' + (HISTORY_RAW.slice(-6).map(h=>(h.bg).toFixed(1)).join('→') || 'none'),
+  ].join('\n');
+
+  try {
+    var r = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        model: 'claude-sonnet-4-20250514',
+        max_tokens: 180,
+        system: 'You are a calm, knowledgeable diabetes management assistant embedded in a glucose visualisation app called Oskar\'s River. Provide brief, specific, actionable insight — 2-4 sentences maximum. Never diagnose or prescribe. Always frame as contextual insight, not instruction. Use the clinical context provided. Be warm but precise.',
+        messages: [{ role: 'user', content: 'Clinical context:\n' + ctx + '\n\nQuestion: ' + q }]
+      })
+    });
+    var data = await r.json();
+    var text = ((data.content||[])[0]||{}).text || 'No response';
+    resp.textContent = text;
+  } catch(e) {
+    resp.textContent = 'Could not reach the river. Check your connection.';
+  }
+}
+
+window.addEventListener('load', function() {
+  setupOrbLongPress();
+});
+
 
 function openSettings() {
   // Re-render setup screen on top
