@@ -10,6 +10,7 @@
 // ── DATA PLACEHOLDER (injected at build time) ─────────────────
 const HISTORY_RAW = window.__RIVER_HISTORY__ || [];
 
+var BOLUS_EVENTS = [];
 var LOGGED_EVENTS = [];
 try { LOGGED_EVENTS = JSON.parse(localStorage.getItem('river_logged')||'[]');
   LOGGED_EVENTS = LOGGED_EVENTS.filter(function(e){return (Date.now()-e.t)<30*86400000;});
