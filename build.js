@@ -29,6 +29,8 @@ const buildId   = `${buildDate}-${buildNum}`;
 let js = appJs;
 // app.js uses __BUILD_ID__ as a placeholder token
 js = js.replace(/__BUILD_ID__/g, `build ${buildId}`);
+// Always declare BOLUS_EVENTS before LOGGED_EVENTS uses it
+js = js.replace('var LOGGED_EVENTS = [];', 'var BOLUS_EVENTS = [];\nvar LOGGED_EVENTS = [];');
 js = `window.__RIVER_HISTORY__ = ${history};\nwindow.__RIVER_FOODS__ = ${foods};\n\n` + js;
 
 // Read favicon from index.template.html if it exists, otherwise use default
