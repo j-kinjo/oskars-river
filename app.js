@@ -1874,11 +1874,17 @@ function calcBolus(totalCarbs, currentBG, entryTime) {
 
 // Suggested eat time: bolus wait based on BG level
 // High BG → wait longer; low → eat sooner
-function suggestEatWait(bg) {
-  if (bg > 10) return 25; // high — wait longer
-  if (bg > 7)  return 20; // normal
-  if (bg > 5)  return 15; // slightly low
-  return 5;               // low — eat now / reduce bolus
+function suggestEatWait(bg, avgGI) {
+  // Nudge not preach — soft suggestions, team max is 20min
+  // GI-adjusted: high GI foods absorb fast so less wait needed
+  var gi = avgGI || 60;
+  var giAdj = gi >= 70 ? -5 : gi <= 40 ? 5 : 0; // fast food = less wait
+  var base;
+  if (bg > 10)     base = 20; // high — suggest waiting (capped at team max)
+  else if (bg > 7) base = 15; // normal range
+  else if (bg > 5) base = 10; // slightly lower — shorter wait
+  else             base = 0;  // low — eat now
+  return Math.max(0, Math.min(20, base + giAdj));
 }
 
 // GI-adjusted absorption speed (used in forecast)
@@ -1997,7 +2003,7 @@ function renderSheet() {
   var avgGI       = _mealItems.length > 0
     ? _mealItems.reduce(function(s,i){return s+(i.food.gi||55)*i.carbs;},0) / Math.max(totalCarbs,1)
     : 55;
-  var eatWait     = _eatWaitOverride !== null ? _eatWaitOverride : suggestEatWait(bg);
+  var eatWait     = _eatWaitOverride !== null ? _eatWaitOverride : suggestEatWait(bg, avgGI);
   var bolus       = totalCarbs > 0 ? calcBolus(totalCarbs, bg, getEntryTime()) : null;
   var giLabel     = avgGI >= 70 ? 'high GI' : avgGI >= 55 ? 'medium GI' : 'low GI';
   var giCol       = avgGI >= 70 ? 'rgba(210,80,40,0.8)' : avgGI >= 55 ? 'rgba(200,140,30,0.8)' : 'rgba(60,160,90,0.8)';
@@ -2443,7 +2449,7 @@ function logMealEntry(carbsOnly) {
 
   // Insulin is given NOW (bolus time)
   // Carbs arrive LATER (after wait time)
-  var eatWaitNow = _eatWaitOverride !== null ? _eatWaitOverride : suggestEatWait(dataAt(t).bg || 7);
+  var eatWaitNow = _eatWaitOverride !== null ? _eatWaitOverride : suggestEatWait(dataAt(t).bg || 7, avgGI);
   var carbT = t + eatWaitNow * 60000; // when carbs enter the system
 
   // Log insulin at bolus time
@@ -4596,7 +4602,7 @@ function openEventEditor(eventIdx) {
     '</div>' +
     '<div style="font-family:\'DM Mono\',monospace;font-size:10px;color:rgba(255,255,255,0.3);margin-bottom:16px">' +
       timeStr + '</div>' +
-    '<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:20px">' +
+    '<div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;margin-bottom:20px">' +
       '<div>' +
         '<div style="font-family:\'DM Mono\',monospace;font-size:8px;letter-spacing:1px;' +
           'text-transform:uppercase;color:rgba(255,140,50,0.5);margin-bottom:5px">carbs (g)</div>' +
@@ -4612,6 +4618,14 @@ function openEventEditor(eventIdx) {
           'style="width:100%;padding:10px;border-radius:8px;border:1px solid rgba(60,130,220,0.2);' +
           'background:rgba(60,130,220,0.05);font-family:\'DM Mono\',monospace;font-size:16px;' +
           'color:rgba(60,130,220,0.9);text-align:center;outline:none">' +
+      '</div>' +
+      '<div>' +
+        '<div style="font-family:\'DM Mono\',monospace;font-size:8px;letter-spacing:1px;' +
+          'text-transform:uppercase;color:rgba(255,255,255,0.3);margin-bottom:5px">wait (min)</div>' +
+        '<input id="ee-wait" type="number" value="' + (ev.waitMins||0) + '" min="0" max="60" step="5" ' +
+          'style="width:100%;padding:10px;border-radius:8px;border:1px solid rgba(255,255,255,0.12);' +
+          'background:rgba(255,255,255,0.05);font-family:\'DM Mono\',monospace;font-size:16px;' +
+          'color:rgba(200,200,200,0.9);text-align:center;outline:none">' +
       '</div>' +
     '</div>' +
     '<div style="display:flex;gap:8px">' +
