@@ -92,3 +92,13 @@ console.log(`  history: ${JSON.parse(history).length} entries`);
 console.log(`  foods: ${JSON.parse(foods).length} items`);
 console.log(`  fixes present: histAt=${js.includes('EMPTY = { bg: 7.0')}, updateHUD=${js.includes("isNaN(d.bg)")}`);
 console.log(`Build complete`);
+
+// Cache-busting headers for GitHub Pages CDN
+fs.writeFileSync(path.join(DIST, '_headers'), [
+  '/*',
+  '  Cache-Control: no-cache, no-store, must-revalidate',
+  '  Pragma: no-cache',
+  '  Expires: 0',
+  ''
+].join('\n'));
+console.log('✓ _headers: cache busting enabled');
