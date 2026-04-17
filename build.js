@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// Oskar's River — build script 
+// Oskar's River — build script
 // Wraps app.js + style.css + data into dist/index.html
 // Does NOT depend on index.template.html
 
@@ -17,6 +17,10 @@ for (const f of ['app.js', 'style.css', 'foods.json']) {
 fs.mkdirSync(DIST, { recursive: true });
 
 const appJs  = fs.readFileSync(path.join(ROOT, 'app.js'),    'utf8');
+console.log(`  app.js: ${(appJs.length/1024).toFixed(0)}KB, starts: ${appJs.slice(0,60).replace(/\n/g,' ')}`);
+console.log(`  BOLUS_EVENTS in app.js: ${appJs.includes('var BOLUS_EVENTS')}`);
+console.log(`  __BUILD_ID__ in app.js: ${appJs.includes('__BUILD_ID__')}`);
+console.log(`  build 66 in app.js: ${appJs.includes('build 20260326-66')}`);
 const css    = fs.readFileSync(path.join(ROOT, 'style.css'), 'utf8');
 const foods  = fs.readFileSync(path.join(ROOT, 'foods.json'), 'utf8');
 const histPath = path.join(ROOT, 'history.json');
