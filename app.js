@@ -1134,10 +1134,10 @@ function drawTimeLabels(pal) {
   CX.fillText('now', nowX, H - 35);
   CX.globalAlpha=0.28;CX.fillStyle='rgba(200,220,240,1)';
   CX.font="300 9px 'DM Mono',monospace";CX.textAlign='right';
-  CX.fillText('build 66',W-10,H-8);
+  CX.fillText('__BUILD_ID__',W-10,H-8);
   CX.globalAlpha=0.28;CX.fillStyle='rgba(200,220,240,1)';
   CX.font="300 9px 'DM Mono',monospace";CX.textAlign='right';
-  CX.fillText('build 66',W-10,H-8);
+  CX.fillText('__BUILD_ID__',W-10,H-8);
   CX.restore();
 }
 
@@ -3543,7 +3543,7 @@ function buildSetupScreen() {
         never to any third party. This app has no backend.
       </div>
     </div>
-    <div style="text-align:center;margin-top:10px;font-family:'DM Mono',monospace;font-size:8px;color:rgba(40,55,50,0.15);letter-spacing:1px">build 20260326-80</div>
+    <div style="text-align:center;margin-top:10px;font-family:'DM Mono',monospace;font-size:8px;color:rgba(40,55,50,0.15);letter-spacing:1px">__BUILD_ID__</div>
   </div>
 </div>`;
 }
