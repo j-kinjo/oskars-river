@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// Oskar's River — build script
+// Oskar's River — build script 
 // Wraps app.js + style.css + data into dist/index.html
 // Does NOT depend on index.template.html
 
