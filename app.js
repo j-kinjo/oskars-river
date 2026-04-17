@@ -3244,14 +3244,63 @@ async function suggestGI(foodName, inputEl) {
   } catch(e) { if (inputEl) inputEl.placeholder = 'GI'; return 55; }
 }
 
+// ── TIME INPUT HELPERS ────────────────────────────────────────────────
+function toDatetimeLocal(d) {
+  // Format Date to datetime-local input value (local time)
+  var pad = function(n){ return String(n).padStart(2,'0'); };
+  return d.getFullYear() + '-' + pad(d.getMonth()+1) + '-' + pad(d.getDate()) +
+    'T' + pad(d.getHours()) + ':' + pad(d.getMinutes());
+}
+
+function fmtTime(val) {
+  // Format datetime-local string to readable "Thu 17 Apr · 14:00"
+  if (!val) return '';
+  var d = new Date(val);
+  return d.toLocaleDateString('en-GB',{weekday:'short',day:'numeric',month:'short'}) +
+    ' · ' + d.toLocaleTimeString('en-GB',{hour:'2-digit',minute:'2-digit'});
+}
+
+function timePickerHTML(id, defaultDate, allowFuture) {
+  // Returns HTML for a compact time picker row
+  var val = toDatetimeLocal(defaultDate);
+  var max = allowFuture ? '' : 'max="' + toDatetimeLocal(new Date()) + '"';
+  return '<div style="margin:14px 0 10px">' +
+    '<div style="font-family:\'DM Mono\',monospace;font-size:8px;letter-spacing:1px;' +
+      'text-transform:uppercase;color:rgba(255,255,255,0.25);margin-bottom:5px">when</div>' +
+    '<div style="display:flex;align-items:center;gap:8px">' +
+    '<div id="' + id + '-display" style="flex:1;font-family:\'Fraunces\',serif;' +
+      'font-style:italic;font-weight:200;font-size:15px;color:rgba(200,220,240,0.7)">' +
+      fmtTime(val) + '</div>' +
+    '<input id="' + id + '" type="datetime-local" value="' + val + '" ' + max + ' ' +
+      'style="position:absolute;opacity:0;width:1px;height:1px" ' +
+      'onchange="document.getElementById(\'' + id + '-display\').textContent=fmtTime(this.value)">' +
+    '<button onclick="document.getElementById(\'' + id + '\').showPicker?.' +
+      'call(document.getElementById(\'' + id + '\'))||document.getElementById(\'' + id + '\').click()" ' +
+      'style="padding:5px 10px;border-radius:7px;border:1px solid rgba(255,255,255,0.12);' +
+      'background:rgba(255,255,255,0.05);font-family:\'DM Mono\',monospace;font-size:9px;' +
+      'color:rgba(200,220,240,0.4);cursor:pointer;touch-action:manipulation">change</button>' +
+    '</div></div>';
+}
+
+function getTimeVal(id) {
+  var el = document.getElementById(id);
+  if (el && el.value) return new Date(el.value).getTime();
+  return Date.now();
+}
+
 function openHypoLog() {
   var ex=document.getElementById('hypo-overlay'); if(ex){ex.remove();return;}
   var el=document.createElement('div'); el.id='hypo-overlay';
   el.style.cssText='position:fixed;inset:0;z-index:60;background:rgba(3,5,20,0.9);backdrop-filter:blur(14px);display:flex;flex-direction:column;align-items:center;justify-content:center;padding:24px;transition:opacity .25s;opacity:0;touch-action:pan-y;pointer-events:auto';
   el.addEventListener('touchstart',function(e){e.stopPropagation();},{passive:true});
   el.addEventListener('click',function(e){if(e.target===el)closeHypoLog();});
+  var _hypoDefault = new Date();
   var s='<div style="max-width:360px;width:100%">';
-  s+='<div style="font-family:\'Fraunces\',serif;font-style:italic;font-weight:200;font-size:22px;color:rgba(100,150,255,0.9);text-align:center;margin-bottom:20px">hypo treatment</div>';
+  s+='<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px">';
+  s+='<div style="font-family:\'Fraunces\',serif;font-style:italic;font-weight:200;font-size:22px;color:rgba(100,150,255,0.9)">hypo treatment</div>';
+  s+='<button onclick="closeHypoLog()" style="background:none;border:none;cursor:pointer;font-size:24px;color:rgba(255,255,255,0.2);padding:4px;touch-action:manipulation">×</button>';
+  s+='</div>';
+  s+=timePickerHTML('hypo-time', _hypoDefault, false);
   s+='<div style="display:flex;flex-direction:column;gap:8px">';
   HYPO_TREATMENTS.forEach(function(t){
     s+='<button onclick="logHypoTreatment(\''+t.id+'\')" style="display:flex;align-items:center;justify-content:space-between;padding:14px 16px;border-radius:10px;cursor:pointer;background:rgba(40,60,140,0.25);border:1px solid rgba(80,120,220,0.2);width:100%">';
@@ -3268,12 +3317,13 @@ function closeHypoLog(){var el=document.getElementById('hypo-overlay');if(el){el
 function logHypoTreatment(id){
   var t=HYPO_TREATMENTS.find(function(x){return x.id===id;});
   if(!t) return;
-  var now=Date.now();
+  var now=getTimeVal('hypo-time');
   SESSION.push({t:now,c:t.carbs,u:0,note:'hypo:'+id});
   try{localStorage.setItem('river_session',JSON.stringify(SESSION));}catch(e){}
   BOLUS_EVENTS.push({t:now,c:t.carbs,u:0});
   closeHypoLog();
-  showToast(t.name+'\n'+t.carbs+'g logged');
+  var timeStr=document.getElementById('hypo-time-display')?.textContent||'';
+  showToast(t.name+'\n'+t.carbs+'g logged'+(timeStr?'\n'+timeStr:''));
 }
 
 // ── CORRECTION QUICK-LOG ──────────────────────────────────────────
@@ -3284,8 +3334,13 @@ function openCorrectionLog(){
   var ex=document.getElementById('corr-overlay');if(ex){ex.remove();return;}
   var el=document.createElement('div');el.id='corr-overlay';
   el.style.cssText='position:fixed;inset:0;z-index:60;background:rgba(3,5,20,0.9);backdrop-filter:blur(14px);display:flex;flex-direction:column;align-items:center;justify-content:center;padding:24px;transition:opacity .25s;opacity:0';
+  var _corrDefault = new Date();
   var s='<div style="max-width:320px;width:100%">';
-  s+='<div style="font-family:\'Fraunces\',serif;font-style:italic;font-weight:200;font-size:22px;color:rgba(220,160,60,0.9);text-align:center;margin-bottom:6px">correction</div>';
+  s+='<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:4px">';
+  s+='<div style="font-family:\'Fraunces\',serif;font-style:italic;font-weight:200;font-size:22px;color:rgba(220,160,60,0.9)">correction</div>';
+  s+='<button onclick="closeCorrectionLog()" style="background:none;border:none;cursor:pointer;font-size:24px;color:rgba(255,255,255,0.2);padding:4px;touch-action:manipulation">×</button>';
+  s+='</div>';
+  s+=timePickerHTML('corr-time', _corrDefault, false);
   s+='<div style="font-family:\'DM Mono\',monospace;font-size:9px;letter-spacing:1.5px;text-transform:uppercase;color:rgba(180,140,60,0.35);text-align:center;margin-bottom:20px">bg '+d.bg.toFixed(1)+' mmol &middot; isf 1:'+ISF.toFixed(0)+'</div>';
   s+='<div style="text-align:center;margin-bottom:20px">';
   s+='<div style="font-family:\'Fraunces\',serif;font-weight:200;font-size:52px;color:rgba(220,170,80,0.95);letter-spacing:-2px">'+sug.toFixed(1)+'</div>';
@@ -3303,7 +3358,7 @@ function closeCorrectionLog(){var el=document.getElementById('corr-overlay');if(
 function logCorrection(){
   var u=parseFloat(document.getElementById('corr-units').value)||0;
   if(u<=0){closeCorrectionLog();return;}
-  var now=Date.now();
+  var now=getTimeVal('corr-time');
   SESSION.push({t:now,c:0,u:u});
   try{localStorage.setItem('river_session',JSON.stringify(SESSION));}catch(e){}
   BOLUS_EVENTS.push({t:now,c:0,u:u});
@@ -4376,7 +4431,7 @@ function openDebugPanel() {
     : 'unknown';
   var src = (typeof _sourceId !== 'undefined') ? _sourceId : 'none';
   var hist = (typeof HISTORY_RAW !== 'undefined') ? HISTORY_RAW.length : '?';
-  var buildStr = 'build __BUILD_ID__';
+  var buildStr = '__BUILD_ID__';
 
   el.innerHTML =
     '<div style="display:flex;justify-content:space-between;margin-bottom:6px">' +
