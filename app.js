@@ -904,7 +904,8 @@ function drawBolusMarkers(pal) {
   CX.save();
   const allEvents = [...BOLUS_EVENTS, ...SESSION.map(s => ({t:s.t, c:s.c||0, u:s.u||0}))];
 
-  for (const b of allEvents) {
+  for (var _bIdx = 0; _bIdx < allEvents.length; _bIdx++) {
+    const b = allEvents[_bIdx];
     const x   = tX(b.t);
     if (x < -80 || x > W + 80) continue;
     const d   = dataAt(b.t);
@@ -927,15 +928,15 @@ function drawBolusMarkers(pal) {
       const lbl = b.c + 'g';
       CX.font = "300 9px 'DM Mono',monospace";
       const lw = CX.measureText(lbl).width + 12;
-      CX.globalAlpha = 0.6;
-      CX.fillStyle   = 'rgba(' + r + ',' + g + ',' + bv + ',0.18)';
-      CX.strokeStyle = 'rgba(' + r + ',' + g + ',' + bv + ',0.45)';
-      CX.lineWidth   = 0.7;
+      CX.globalAlpha = 0.92;
+      CX.fillStyle   = 'rgba(' + r + ',' + g + ',' + bv + ',0.4)';
+      CX.strokeStyle = 'rgba(' + r + ',' + g + ',' + bv + ',0.8)';
+      CX.lineWidth   = 1.0;
       CX.beginPath(); CX.roundRect(x - lw/2, cardY, lw, 15, 4); CX.fill(); CX.stroke();
-      CX.globalAlpha = 0.85; CX.fillStyle = 'rgba(' + r + ',' + g + ',' + bv + ',1)';
+      CX.globalAlpha = 1.0; CX.fillStyle = 'rgba(240,248,255,0.95)';
       CX.textAlign   = 'center';
       CX.fillText(lbl, x, cardY + 10.5);
-      window._eventCards.push({x, y:cardY+8, w:lw+4, h:16, data:b, type:'carb'});
+      window._eventCards.push({x:x, y:cardY+8, w:lw+4, h:16, data:b, idx:_bIdx, type:'carb'});
     }
 
     if (b.u > 0.1) {
@@ -960,7 +961,7 @@ function drawBolusMarkers(pal) {
       CX.globalAlpha = 0.8; CX.fillStyle = 'rgba(' + r + ',' + g + ',' + bv + ',1)';
       CX.textAlign   = 'center';
       CX.fillText(lbl, x, cardY + 10);
-      window._eventCards.push({x, y:cardY+7, w:lw+4, h:16, data:b, type:'insulin'});
+      window._eventCards.push({x:x, y:cardY+7, w:lw+4, h:16, data:b, idx:_bIdx, type:'insulin'});
     }
   }
   CX.globalAlpha = 1; CX.restore();
@@ -1639,6 +1640,19 @@ let md={on:false,x0:0,t0:0};
 CV.addEventListener('mousedown',e=>{if(!e.target.closest('#sheet,#flow-dock,.dock-btn,#whisper-overlay,#food-mgr-overlay,#hypo-overlay,#corr-overlay,#food-add-overlay,[id$=-overlay],button,input,textarea,select'))md={on:true,x0:e.clientX,t0:viewTime}});
 CV.addEventListener('mousemove',e=>{if(md.on)viewTime=Math.max(CGM_START,Math.min(CGM_END,md.t0-(e.clientX-md.x0)*(viewSpan/W)))});
 CV.addEventListener('mouseup',()=>md.on=false);
+CV.addEventListener('click', function(e) {
+  if (!window._eventCards || _eventCards.length === 0) return;
+  var rect = CV.getBoundingClientRect();
+  var mx = e.clientX - rect.left;
+  var my = e.clientY - rect.top;
+  for (var ci = 0; ci < _eventCards.length; ci++) {
+    var c = _eventCards[ci];
+    if (mx >= c.x - c.w/2 && mx <= c.x + c.w/2 && my >= c.y - 12 && my <= c.y + 12) {
+      openEventEditor(c.idx);
+      return;
+    }
+  }
+});
 // wheel zoom disabled — fixed 2h view
 
 // ── LOG SHEET ────────────────────────────────────────────────
@@ -2203,11 +2217,29 @@ function renderSheet() {
 function buildRecentMealsHTML() {
   if (MEAL_HISTORY.length === 0) return '';
   var recent = MEAL_HISTORY.slice(0, 6);
-  var chips = recent.map(function(m, i) {
-    return '<button onclick="loadMealHistory(' + i + ')" style="padding:5px 10px;border-radius:8px;' +
-      'border:1px solid rgba(40,55,50,0.1);background:rgba(255,255,255,0.5);' +
-      'font-family:\'DM Mono\',monospace;font-size:10px;color:rgba(150,180,210,0.5);cursor:pointer;white-space:nowrap">' +
-      m.name.slice(0,20) + ' (' + m.totalCarbs + 'g)</button>';
+  // Deduplicate by name — show most recent of each unique meal
+  var seen = {};
+  var unique = [];
+  for (var j = 0; j < MEAL_HISTORY.length && unique.length < 6; j++) {
+    var key = MEAL_HISTORY[j].name;
+    if (!seen[key]) { seen[key] = true; unique.push({m: MEAL_HISTORY[j], i: j}); }
+  }
+  // Sort by time-of-day relevance — closest hour to now first
+  var nowHour = new Date().getHours() + new Date().getMinutes()/60;
+  unique.sort(function(a, b) {
+    var aHour = a.m.t ? (new Date(a.m.t).getHours() + new Date(a.m.t).getMinutes()/60) : 12;
+    var bHour = b.m.t ? (new Date(b.m.t).getHours() + new Date(b.m.t).getMinutes()/60) : 12;
+    var aDiff = Math.min(Math.abs(aHour - nowHour), 24 - Math.abs(aHour - nowHour));
+    var bDiff = Math.min(Math.abs(bHour - nowHour), 24 - Math.abs(bHour - nowHour));
+    return aDiff - bDiff;
+  });
+  var chips = unique.map(function(entry) {
+    var m = entry.m; var i = entry.i;
+    return '<button onclick="loadMealHistory(' + i + ')" style="padding:6px 12px;border-radius:10px;' +
+      'border:1px solid rgba(40,55,50,0.15);background:rgba(255,255,255,0.7);' +
+      'font-family:\'DM Mono\',monospace;font-size:10px;color:rgba(40,55,50,0.75);' +
+      'cursor:pointer;white-space:nowrap;touch-action:manipulation">' +
+      m.name.slice(0,22) + ' · ' + m.totalCarbs + 'g</button>';
   }).join('');
   return '<div style="padding:0 18px;margin-bottom:12px">' +
     '<div style="font-family:\'DM Mono\',monospace;font-size:9px;color:rgba(40,55,50,0.25);letter-spacing:1px;text-transform:uppercase;margin-bottom:6px">recent meals</div>' +
@@ -4514,6 +4546,110 @@ function openDebugPanel() {
 
   document.body.appendChild(el);
   if (window.__updateDebugPanel) window.__updateDebugPanel();
+}
+
+// ── EVENT EDITOR — edit or delete a logged event ─────────────────────
+function openEventEditor(eventIdx) {
+  var events = [...LOGGED_EVENTS, ...SESSION.map((s,i) => ({...s, _session: true, _idx: i}))];
+  // Find by index in BOLUS_EVENTS
+  var ev = BOLUS_EVENTS[eventIdx];
+  if (!ev) return;
+
+  var ex = document.getElementById('event-edit-overlay');
+  if (ex) ex.remove();
+
+  var el = document.createElement('div');
+  el.id  = 'event-edit-overlay';
+  el.style.cssText = 'position:fixed;inset:0;z-index:80;background:rgba(3,5,20,0.92);' +
+    'backdrop-filter:blur(16px);display:flex;flex-direction:column;align-items:center;' +
+    'justify-content:center;padding:32px;pointer-events:auto;touch-action:pan-y';
+  el.addEventListener('touchstart', function(e){e.stopPropagation();},{passive:true});
+  el.addEventListener('click', function(e){ if(e.target===el) el.remove(); });
+
+  var dt = new Date(ev.t);
+  var timeStr = dt.toLocaleDateString('en-GB',{weekday:'short',day:'numeric',month:'short'}) +
+    ' · ' + dt.toLocaleTimeString('en-GB',{hour:'2-digit',minute:'2-digit'});
+
+  el.innerHTML =
+    '<div style="max-width:320px;width:100%">' +
+    '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:20px">' +
+      '<div style="font-family:\'Fraunces\',serif;font-style:italic;font-weight:200;font-size:20px;' +
+        'color:rgba(180,220,200,0.8)">edit entry</div>' +
+      '<button onclick="document.getElementById(\'event-edit-overlay\').remove()" ' +
+        'style="background:none;border:none;cursor:pointer;font-size:22px;color:rgba(255,255,255,0.3);padding:4px">×</button>' +
+    '</div>' +
+    '<div style="font-family:\'DM Mono\',monospace;font-size:10px;color:rgba(255,255,255,0.3);margin-bottom:16px">' +
+      timeStr + '</div>' +
+    '<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:20px">' +
+      '<div>' +
+        '<div style="font-family:\'DM Mono\',monospace;font-size:8px;letter-spacing:1px;' +
+          'text-transform:uppercase;color:rgba(255,140,50,0.5);margin-bottom:5px">carbs (g)</div>' +
+        '<input id="ee-carbs" type="number" value="' + (ev.c||0) + '" min="0" max="200" step="1" ' +
+          'style="width:100%;padding:10px;border-radius:8px;border:1px solid rgba(255,140,50,0.2);' +
+          'background:rgba(255,140,50,0.05);font-family:\'DM Mono\',monospace;font-size:16px;' +
+          'color:rgba(255,140,50,0.9);text-align:center;outline:none">' +
+      '</div>' +
+      '<div>' +
+        '<div style="font-family:\'DM Mono\',monospace;font-size:8px;letter-spacing:1px;' +
+          'text-transform:uppercase;color:rgba(60,130,220,0.5);margin-bottom:5px">insulin (U)</div>' +
+        '<input id="ee-units" type="number" value="' + (ev.u||0) + '" min="0" max="20" step="0.5" ' +
+          'style="width:100%;padding:10px;border-radius:8px;border:1px solid rgba(60,130,220,0.2);' +
+          'background:rgba(60,130,220,0.05);font-family:\'DM Mono\',monospace;font-size:16px;' +
+          'color:rgba(60,130,220,0.9);text-align:center;outline:none">' +
+      '</div>' +
+    '</div>' +
+    '<div style="display:flex;gap:8px">' +
+      '<button onclick="saveEventEdit(' + eventIdx + ')" ' +
+        'style="flex:1;padding:12px;border-radius:10px;border:1px solid rgba(62,180,120,0.3);' +
+        'background:rgba(62,180,120,0.08);font-family:\'Fraunces\',serif;font-style:italic;' +
+        'font-weight:200;font-size:16px;color:rgba(62,180,120,0.9);cursor:pointer">save</button>' +
+      '<button onclick="deleteEvent(' + eventIdx + ')" ' +
+        'style="padding:12px 16px;border-radius:10px;border:1px solid rgba(200,60,60,0.2);' +
+        'background:transparent;font-family:\'DM Mono\',monospace;font-size:10px;' +
+        'color:rgba(200,80,80,0.5);cursor:pointer">delete</button>' +
+      '<button onclick="document.getElementById(\'event-edit-overlay\').remove()" ' +
+        'style="padding:12px 14px;border-radius:10px;border:1px solid rgba(255,255,255,0.08);' +
+        'background:transparent;font-family:\'DM Mono\',monospace;font-size:10px;' +
+        'color:rgba(255,255,255,0.25);cursor:pointer">cancel</button>' +
+    '</div></div>';
+
+  document.body.appendChild(el);
+}
+
+function saveEventEdit(idx) {
+  var c = parseFloat(document.getElementById('ee-carbs').value) || 0;
+  var u = parseFloat(document.getElementById('ee-units').value) || 0;
+  if (idx < BOLUS_EVENTS.length) {
+    BOLUS_EVENTS[idx].c = c;
+    BOLUS_EVENTS[idx].u = u;
+  }
+  // Update SESSION
+  var t = BOLUS_EVENTS[idx]?.t;
+  if (t) {
+    var si = SESSION.findIndex(function(s){ return Math.abs(s.t - t) < 60000; });
+    if (si >= 0) { SESSION[si].c = c; SESSION[si].u = u; }
+    try { localStorage.setItem('river_session', JSON.stringify(SESSION)); } catch(e) {}
+    var li = LOGGED_EVENTS.findIndex(function(s){ return Math.abs(s.t - t) < 60000; });
+    if (li >= 0) { LOGGED_EVENTS[li].c = c; LOGGED_EVENTS[li].u = u; }
+    try { localStorage.setItem('river_logged', JSON.stringify(LOGGED_EVENTS)); } catch(e) {}
+  }
+  var el = document.getElementById('event-edit-overlay');
+  if (el) el.remove();
+  showToast('entry updated');
+}
+
+function deleteEvent(idx) {
+  var t = BOLUS_EVENTS[idx]?.t;
+  BOLUS_EVENTS.splice(idx, 1);
+  if (t) {
+    SESSION = SESSION.filter(function(s){ return Math.abs(s.t - t) >= 60000; });
+    try { localStorage.setItem('river_session', JSON.stringify(SESSION)); } catch(e) {}
+    LOGGED_EVENTS = LOGGED_EVENTS.filter(function(s){ return Math.abs(s.t - t) >= 60000; });
+    try { localStorage.setItem('river_logged', JSON.stringify(LOGGED_EVENTS)); } catch(e) {}
+  }
+  var el = document.getElementById('event-edit-overlay');
+  if (el) el.remove();
+  showToast('entry removed');
 }
 
 function openSettings() {
