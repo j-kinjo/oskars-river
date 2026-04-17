@@ -606,122 +606,368 @@ function drawForceRibbon(pts, colorR, direction) {
 // ── EQUILIBRIUM ZONE — the calm corridor between forces ───────────────
 // When BG is in range and forces are roughly balanced, draw a soft
 // glowing band showing the target zone — the zone of equilibrium
-// ── GAS CLOUD — living ethereal force field ───────────────────────────
-// direction:  1 = carbs rising from below BG line toward bottom of screen
-//            -1 = insulin falling from above BG line toward top of screen
-// The cloud fills the space between the BG line and the screen edge
-// in the direction of the force, with animated wispy tendrils
+// ── PARTICLE FORCE SYSTEM ─────────────────────────────────────────────
+// Replaces drawGasCloud. Reservoirs fill on events, drain over time.
+// Particles travel from edge to BG line, pair up and annihilate,
+// or accumulate and push the line. Mist swirls off old particles.
 
-function drawGasCloud(pts, col, direction, d) {
-  if (!pts || pts.length < 2) return;
-  const past = pts.filter(p => !p.future);
-  if (past.length < 2) return;
+var _cobReservoir   = 0;
+var _iobReservoir   = 0;
+var _forceParticles = [];
+var _forceMists     = [];
+var _forceSparks    = [];
+var _forceFrame     = 0;
+var _lastDrainT     = Date.now();
 
-  const peakVal = Math.max(...past.map(p => p.val));
-  if (peakVal < 0.01) return; // void — no force active
+function topUpCOB(grams) {
+  _cobReservoir = Math.min(1, _cobReservoir + grams / 80);
+}
+function topUpIOB(units) {
+  _iobReservoir = Math.min(1, _iobReservoir + units / 6);
+}
 
-  const [r, g, b] = col;
-  const tipFrac = Math.min(1, Math.sqrt(peakVal / (direction > 0 ? 50 : 3.0)));
-
-  CX.save();
-
-  const nowX  = NOW_X * W;
-  const edgeY = direction > 0 ? H : 0; // screen edge toward which cloud expands
-
-  // ── MAIN CLOUD BODY — gaussian fill from BG line to screen edge ──
-  // Build the cloud polygon: BG line on one side, screen edge on other
-  const topEdge = past.map(p => ({ x: p.x, y: p.bgY }));         // BG line
-  const botEdge = past.map(p => {                                   // cloud extent
-    // Cloud height scales with force value and tapers toward left (older)
-    const ageFrac  = Math.max(0, Math.min(1, (viewTime - p.t) / (2*3600000)));
-    const strength = Math.min(1, Math.sqrt(Math.max(0, p.val) / (direction > 0 ? 50 : 3.0)));
-    const maxH     = H * 0.45 * strength * (0.2 + 0.8 * ageFrac);
-    return { x: p.x, y: p.bgY + direction * maxH };
+function _spawnForceParticle(type) {
+  var isCob = type === 'cob';
+  var level = isCob ? _cobReservoir : _iobReservoir;
+  if (level < 0.02) return;
+  var r = 2.8 + Math.random() * 2.5;
+  _forceParticles.push({
+    type: type, r: r, baseR: r,
+    x: NOW_X * W + (Math.random() - 0.5) * 24,
+    y: isCob ? H + 4 : -4,
+    vy: isCob ? -(2.0 + Math.random() * 0.9) : (2.0 + Math.random() * 0.9),
+    phase: Math.random() * Math.PI * 2,
+    alpha: 0, state: 'traveling',
+    sitTimer: 0, sitDur: 600 + Math.random() * 500,
+    stackSlot: 0, fadeAlpha: 1, age: 0, paired: false,
   });
+}
 
-  // Gradient from BG line (transparent) to screen edge (peak opacity)
-  const gradY0 = past[past.length-1].bgY;
-  const gradY1 = gradY0 + direction * H * 0.45;
-  const grad   = CX.createLinearGradient(0, gradY0, 0, gradY1);
-  grad.addColorStop(0,    `rgba(${r},${g},${b},0)`);
-  grad.addColorStop(0.1,  `rgba(${r},${g},${b},${0.08 * tipFrac})`);
-  grad.addColorStop(0.35, `rgba(${r},${g},${b},${0.20 * tipFrac})`);
-  grad.addColorStop(0.65, `rgba(${r},${g},${b},${0.32 * tipFrac})`);
-  grad.addColorStop(1.0,  `rgba(${r},${g},${b},${0.45 * tipFrac})`);
+function _spawnMist(type, x, y) {
+  var isCob = type === 'cob';
+  _forceMists.push({
+    type: type, x: x, y: y,
+    r: 6 + Math.random() * 12,
+    life: 0, maxLife: 160 + Math.random() * 180,
+    vx: (Math.random() - 0.5) * 0.25,
+    vy: isCob ? -(0.08 + Math.random() * 0.14) : (0.08 + Math.random() * 0.14),
+    phase: Math.random() * Math.PI * 2,
+    maxAlpha: 0.07 + Math.random() * 0.09,
+  });
+}
 
-  CX.globalAlpha = 1;
-  CX.fillStyle   = grad;
+function _spawnSparks(x, y) {
+  for (var i = 0; i < 7; i++) {
+    var ang = Math.random() * Math.PI * 2;
+    var spd = 1.5 + Math.random() * 2.5;
+    _forceSparks.push({
+      x: x, y: y,
+      vx: Math.cos(ang) * spd, vy: Math.sin(ang) * spd,
+      r: 1.5 + Math.random() * 1.8,
+      alpha: 1, maxLife: 24 + Math.random() * 16, life: 0,
+    });
+  }
+}
+
+function _reassignSlots() {
+  var ci = 0, ii = 0;
+  _forceParticles.forEach(function(p) {
+    if (p.state !== 'sitting' || p.paired) return;
+    p.stackSlot = p.type === 'cob' ? ci++ : ii++;
+  });
+}
+
+function _tryPair() {
+  var sitting = _forceParticles.filter(function(p) { return p.state === 'sitting' && !p.paired; });
+  var cobs    = sitting.filter(function(p){ return p.type === 'cob'; });
+  var iobs    = sitting.filter(function(p){ return p.type === 'iob'; });
+  cobs.forEach(function(c) {
+    if (c.paired) return;
+    var best = null, bestD = 999;
+    iobs.forEach(function(io) {
+      if (io.paired) return;
+      var d = Math.abs(c.x - io.x);
+      if (d < bestD) { bestD = d; best = io; }
+    });
+    if (best && bestD < 70) {
+      _spawnSparks((c.x + best.x) / 2, bgToY(dataAt(viewTime).bg));
+      c.paired = best.paired = true;
+      c.state  = best.state  = 'fading';
+    }
+  });
+}
+
+function _drawReservoir(type) {
+  var isCob = type === 'cob';
+  var col   = isCob ? COL_COB : COL_IOB;
+  var r = col[0], g = col[1], b = col[2];
+  var level = isCob ? _cobReservoir : _iobReservoir;
+  if (level < 0.01) return;
+  var nx = NOW_X * W, sigma = W * 0.09, maxD = 54;
+
   CX.beginPath();
-  CX.moveTo(topEdge[0].x, topEdge[0].y);
-  _drawSmoothLine(topEdge);
-  // Across to cloud extent
-  for (let i = botEdge.length-1; i >= 0; i--) {
-    CX.lineTo(botEdge[i].x, botEdge[i].y);
+  if (isCob) {
+    CX.moveTo(0, H);
+    for (var i = 0; i <= 260; i++) {
+      var px = (i / 260) * W;
+      CX.lineTo(px, H - Math.exp(-0.5 * Math.pow((px - nx) / sigma, 2)) * level * maxD);
+    }
+    CX.lineTo(W, H);
+  } else {
+    CX.moveTo(0, 0);
+    for (var i = 0; i <= 260; i++) {
+      var px = (i / 260) * W;
+      CX.lineTo(px, Math.exp(-0.5 * Math.pow((px - nx) / sigma, 2)) * level * maxD);
+    }
+    CX.lineTo(W, 0);
   }
   CX.closePath();
-  CX.fill();
+  var gr = CX.createLinearGradient(0, isCob ? H : 0, 0, isCob ? H - 100 : 100);
+  gr.addColorStop(0,    'rgba(' + r + ',' + g + ',' + b + ',' + (0.18 + level * 0.38) + ')');
+  gr.addColorStop(0.55, 'rgba(' + r + ',' + g + ',' + b + ',' + (level * 0.11) + ')');
+  gr.addColorStop(1,    'rgba(' + r + ',' + g + ',' + b + ',0)');
+  CX.fillStyle = gr; CX.fill();
 
-  // ── WISPS — animated tendrils floating in the gas ─────────────
-  const wispCount = Math.floor(3 + tipFrac * 6);
-  const rng = seededRand(direction > 0 ? 77 : 33);
-  for (let w = 0; w < wispCount; w++) {
-    const wIdx   = Math.floor(past.length * (0.2 + rng() * 0.8));
-    if (wIdx >= past.length) continue;
-    const wp     = past[wIdx];
-    const wStrength = Math.min(1, Math.sqrt(Math.max(0, wp.val) / (direction > 0 ? 50 : 3.0)));
-    if (wStrength < 0.05) continue;
-
-    const wPhase  = phi * (0.4 + rng() * 0.6) + w * 1.3;
-    const wOffset = Math.sin(wPhase) * 8 * wStrength;
-    const wH      = wp.bgY + direction * H * 0.35 * wStrength + wOffset;
-    const wAlpha  = wStrength * tipFrac * (0.08 + 0.12 * Math.abs(Math.sin(wPhase)));
-    const wWidth  = 20 + rng() * 40;
-
-    const wg = CX.createRadialGradient(wp.x, wH, 0, wp.x, wH, wWidth);
-    wg.addColorStop(0,   `rgba(${r},${g},${b},${wAlpha})`);
-    wg.addColorStop(0.5, `rgba(${r},${g},${b},${wAlpha * 0.4})`);
-    wg.addColorStop(1,   `rgba(${r},${g},${b},0)`);
-    CX.globalAlpha = 1;
-    CX.fillStyle   = wg;
-    CX.beginPath();
-    CX.ellipse(wp.x, wH, wWidth, wWidth * 0.4, 0, 0, Math.PI * 2);
-    CX.fill();
+  // Rim line
+  CX.beginPath();
+  if (isCob) {
+    for (var i = 0; i <= 260; i++) {
+      var px = (i / 260) * W;
+      var y  = H - Math.exp(-0.5 * Math.pow((px - nx) / sigma, 2)) * level * maxD;
+      i === 0 ? CX.moveTo(px, y) : CX.lineTo(px, y);
+    }
+  } else {
+    for (var i = 0; i <= 260; i++) {
+      var px = (i / 260) * W;
+      var y  = Math.exp(-0.5 * Math.pow((px - nx) / sigma, 2)) * level * maxD;
+      i === 0 ? CX.moveTo(px, y) : CX.lineTo(px, y);
+    }
   }
-
-  // ── BOUNDARY FILAMENT — glowing edge at the BG line interface ──
-  const filAlpha = Math.max(0.4, tipFrac * 0.85);
-  CX.globalAlpha = filAlpha;
-  CX.strokeStyle = `rgba(${r},${g},${b},1)`;
-  CX.lineWidth   = 1.8;
-  CX.shadowColor = `rgba(${r},${g},${b},0.9)`;
-  CX.shadowBlur  = 10;
-  _drawSmoothLine(topEdge);
-  CX.stroke();
-  CX.shadowBlur  = 0;
-
-  // ── TIP CONVERGENCE — where the force meets now ────────────────
-  const tip = past[past.length - 1];
-  if (tipFrac > 0.02 && tip) {
-    const tipR = 2 + tipFrac * 6;
-    const tg   = CX.createRadialGradient(tip.x, tip.y, 0, tip.x, tip.y, tipR * 4);
-    tg.addColorStop(0,   `rgba(${r},${g},${b},${Math.min(1, 1.0 * tipFrac)})`);
-    tg.addColorStop(0.5, `rgba(${r},${g},${b},${0.35 * tipFrac})`);
-    tg.addColorStop(1,   `rgba(${r},${g},${b},0)`);
-    CX.globalAlpha = 1;
-    CX.fillStyle   = tg;
-    CX.shadowColor = `rgba(${r},${g},${b},0.8)`;
-    CX.shadowBlur  = 12;
-    CX.beginPath(); CX.arc(tip.x, tip.y, tipR * 4, 0, Math.PI * 2); CX.fill();
-
-    // Solid core spark
-    CX.fillStyle   = `rgba(${r},${g},${b},${0.9 * tipFrac})`;
-    CX.shadowBlur  = 4;
-    CX.beginPath(); CX.arc(tip.x, tip.y, Math.max(0.5, tipFrac * 2.5), 0, Math.PI * 2); CX.fill();
-    CX.shadowBlur  = 0;
-  }
-
-  CX.restore();
+  CX.strokeStyle = 'rgba(' + r + ',' + g + ',' + b + ',' + (0.3 + level * 0.4) + ')';
+  CX.lineWidth = 1.3; CX.stroke();
 }
+
+function _drawMists() {
+  _forceMists.forEach(function(m) {
+    var t = m.life / m.maxLife;
+    var a = t < 0.2 ? m.maxAlpha * (t / 0.2) : m.maxAlpha * (1 - (t - 0.2) / 0.8);
+    var col = m.type === 'cob' ? COL_COB : COL_IOB;
+    CX.beginPath();
+    CX.arc(m.x + Math.sin(_forceFrame * 0.03 + m.phase) * 4, m.y, m.r * (0.7 + t * 0.5), 0, Math.PI * 2);
+    CX.fillStyle = 'rgba(' + col[0] + ',' + col[1] + ',' + col[2] + ',' + Math.max(0, a) + ')';
+    CX.fill();
+  });
+}
+
+function _drawForceParticles(lineY) {
+  var nx = NOW_X * W;
+  _forceParticles.forEach(function(p) {
+    var isCob = p.type === 'cob';
+    var col   = isCob ? COL_COB : COL_IOB;
+    var r = col[0], g = col[1], b = col[2];
+    var wobX  = Math.sin(_forceFrame * 0.055 + p.phase) * 2.5;
+    var wobY  = Math.sin(_forceFrame * 0.09  + p.phase * 1.4) * (p.state === 'sitting' ? 1.5 : 0.5);
+    var pulse = p.state === 'sitting' ? 1 + Math.sin(_forceFrame * 0.13 + p.phase) * 0.15 : 1;
+    var rad   = p.baseR * pulse;
+    var a     = p.state === 'fading' ? p.fadeAlpha : p.alpha;
+    if (a < 0.02) return;
+
+    var px, py;
+    if (p.state === 'traveling') {
+      px = p.x + wobX * 0.4; py = p.y;
+    } else {
+      var gap    = rad * 2.2 + 1.5;
+      var offset = p.stackSlot * gap + rad + 3;
+      px = nx + (p.stackSlot % 2 === 0 ? 1 : -1) * p.baseR * 0.6 + wobX;
+      py = isCob ? lineY + offset + wobY : lineY - offset + wobY;
+    }
+
+    if (isCob) {
+      // Bubble — hollow ring + highlight
+      CX.beginPath(); CX.arc(px, py, rad, 0, Math.PI * 2);
+      CX.fillStyle   = 'rgba(' + r + ',' + g + ',' + b + ',' + (a * 0.18) + ')'; CX.fill();
+      CX.strokeStyle = 'rgba(' + r + ',' + g + ',' + b + ',' + (a * 0.9)  + ')';
+      CX.lineWidth = 1.4; CX.stroke();
+      CX.beginPath(); CX.arc(px - rad * 0.3, py - rad * 0.35, rad * 0.28, 0, Math.PI * 2);
+      CX.fillStyle = 'rgba(255,225,170,' + (a * 0.5) + ')'; CX.fill();
+      // Haze for older particles becoming mist
+      if (p.age > 100) {
+        var haze = Math.min((p.age - 100) / 160, 0.65);
+        CX.beginPath(); CX.arc(px, py, rad * 1.5, 0, Math.PI * 2);
+        CX.fillStyle = 'rgba(' + r + ',' + g + ',' + b + ',' + (haze * 0.1) + ')'; CX.fill();
+      }
+      // Upward arrow when sitting
+      if (p.state === 'sitting') {
+        var aw = rad * 0.55, ay = py + rad + 2.5;
+        CX.beginPath();
+        CX.moveTo(px, ay - aw * 1.2);
+        CX.lineTo(px - aw, ay + aw * 0.5);
+        CX.lineTo(px + aw, ay + aw * 0.5);
+        CX.closePath();
+        CX.fillStyle = 'rgba(' + r + ',' + g + ',' + b + ',' + (a * 0.38) + ')'; CX.fill();
+      }
+    } else {
+      // Teardrop drop
+      var s = rad;
+      CX.beginPath();
+      CX.moveTo(px, py - s * 1.5);
+      CX.bezierCurveTo(px + s, py - s * 0.3, px + s, py + s * 0.7, px, py + s * 0.8);
+      CX.bezierCurveTo(px - s, py + s * 0.7, px - s, py - s * 0.3, px, py - s * 1.5);
+      CX.fillStyle   = 'rgba(' + r + ',' + g + ',' + b + ',' + (a * 0.7) + ')'; CX.fill();
+      CX.strokeStyle = 'rgba(' + r + ',' + g + ',' + b + ',' + (a * 0.3) + ')';
+      CX.lineWidth = 0.8; CX.stroke();
+      CX.beginPath(); CX.arc(px + s * 0.22, py - s * 0.45, s * 0.22, 0, Math.PI * 2);
+      CX.fillStyle = 'rgba(190,225,255,' + (a * 0.5) + ')'; CX.fill();
+      if (p.age > 100) {
+        var haze = Math.min((p.age - 100) / 160, 0.65);
+        CX.beginPath(); CX.arc(px, py, rad * 1.5, 0, Math.PI * 2);
+        CX.fillStyle = 'rgba(' + r + ',' + g + ',' + b + ',' + (haze * 0.1) + ')'; CX.fill();
+      }
+      // Downward tick when sitting
+      if (p.state === 'sitting') {
+        CX.beginPath();
+        CX.moveTo(px, py - s * 1.6); CX.lineTo(px, py - s * 1.6 - s * 1.3);
+        CX.strokeStyle = 'rgba(' + r + ',' + g + ',' + b + ',' + (a * 0.4) + ')';
+        CX.lineWidth = 1.2; CX.stroke();
+        CX.beginPath(); CX.arc(px, py - s * 1.6 - s * 1.3, 1.6, 0, Math.PI * 2);
+        CX.fillStyle = 'rgba(' + r + ',' + g + ',' + b + ',' + (a * 0.4) + ')'; CX.fill();
+      }
+    }
+  });
+}
+
+function _drawSparks() {
+  _forceSparks.forEach(function(s) {
+    var a = s.alpha * (1 - s.life / s.maxLife);
+    if (a < 0.02) return;
+    CX.beginPath(); CX.arc(s.x, s.y, s.r, 0, Math.PI * 2);
+    CX.fillStyle = 'rgba(255,240,200,' + Math.max(0, a) + ')'; CX.fill();
+  });
+}
+
+function _drawPressureGlow(lineY) {
+  var nx = NOW_X * W;
+  var cobCount = 0, iobCount = 0;
+  _forceParticles.forEach(function(p) {
+    if (p.state === 'traveling') return;
+    var a = p.state === 'fading' ? p.fadeAlpha : 1;
+    if (p.type === 'cob') cobCount += a * p.baseR;
+    else iobCount += a * p.baseR;
+  });
+  var spread = 40;
+  if (cobCount > 0.5) {
+    var h = Math.min(cobCount * 2.2, 48);
+    var gr = CX.createLinearGradient(0, lineY, 0, lineY + h);
+    gr.addColorStop(0, 'rgba(' + COL_COB[0] + ',' + COL_COB[1] + ',' + COL_COB[2] + ',0.35)');
+    gr.addColorStop(1, 'rgba(' + COL_COB[0] + ',' + COL_COB[1] + ',' + COL_COB[2] + ',0)');
+    CX.beginPath();
+    CX.ellipse(nx, lineY + h / 2, spread, h / 2, 0, 0, Math.PI * 2);
+    CX.fillStyle = gr; CX.fill();
+  }
+  if (iobCount > 0.5) {
+    var h = Math.min(iobCount * 2.2, 48);
+    var gr = CX.createLinearGradient(0, lineY, 0, lineY - h);
+    gr.addColorStop(0, 'rgba(' + COL_IOB[0] + ',' + COL_IOB[1] + ',' + COL_IOB[2] + ',0.35)');
+    gr.addColorStop(1, 'rgba(' + COL_IOB[0] + ',' + COL_IOB[1] + ',' + COL_IOB[2] + ',0)');
+    CX.beginPath();
+    CX.ellipse(nx, lineY - h / 2, spread, h / 2, 0, 0, Math.PI * 2);
+    CX.fillStyle = gr; CX.fill();
+  }
+}
+
+// Main entry — called from frame() in place of drawGasCloud
+function drawGasCloud(cobPts, col, direction, d) {
+  // direction: 1=cob, -1=iob (we use both calls to drive both sides)
+  var type = direction > 0 ? 'cob' : 'iob';
+
+  // Only do full update on COB call (direction=1) to avoid double-stepping
+  if (direction > 0) {
+    _forceFrame++;
+
+    // Drain reservoirs — sync to actual COB/IOB values from dataAt
+    if (d) {
+      var targetCob = Math.min(1, (d.cob || 0) / 80);
+      var targetIob = Math.min(1, (d.iob || 0) / 6);
+      // Drift reservoir toward live values gently
+      _cobReservoir += (targetCob - _cobReservoir) * 0.004;
+      _iobReservoir += (targetIob - _iobReservoir) * 0.004;
+      _cobReservoir = Math.max(0, Math.min(1, _cobReservoir));
+      _iobReservoir = Math.max(0, Math.min(1, _iobReservoir));
+    }
+
+    // Spawn particles proportional to reservoir level
+    if (_forceFrame % 18 === 0) {
+      if (Math.random() < _cobReservoir * 0.9)  _spawnForceParticle('cob');
+      if (Math.random() < _iobReservoir * 0.85) _spawnForceParticle('iob');
+    }
+
+    // Spawn mist from aged sitting particles
+    if (_forceFrame % 14 === 0) {
+      var lineY = d ? bgToY(d.bg) : H / 2;
+      _forceParticles.forEach(function(p) {
+        if (p.state === 'sitting' && p.age > 60 && Math.random() < 0.07) {
+          _spawnMist(p.type, p.x + (Math.random() - 0.5) * 22,
+            lineY + (p.type === 'cob' ? 1 : -1) * (8 + Math.random() * 18));
+        }
+      });
+    }
+
+    // Update particles
+    var lineY = d ? bgToY(d.bg) : H / 2;
+    _forceParticles.forEach(function(p) {
+      p.age++;
+      var isCob = p.type === 'cob';
+      if (p.state === 'traveling') {
+        p.alpha = Math.min(1, p.alpha + 0.07);
+        p.y += p.vy;
+        p.x += (NOW_X * W - p.x) * 0.03 + (Math.random() - 0.5) * 0.4;
+        var arrived = isCob ? p.y <= lineY : p.y >= lineY;
+        if (arrived) { p.state = 'sitting'; p.y = lineY; }
+      } else if (p.state === 'sitting' && !p.paired) {
+        p.alpha = Math.min(1, p.alpha + 0.04);
+        p.y = lineY; // track moving line
+        p.sitTimer++;
+        if (p.sitTimer > p.sitDur) { p.paired = true; p.state = 'fading'; }
+      } else if (p.state === 'fading' || p.paired) {
+        p.fadeAlpha = Math.max(0, p.fadeAlpha - 0.024);
+        p.alpha     = Math.max(0, p.alpha - 0.024);
+      }
+    });
+    _forceParticles = _forceParticles.filter(function(p) {
+      return p.alpha > 0.01;
+    });
+    if (_forceParticles.length > 200) _forceParticles.splice(0, _forceParticles.length - 200);
+
+    // Pair and annihilate every 30 frames
+    if (_forceFrame % 30 === 0) _tryPair();
+    _reassignSlots();
+
+    // Update mists
+    _forceMists.forEach(function(m) { m.life++; m.x += m.vx; m.y += m.vy; });
+    _forceMists = _forceMists.filter(function(m) { return m.life < m.maxLife; });
+    if (_forceMists.length > 120) _forceMists.splice(0, _forceMists.length - 120);
+
+    // Update sparks
+    _forceSparks.forEach(function(s) {
+      s.life++; s.x += s.vx; s.y += s.vy; s.vy += 0.05; s.alpha *= 0.93;
+    });
+    _forceSparks = _forceSparks.filter(function(s) { return s.alpha > 0.04; });
+  }
+
+  // Draw — reservoirs first, then mist, particles, sparks, glow
+  // (Both calls draw their respective reservoir; full draw only on COB call)
+  _drawReservoir(type);
+
+  if (direction > 0) {
+    // Full draw pass on COB call
+    var lineY = d ? bgToY(d.bg) : H / 2;
+    _drawMists();
+    _drawPressureGlow(lineY);
+    _drawForceParticles(lineY);
+    _drawSparks();
+  }
+}
+
 
 // ── FUTURE CLOUDS — projected gas beyond now ─────────────────────────
 function drawFutureClouds(cobPts, iobPts, d, pal) {
@@ -2549,6 +2795,8 @@ function logMealEntry(carbsOnly) {
   var parts = [];
   if (totalCarbs > 0) parts.push(totalCarbs.toFixed(0) + 'g carbs');
   if (u > 0) parts.push(u.toFixed(1) + 'U insulin');
+  topUpCOB(totalCarbs);
+  if (u > 0) topUpIOB(u);
   showToast((parts.join(' + ') || 'logged') + '\nadded to the flow');
   closeSheet();
 }
@@ -3519,6 +3767,7 @@ function logCorrection(){
   BOLUS_EVENTS.push({t:now,c:0,u:u});
   ALERTS.snooze('corr_nudge',90*60000); ALERTS.snooze('corr_high',90*60000);
   _riverPebble=null;
+  topUpIOB(u);
   closeCorrectionLog();
   showToast(u.toFixed(1)+'U correction\nlogged');
 }
