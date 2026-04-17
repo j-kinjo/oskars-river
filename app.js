@@ -1916,6 +1916,21 @@ function buildMealForecast(totalCarbs, bolusU, avgGI, eatInMins) {
 }
 
 // ── SHEET RENDERING ───────────────────────────────────────────────────
+function setWait(delta) {
+  var el = document.getElementById('wait-mins');
+  if (!el) return;
+  var v = Math.max(0, Math.min(60, (parseInt(el.value)||0) + delta));
+  el.value = v;
+  _eatWaitOverride = v;
+  renderSheet();
+}
+
+function setWaitDirect(val) {
+  var v = Math.max(0, Math.min(60, parseInt(val)||0));
+  _eatWaitOverride = v;
+  renderSheet();
+}
+
 function openSheet() {
   _mealItems  = [];
   _bolusGiven = false;
@@ -2047,7 +2062,42 @@ function renderSheet() {
       '<div style="margin:0 18px 14px;padding:14px;background:rgba(40,85,200,0.05);' +
         'border-radius:12px;border:1px solid rgba(40,85,200,0.12)">' +
 
-        // Bolus input — blank, user fills in what was actually given
+        // Total carbs — prominent
+        '<div style="text-align:center;margin-bottom:12px">' +
+          '<div style="font-family:\'Fraunces\',serif;font-weight:200;font-size:42px;' +
+            'color:rgba(255,140,50,0.9);letter-spacing:-1px;line-height:1">' +
+            totalCarbs.toFixed(0) + '</div>' +
+          '<div style="font-family:\'DM Mono\',monospace;font-size:8px;letter-spacing:1.5px;' +
+            'text-transform:uppercase;color:rgba(255,140,50,0.4)">grams carbs · GI ' +
+            avgGI.toFixed(0) + ' ' + giLabel + '</div>' +
+        '</div>' +
+
+        // Wait time — editable
+        '<div style="display:flex;align-items:center;gap:8px;margin-bottom:12px;' +
+          'padding:8px 10px;border-radius:8px;background:rgba(40,55,50,0.04);' +
+          'border:1px solid rgba(40,55,50,0.08)">' +
+          '<div style="flex:1">' +
+            '<div style="font-family:\'DM Mono\',monospace;font-size:8px;letter-spacing:1px;' +
+              'text-transform:uppercase;color:rgba(40,55,50,0.3);margin-bottom:2px">bolus wait</div>' +
+            '<div style="font-family:\'Fraunces\',serif;font-style:italic;font-weight:200;' +
+              'font-size:14px;color:rgba(40,55,50,0.6)">eat ~' + eatStr + ' (+' + eatWait + 'min)</div>' +
+          '</div>' +
+          '<div style="display:flex;align-items:center;gap:4px">' +
+            '<button onclick="setWait(-5)" style="width:28px;height:28px;border-radius:8px;' +
+              'border:1px solid rgba(40,55,50,0.12);background:rgba(255,255,255,0.5);' +
+              'font-size:16px;cursor:pointer;touch-action:manipulation">−</button>' +
+            '<input id="wait-mins" type="number" value="' + eatWait + '" min="0" max="60" step="5" ' +
+              'onchange="setWaitDirect(this.value)" ' +
+              'style="width:42px;text-align:center;padding:4px;border-radius:6px;' +
+                'border:1px solid rgba(40,55,50,0.12);background:rgba(255,255,255,0.5);' +
+                'font-family:\'DM Mono\',monospace;font-size:12px">' +
+            '<button onclick="setWait(5)" style="width:28px;height:28px;border-radius:8px;' +
+              'border:1px solid rgba(40,55,50,0.12);background:rgba(255,255,255,0.5);' +
+              'font-size:16px;cursor:pointer;touch-action:manipulation">+</button>' +
+          '</div>' +
+        '</div>' +
+
+        // Bolus input
         '<div style="font-family:\'DM Mono\',monospace;font-size:9px;color:rgba(40,55,50,0.3);' +
           'letter-spacing:1px;text-transform:uppercase;margin-bottom:8px">insulin given</div>' +
         '<div style="display:flex;align-items:center;gap:10px;margin-bottom:6px">' +
@@ -2267,6 +2317,8 @@ function addCustomFood(name) {
         'style="padding:12px 16px;border-radius:9px;border:1px solid rgba(40,55,50,0.12);background:transparent;font-family:\'DM Mono\',monospace;font-size:10px;color:rgba(40,55,50,0.4);cursor:pointer">cancel</button>' +
     '</div></div>';
 
+  el.addEventListener('click', function(e){ if(e.target===el){ el.remove(); } });
+  el.addEventListener('keydown', function(e){ if(e.key==='Escape') el.remove(); });
   document.body.appendChild(el);
   requestAnimationFrame(function(){ el.style.opacity = '1'; });
   setTimeout(function(){ var inp=document.getElementById('new-food-c100'); if(inp) inp.focus(); }, 300);
