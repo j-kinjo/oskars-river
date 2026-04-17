@@ -243,27 +243,41 @@ function drawBGTrail(pal) {
   const n     = Math.min(500, Math.max(120, Math.floor(W/1.2)));
   const pts   = [];
 
+  // Build a set of gap intervals from HISTORY_RAW (gaps > 12 min)
+  const gapIntervals = [];
+  for (let gi = 1; gi < HISTORY_RAW.length; gi++) {
+    const gapMs = HISTORY_RAW[gi].t - HISTORY_RAW[gi-1].t;
+    if (gapMs > 12 * 60000) {
+      gapIntervals.push([HISTORY_RAW[gi-1].t, HISTORY_RAW[gi].t]);
+    }
+  }
+  function inGap(t) {
+    return gapIntervals.some(function(g){ return t > g[0] && t < g[1]; });
+  }
+
   for (let i=0; i<=n; i++) {
     const t = leftT + (i/n)*(viewTime-leftT);
     const d = dataAt(t);
-    pts.push({ x: tX(t), y: bgToY(d.bg), bg: d.bg, t });
+    const gap = inGap(t);
+    pts.push({ x: tX(t), y: bgToY(d.bg), bg: d.bg, t, gap });
   }
   if (pts.length < 2) return;
 
   CX.save();
 
+  const ptsNoGap = pts.filter(function(p){ return !p.gap; });
   // Outer glow — wide, very soft
   CX.globalAlpha = 0.10;
   CX.strokeStyle = `rgba(${pal.bgLine.join(',')},1)`;
   CX.lineWidth   = 16;
   CX.lineJoin    = 'round'; CX.lineCap = 'round';
-  _drawSmoothLine(pts);
+  _drawSmoothLine(ptsNoGap);
   CX.stroke();
 
   // Mid glow
   CX.globalAlpha = 0.22;
   CX.lineWidth   = 6;
-  _drawSmoothLine(pts);
+  _drawSmoothLine(ptsNoGap);
   CX.stroke();
 
   // Core — segmented by zone colour
@@ -277,6 +291,29 @@ function drawBGTrail(pal) {
 
   for (let i=0; i<pts.length; i++) {
     const col = getCol(pts[i].bg);
+    // Break line at sensor gaps
+    if (pts[i].gap) {
+      if (seg.length > 1) {
+        CX.strokeStyle = segCol; CX.shadowColor = segCol; CX.shadowBlur = 3;
+        _drawSmoothLine(seg); CX.stroke(); CX.shadowBlur = 0;
+      }
+      // Draw dotted gap line
+      if (i > 0 && !pts[i-1].gap) {
+        CX.save();
+        CX.globalAlpha = 0.15;
+        CX.strokeStyle = 'rgba(180,200,220,1)';
+        CX.lineWidth = 1;
+        CX.setLineDash([3, 8]);
+        CX.beginPath();
+        CX.moveTo(pts[i-1].x, pts[i-1].y);
+        CX.lineTo(pts[i].x, pts[i].y);
+        CX.stroke();
+        CX.setLineDash([]);
+        CX.restore();
+      }
+      seg = []; segCol = null;
+      continue;
+    }
     if (col !== segCol && seg.length > 1) {
       CX.strokeStyle = segCol;
       CX.shadowColor = segCol; CX.shadowBlur = 3;
@@ -607,10 +644,10 @@ function drawGasCloud(pts, col, direction, d) {
   const gradY1 = gradY0 + direction * H * 0.45;
   const grad   = CX.createLinearGradient(0, gradY0, 0, gradY1);
   grad.addColorStop(0,    `rgba(${r},${g},${b},0)`);
-  grad.addColorStop(0.15, `rgba(${r},${g},${b},${0.04 * tipFrac})`);
-  grad.addColorStop(0.4,  `rgba(${r},${g},${b},${0.10 * tipFrac})`);
-  grad.addColorStop(0.7,  `rgba(${r},${g},${b},${0.16 * tipFrac})`);
-  grad.addColorStop(1.0,  `rgba(${r},${g},${b},${0.22 * tipFrac})`);
+  grad.addColorStop(0.1,  `rgba(${r},${g},${b},${0.08 * tipFrac})`);
+  grad.addColorStop(0.35, `rgba(${r},${g},${b},${0.20 * tipFrac})`);
+  grad.addColorStop(0.65, `rgba(${r},${g},${b},${0.32 * tipFrac})`);
+  grad.addColorStop(1.0,  `rgba(${r},${g},${b},${0.45 * tipFrac})`);
 
   CX.globalAlpha = 1;
   CX.fillStyle   = grad;
@@ -652,12 +689,12 @@ function drawGasCloud(pts, col, direction, d) {
   }
 
   // ── BOUNDARY FILAMENT — glowing edge at the BG line interface ──
-  const filAlpha = Math.max(0.15, tipFrac * 0.55);
+  const filAlpha = Math.max(0.4, tipFrac * 0.85);
   CX.globalAlpha = filAlpha;
   CX.strokeStyle = `rgba(${r},${g},${b},1)`;
-  CX.lineWidth   = 1.2;
-  CX.shadowColor = `rgba(${r},${g},${b},0.7)`;
-  CX.shadowBlur  = 6;
+  CX.lineWidth   = 1.8;
+  CX.shadowColor = `rgba(${r},${g},${b},0.9)`;
+  CX.shadowBlur  = 10;
   _drawSmoothLine(topEdge);
   CX.stroke();
   CX.shadowBlur  = 0;
@@ -667,8 +704,8 @@ function drawGasCloud(pts, col, direction, d) {
   if (tipFrac > 0.02 && tip) {
     const tipR = 2 + tipFrac * 6;
     const tg   = CX.createRadialGradient(tip.x, tip.y, 0, tip.x, tip.y, tipR * 4);
-    tg.addColorStop(0,   `rgba(${r},${g},${b},${0.7 * tipFrac})`);
-    tg.addColorStop(0.5, `rgba(${r},${g},${b},${0.2 * tipFrac})`);
+    tg.addColorStop(0,   `rgba(${r},${g},${b},${Math.min(1, 1.0 * tipFrac)})`);
+    tg.addColorStop(0.5, `rgba(${r},${g},${b},${0.35 * tipFrac})`);
     tg.addColorStop(1,   `rgba(${r},${g},${b},0)`);
     CX.globalAlpha = 1;
     CX.fillStyle   = tg;
