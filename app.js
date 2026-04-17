@@ -1942,8 +1942,15 @@ function openSheet() {
 }
 
 function closeSheet() {
-  document.getElementById('sheet').classList.remove('open');
-  document.getElementById('overlay').classList.remove('open');
+  window._logMealLock = false;
+  var s = document.getElementById('sheet');
+  var o = document.getElementById('overlay');
+  if (s) s.classList.remove('open');
+  if (o) o.classList.remove('open');
+  _mealItems = [];
+  _bolusVal  = null;
+  _eatWaitOverride = null;
+  _entryTimeVal = null;
   window._pendingDrop = null;
 }
 
@@ -2243,7 +2250,7 @@ function addFoodItem(name) {
   var food  = null;
   for (var i=0; i<all.length; i++) { if (all[i].name === name) { food = all[i]; break; } }
   if (!food) return;
-  var defaultG = food.g_each || 100;
+  var defaultG = food.g_each || food.g_serv || 100;
   var carbs    = Math.round((food.c100 * defaultG / 100) * 10) / 10;
   _mealItems.push({food: food, grams: defaultG, carbs: carbs});
   document.getElementById('food-search').value = '';
@@ -2383,6 +2390,11 @@ function loadMealHistory(idx) {
 }
 
 function logMealEntry(carbsOnly) {
+  // Prevent double-submit
+  if (window._logMealLock) return;
+  window._logMealLock = true;
+  setTimeout(function(){ window._logMealLock = false; }, 2000);
+
   var totalCarbs = _mealItems.reduce(function(s,i){return s+i.carbs;},0);
   var t = getEntryTime();
   var u = 0;
