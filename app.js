@@ -953,12 +953,12 @@ function drawBolusMarkers(pal) {
       const lbl = b.u.toFixed(1) + 'U';
       CX.font = "300 9px 'DM Mono',monospace";
       const lw = CX.measureText(lbl).width + 12;
-      CX.globalAlpha = 0.6;
-      CX.fillStyle   = 'rgba(' + r + ',' + g + ',' + bv + ',0.15)';
-      CX.strokeStyle = 'rgba(' + r + ',' + g + ',' + bv + ',0.4)';
-      CX.lineWidth   = 0.7;
+      CX.globalAlpha = 0.92;
+      CX.fillStyle   = 'rgba(' + r + ',' + g + ',' + bv + ',0.35)';
+      CX.strokeStyle = 'rgba(' + r + ',' + g + ',' + bv + ',0.75)';
+      CX.lineWidth   = 1.0;
       CX.beginPath(); CX.roundRect(x - lw/2, cardY - 1, lw, 15, 4); CX.fill(); CX.stroke();
-      CX.globalAlpha = 0.8; CX.fillStyle = 'rgba(' + r + ',' + g + ',' + bv + ',1)';
+      CX.globalAlpha = 1.0; CX.fillStyle = 'rgba(240,248,255,0.95)';
       CX.textAlign   = 'center';
       CX.fillText(lbl, x, cardY + 10);
       window._eventCards.push({x:x, y:cardY+7, w:lw+4, h:16, data:b, idx:_bIdx, type:'insulin'});
@@ -1936,12 +1936,17 @@ function setWait(delta) {
   var v = Math.max(0, Math.min(60, (parseInt(el.value)||0) + delta));
   el.value = v;
   _eatWaitOverride = v;
+  // Cache bolus value before re-render wipes the input
+  var bi = document.getElementById('in-bolus');
+  if (bi && bi.value !== '') _bolusVal = bi.value;
   renderSheet();
 }
 
 function setWaitDirect(val) {
   var v = Math.max(0, Math.min(60, parseInt(val)||0));
   _eatWaitOverride = v;
+  var bi = document.getElementById('in-bolus');
+  if (bi && bi.value !== '') _bolusVal = bi.value;
   renderSheet();
 }
 
@@ -2239,7 +2244,7 @@ function buildRecentMealsHTML() {
       'border:1px solid rgba(40,55,50,0.15);background:rgba(255,255,255,0.7);' +
       'font-family:\'DM Mono\',monospace;font-size:10px;color:rgba(40,55,50,0.75);' +
       'cursor:pointer;white-space:nowrap;touch-action:manipulation">' +
-      m.name.slice(0,22) + ' · ' + m.totalCarbs + 'g</button>';
+      m.name.slice(0,32) + ' · ' + m.totalCarbs + 'g</button>';
   }).join('');
   return '<div style="padding:0 18px;margin-bottom:12px">' +
     '<div style="font-family:\'DM Mono\',monospace;font-size:9px;color:rgba(40,55,50,0.25);letter-spacing:1px;text-transform:uppercase;margin-bottom:6px">recent meals</div>' +
@@ -2436,22 +2441,26 @@ function logMealEntry(carbsOnly) {
     u = inp ? (parseFloat(inp.value) || 0) : 0;
   }
 
-  // Log carbs
-  if (totalCarbs > 0) {
-    SESSION.push({t: t, c: totalCarbs, u: 0});
-  }
+  // Insulin is given NOW (bolus time)
+  // Carbs arrive LATER (after wait time)
+  var eatWaitNow = _eatWaitOverride !== null ? _eatWaitOverride : suggestEatWait(dataAt(t).bg || 7);
+  var carbT = t + eatWaitNow * 60000; // when carbs enter the system
 
-  // Log insulin separately if given
+  // Log insulin at bolus time
   if (u > 0) {
     SESSION.push({t: t, c: 0, u: u});
+    BOLUS_EVENTS.push({t: t, c: 0, u: u});
+    LOGGED_EVENTS.push({t: t, c: 0, u: u, note: 'bolus'});
   }
 
-  // Also push to BOLUS_EVENTS for canvas markers
-  if (totalCarbs > 0 || u > 0) {
-    BOLUS_EVENTS.push({t: t, c: totalCarbs, u: u});
-  LOGGED_EVENTS.push({t: t, c: totalCarbs, u: u});
-  try{localStorage.setItem('river_logged',JSON.stringify(LOGGED_EVENTS));}catch(err){}
+  // Log carbs at eat time
+  if (totalCarbs > 0) {
+    SESSION.push({t: carbT, c: totalCarbs, u: 0});
+    BOLUS_EVENTS.push({t: carbT, c: totalCarbs, u: 0});
+    LOGGED_EVENTS.push({t: carbT, c: totalCarbs, u: 0, note: 'carbs'});
   }
+
+  try{localStorage.setItem('river_logged',JSON.stringify(LOGGED_EVENTS));}catch(err){}
 
   try { localStorage.setItem('river_session',JSON.stringify(SESSION)); } catch(e) {}
 
@@ -2465,7 +2474,14 @@ function logMealEntry(carbsOnly) {
   // Save to meal history
   if (_mealItems.length > 0) {
     MEAL_HISTORY.unshift({
-      name:       _mealItems.map(function(i){return i.food.name;}).join(', '),
+      name:       (function() {
+        var items = _mealItems.map(function(i){return i.food.name;});
+        var now2  = new Date(t);
+        var hr    = now2.getHours();
+        var meal  = hr < 10 ? 'Breakfast' : hr < 14 ? 'Lunch' : hr < 17 ? 'Snack' : 'Dinner';
+        var dateStr = now2.toLocaleDateString('en-GB',{weekday:'short',day:'numeric',month:'short'});
+        return meal + ' · ' + dateStr + ' (' + items[0] + (items.length > 1 ? ' +' + (items.length-1) : '') + ')';
+      })(),
       totalCarbs: Math.round(totalCarbs),
       items:      _mealItems.map(function(i){return {name:i.food.name, grams:i.grams, carbs:i.carbs};}),
       t:          t,
