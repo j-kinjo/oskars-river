@@ -3543,7 +3543,7 @@ function buildSetupScreen() {
         never to any third party. This app has no backend.
       </div>
     </div>
-    <div style="text-align:center;margin-top:10px;font-family:'DM Mono',monospace;font-size:8px;color:rgba(40,55,50,0.15);letter-spacing:1px">build 20260326-79</div>
+    <div style="text-align:center;margin-top:10px;font-family:'DM Mono',monospace;font-size:8px;color:rgba(40,55,50,0.15);letter-spacing:1px">build 20260326-80</div>
   </div>
 </div>`;
 }
@@ -4320,6 +4320,82 @@ window.addEventListener('load', function() {
   setupOrbLongPress();
 });
 
+
+// ── DEBUG OVERLAY ─────────────────────────────────────────────────────
+(function() {
+  var _debugLog = [];
+  var _origError = console.error.bind(console);
+  var _origWarn  = console.warn.bind(console);
+
+  console.error = function() {
+    _origError.apply(console, arguments);
+    _debugLog.unshift('[ERR] ' + Array.from(arguments).join(' '));
+    if (_debugLog.length > 12) _debugLog.pop();
+    updateDebugPanel();
+  };
+  console.warn = function() {
+    _origWarn.apply(console, arguments);
+    _debugLog.unshift('[WRN] ' + Array.from(arguments).join(' '));
+    if (_debugLog.length > 12) _debugLog.pop();
+    updateDebugPanel();
+  };
+
+  function updateDebugPanel() {
+    var p = document.getElementById('debug-panel');
+    if (!p || p.style.display === 'none') return;
+    var lines = _debugLog.slice(0, 8).map(function(l) {
+      return '<div style="border-bottom:1px solid rgba(255,255,255,0.05);padding:3px 0;word-break:break-all">' +
+        l.slice(0, 120) + '</div>';
+    }).join('');
+    var content = document.getElementById('debug-content');
+    if (content) content.innerHTML = lines || '<div style="opacity:0.4">no errors</div>';
+  }
+
+  window.__debugLog = _debugLog;
+  window.__updateDebugPanel = updateDebugPanel;
+})();
+
+function openDebugPanel() {
+  var p = document.getElementById('debug-panel');
+  if (p) { p.remove(); return; }
+
+  var el = document.createElement('div');
+  el.id  = 'debug-panel';
+  el.style.cssText = (
+    'position:fixed;bottom:80px;left:8px;right:8px;z-index:200;' +
+    'background:rgba(0,0,0,0.92);border:1px solid rgba(255,255,255,0.1);' +
+    'border-radius:10px;padding:10px;font-family:monospace;font-size:10px;' +
+    'color:rgba(200,220,200,0.8);max-height:50vh;overflow-y:auto;' +
+    'touch-action:pan-y;pointer-events:auto'
+  );
+
+  // Status section
+  var d   = (typeof dataAt === 'function') ? dataAt(viewTime) : {};
+  var age = (typeof _lastReadingT !== 'undefined' && _lastReadingT > 0)
+    ? Math.round((Date.now() - _lastReadingT) / 60000) + ' min ago'
+    : 'unknown';
+  var src = (typeof _sourceId !== 'undefined') ? _sourceId : 'none';
+  var hist = (typeof HISTORY_RAW !== 'undefined') ? HISTORY_RAW.length : '?';
+  var buildStr = 'build __BUILD_ID__';
+
+  el.innerHTML =
+    '<div style="display:flex;justify-content:space-between;margin-bottom:6px">' +
+      '<span style="color:rgba(62,207,160,0.8);font-weight:bold">River Debug</span>' +
+      '<button onclick="document.getElementById(\'debug-panel\').remove()" ' +
+        'style="background:none;border:none;color:rgba(255,255,255,0.4);cursor:pointer;font-size:16px;padding:0">×</button>' +
+    '</div>' +
+    '<div style="color:rgba(150,200,150,0.6);margin-bottom:6px;line-height:1.6">' +
+      buildStr + ' · source: ' + src + '<br>' +
+      'last reading: ' + age + ' · history: ' + hist + ' entries<br>' +
+      'BG: ' + (d.bg ? d.bg.toFixed(1) : '?') +
+      ' IOB: ' + (d.iob ? d.iob.toFixed(2) : '?') +
+      ' COB: ' + (d.cob ? d.cob.toFixed(1) : '?') +
+    '</div>' +
+    '<div id="debug-content" style="line-height:1.5"></div>';
+
+  document.body.appendChild(el);
+  if (window.__updateDebugPanel) window.__updateDebugPanel();
+}
 
 function openSettings() {
   // Re-render setup screen on top
