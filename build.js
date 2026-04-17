@@ -32,7 +32,10 @@ const buildId   = `${buildDate}-${buildNum}`;
 
 let js = appJs;
 // app.js uses __BUILD_ID__ as a placeholder token
+// Replace __BUILD_ID__ tokens AND any residual literal stamps
 js = js.replace(/__BUILD_ID__/g, `build ${buildId}`);
+js = js.replace(/build 2026\d{4}-\d+/g, `build ${buildId}`);
+js = js.replace(/fillText\('build [^']+'/g, `fillText('build ${buildId}'`);
 // Always declare BOLUS_EVENTS before LOGGED_EVENTS uses it
 js = js.replace('var LOGGED_EVENTS = [];', 'var BOLUS_EVENTS = [];\nvar LOGGED_EVENTS = [];');
 js = `window.__RIVER_HISTORY__ = ${history};\nwindow.__RIVER_FOODS__ = ${foods};\n\n` + js;
