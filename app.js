@@ -100,8 +100,10 @@ async function _sbFetch(path, opts) {
     var txt = await r.text().catch(function(){ return ''; });
     throw new Error('Supabase ' + r.status + ': ' + txt.slice(0, 120));
   }
-  if (r.status === 204) return null;
-  return r.json();
+  if (r.status === 204 || r.status === 200 && r.headers.get('content-length') === '0') return null;
+  const txt2 = await r.text();
+  if (!txt2 || txt2.trim() === '') return null;
+  return JSON.parse(txt2);
 }
 
 // ── PUSH: local events → Supabase ─────────────────────────────────────
