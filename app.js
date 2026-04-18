@@ -3637,8 +3637,17 @@ function openSheet() {
 }
 
 // Long-press food button → kitchen mode; tap → quick log
+var _foodClickT = 0;
 function foodBtnTap() {
-  openSheet();
+  // Double-click on desktop → kitchen mode
+  var now = Date.now();
+  if (now - _foodClickT < 350) {
+    _foodClickT = 0;
+    openKitchen();
+  } else {
+    _foodClickT = now;
+    openSheet();
+  }
 }
 function foodBtnLongPress() {
   openKitchen();
@@ -5910,6 +5919,7 @@ function deleteFood(encodedName) {
 // ── DOCK GESTURES & FLICK ANIMATIONS ─────────────────────────────────
 let _dockTouch = {};
 let _corrHoldTimer = null;
+let _foodLastTap = 0;  // for double-tap kitchen mode
 
 function dockTouchStart(e, type) {
   const t = e.touches[0];
@@ -5928,6 +5938,16 @@ function dockTouchEnd(e, type) {
     const startY = start.y;
     if (type === 'food')  { flickAnimation(startX, startY, COL_COB,  1); openSheet(); }
     if (type === 'hypo')  { flickAnimation(startX, startY, COL_HYPO, 1); openHypoLog(); }
+  } else if (dy <= 8 && dt < 400 && type === 'food') {
+    // Tap — check for double-tap → kitchen mode
+    const now = Date.now();
+    if (now - _foodLastTap < 350) {
+      // Double-tap — open kitchen mode
+      _foodLastTap = 0;
+      openKitchen();
+    } else {
+      _foodLastTap = now;
+    }
   }
   delete _dockTouch[type];
 }
