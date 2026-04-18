@@ -1,10 +1,14 @@
 // ═══════════════════════════════════════════════════════════════
-//  OSKAR'S RIVER  v3
-//  Mood: zenful Japanese ink-wash river
-//  Camera: rear-elevated, looking at boat from behind / above
-//  Wake = mana lines (COB warm upper, IOB cool lower)
-//  Banks = lily pads (hyper top, hypo bottom)
-//  Time of day drives full palette shift
+//  OSKAR'S RIVER  v4
+//  Mood: zen void river — balance, breath, flow
+//  Forces: COB (warm orange) rises from below — carbs absorbing
+//          IOB (cool blue) falls from above — insulin working
+//  Reservoirs anchor to event time, peak at per-GI absorption peak
+//  Individual food GI curves visible in reservoir bell stack
+//  Particles pair and annihilate when forces balance
+//  Unaccounted forces (exercise, cold, stress) shift the line too
+//  Target corridor glows — the zen tunnel, aim for stillness
+//  Multi-device sync via Supabase
 // ═══════════════════════════════════════════════════════════════
 
 // ── DATA PLACEHOLDER (injected at build time) ─────────────────
@@ -100,10 +104,10 @@ async function _sbFetch(path, opts) {
     var txt = await r.text().catch(function(){ return ''; });
     throw new Error('Supabase ' + r.status + ': ' + txt.slice(0, 120));
   }
-  if (r.status === 204 || r.status === 200 && r.headers.get('content-length') === '0') return null;
+  if (r.status === 204) return null;
   const txt2 = await r.text();
   if (!txt2 || txt2.trim() === '') return null;
-  return JSON.parse(txt2);
+  try { return JSON.parse(txt2); } catch(e) { return null; }
 }
 
 // ── PUSH: local events → Supabase ─────────────────────────────────────
@@ -627,66 +631,49 @@ function drawBGTrail(pal) {
     CX.shadowBlur  = 0;
   }
 
-  // ── PREDICTION — soft range cloud, not a single line ─────────────────
-  const d0    = dataAt(viewTime);
-  const prev5 = dataAt(viewTime - 5*60000);
-  const roc   = d0.bg - prev5.bg;
-  const ISF   = (new Date(viewTime).getHours() >= 9 && new Date(viewTime).getHours() < 15) ? 7.0 : 6.0;
-
-  // Build centre prediction
-  const predC = [];
-  for (let i=1; i<=24; i++) {
-    const mins = i*5;
-    const ft   = viewTime + mins*60000;
-    const fx   = tX(ft);
-    if (fx > W+20) break;
-    const iobDelta = d0.iob > 0 ? -d0.iob*(1-iobF(mins))*ISF : 0;
-    const cobDelta = d0.cob > 0 ?  d0.cob*(1-cobF(mins))*0.05 : 0;
-    const rocD     = roc * Math.exp(-mins/25);
-    const bg       = Math.max(1.5, Math.min(22, d0.bg+iobDelta+cobDelta+rocD));
-    predC.push({x:fx, y:bgToY(bg), bg});
-  }
-
+  // ── SMART FORECAST — per-food GI + IOB decay ─────────────────────────
+  const predC = buildSmartForecast();
   if (predC.length > 1) {
-    // Uncertainty cloud — draw 5 bands with increasing offset
-    const bands = [0.4, 0.6, 1.0, 0.6, 0.4];
-    const offsets = [-2, -1, 0, 1, 2];
-    for (let b=0; b<5; b++) {
-      const offset = offsets[b] * 8; // vertical spread
-      CX.globalAlpha = 0.06 * bands[b];
-      CX.strokeStyle = `rgba(${pal.bgLine.join(',')},1)`;
-      CX.lineWidth   = 3;
-      CX.setLineDash([3, 6]);
-      CX.beginPath();
-      CX.moveTo(pts[pts.length-1].x, pts[pts.length-1].y + offset);
-      for (const p of predC) CX.lineTo(p.x, p.y + offset);
-      CX.stroke();
-    }
-    // Centre prediction line — slightly brighter
-    CX.globalAlpha = 0.35;
-    CX.strokeStyle = `rgba(${pal.bgLine.join(',')},1)`;
-    CX.lineWidth   = 1.5;
-    CX.setLineDash([4, 7]);
-    CX.beginPath();
-    CX.moveTo(pts[pts.length-1].x, pts[pts.length-1].y);
-    for (const p of predC) CX.lineTo(p.x, p.y);
-    CX.stroke();
-    CX.setLineDash([]);
+    const startPt = pts[pts.length-1] || predC[0];
+    const last    = predC[predC.length-1];
+    const endCol  = last.bg > BG_HIGH ? `rgba(230,140,40,` :
+                    last.bg < BG_LOW  ? `rgba(80,130,220,` :
+                    `rgba(${pal.bgLine.join(',')},`;
 
-    // Predicted endpoint — ghost dot
-    const last = predC[predC.length-1];
-    const endCol = last.bg > BG_HIGH ? 'rgba(230,140,40,0.5)' :
-                   last.bg < BG_LOW  ? 'rgba(80,130,220,0.5)' :
-                   `rgba(${pal.bgLine.join(',')},0.5)`;
+    // Uncertainty bands
+    [[-2,0.04],[-1,0.06],[0,0.11],[1,0.06],[2,0.04]].forEach(function(band) {
+      const spread = band[0]*7, alpha = band[1];
+      CX.globalAlpha = alpha;
+      CX.strokeStyle = `rgba(${pal.bgLine.join(',')},1)`;
+      CX.lineWidth = 3; CX.setLineDash([3,6]);
+      CX.beginPath(); CX.moveTo(startPt.x, startPt.y+spread);
+      predC.forEach(function(p){ CX.lineTo(p.x, p.y+spread); });
+      CX.stroke();
+    });
+
+    // Centre line — colour by predicted landing
+    CX.globalAlpha = 0.5;
+    CX.strokeStyle = endCol + '1)';
+    CX.lineWidth = 1.8; CX.setLineDash([4,7]);
+    CX.beginPath(); CX.moveTo(startPt.x, startPt.y);
+    predC.forEach(function(p){ CX.lineTo(p.x, p.y); });
+    CX.stroke(); CX.setLineDash([]);
+
+    // Landing dot
+    CX.globalAlpha = 0.8;
+    CX.fillStyle   = endCol + '0.9)';
+    CX.shadowColor = endCol + '0.5)'; CX.shadowBlur = 6;
+    CX.beginPath(); CX.arc(last.x, last.y, 3.5, 0, Math.PI*2); CX.fill();
+    CX.shadowBlur = 0;
+
+    // Landing value + time label
     CX.globalAlpha = 0.6;
-    CX.fillStyle   = endCol;
-    CX.beginPath(); CX.arc(last.x, last.y, 3, 0, Math.PI*2); CX.fill();
-    // Predicted value — faint
-    CX.globalAlpha = 0.4;
-    CX.fillStyle   = endCol;
-    CX.font        = "200 10px 'Fraunces',serif";
-    CX.textAlign   = 'center';
-    CX.fillText(last.bg.toFixed(1), last.x, last.y - 7);
+    CX.fillStyle   = endCol + '1)';
+    CX.font        = "300 10px 'Fraunces',serif"; CX.textAlign = 'center';
+    CX.fillText(last.bg.toFixed(1), last.x, last.y - 9);
+    CX.globalAlpha = 0.3;
+    CX.font        = "300 8px 'DM Mono',monospace";
+    CX.fillText('+' + last.mins + 'min', last.x, last.y + 13);
   }
 
   CX.globalAlpha = 1;
@@ -887,122 +874,473 @@ function drawForceRibbon(pts, colorR, direction) {
 // ── EQUILIBRIUM ZONE — the calm corridor between forces ───────────────
 // When BG is in range and forces are roughly balanced, draw a soft
 // glowing band showing the target zone — the zone of equilibrium
-// ── GAS CLOUD — living ethereal force field ───────────────────────────
-// direction:  1 = carbs rising from below BG line toward bottom of screen
-//            -1 = insulin falling from above BG line toward top of screen
-// The cloud fills the space between the BG line and the screen edge
-// in the direction of the force, with animated wispy tendrils
+// ── PARTICLE FORCE SYSTEM v2 — per-food GI curves ────────────────────
+// Each logged food contributes its own absorption bell to the COB reservoir.
+// Bell width and peak time driven by individual food GI.
+// Reservoir bell scales with viewSpan (zoom-aware).
+// IOB anchors to bolus time + Novorapid 75min peak.
+// Smart forecast factors per-food curves + IOB decay.
 
-function drawGasCloud(pts, col, direction, d) {
-  if (!pts || pts.length < 2) return;
-  const past = pts.filter(p => !p.future);
-  if (past.length < 2) return;
+var _cobReservoir   = 0;
+var _iobReservoir   = 0;
+var _forceParticles = [];
+var _forceMists     = [];
+var _forceSparks    = [];
+var _forceFrame     = 0;
 
-  const peakVal = Math.max(...past.map(p => p.val));
-  if (peakVal < 0.01) return; // void — no force active
+function topUpCOB(grams)  { _cobReservoir = Math.min(1, _cobReservoir + grams / 80); }
+function topUpIOB(units)  { _iobReservoir = Math.min(1, _iobReservoir + units / 6);  }
 
-  const [r, g, b] = col;
-  const tipFrac = Math.min(1, Math.sqrt(peakVal / (direction > 0 ? 50 : 3.0)));
-
-  CX.save();
-
-  const nowX  = NOW_X * W;
-  const edgeY = direction > 0 ? H : 0; // screen edge toward which cloud expands
-
-  // ── MAIN CLOUD BODY — gaussian fill from BG line to screen edge ──
-  // Build the cloud polygon: BG line on one side, screen edge on other
-  const topEdge = past.map(p => ({ x: p.x, y: p.bgY }));         // BG line
-  const botEdge = past.map(p => {                                   // cloud extent
-    // Cloud height scales with force value and tapers toward left (older)
-    const ageFrac  = Math.max(0, Math.min(1, (viewTime - p.t) / (2*3600000)));
-    const strength = Math.min(1, Math.sqrt(Math.max(0, p.val) / (direction > 0 ? 50 : 3.0)));
-    const maxH     = H * 0.45 * strength * (0.2 + 0.8 * ageFrac);
-    return { x: p.x, y: p.bgY + direction * maxH };
+function _getActiveMealEvents() {
+  var cutoff = Date.now() - 4 * 3600000;
+  var events = [], seen = {};
+  BOLUS_EVENTS.concat(SESSION).forEach(function(ev) {
+    if (!ev.c || ev.c <= 0 || ev.t < cutoff) return;
+    var key = Math.round(ev.t / 30000);
+    if (seen[key]) return;
+    seen[key] = true;
+    events.push({ t: ev.t, c: ev.c, gi: ev.gi||55,
+      items: ev.items || [{name:'meal', carbs:ev.c, gi:ev.gi||55}] });
   });
-
-  // Gradient from BG line (transparent) to screen edge (peak opacity)
-  const gradY0 = past[past.length-1].bgY;
-  const gradY1 = gradY0 + direction * H * 0.45;
-  const grad   = CX.createLinearGradient(0, gradY0, 0, gradY1);
-  grad.addColorStop(0,    `rgba(${r},${g},${b},0)`);
-  grad.addColorStop(0.1,  `rgba(${r},${g},${b},${0.08 * tipFrac})`);
-  grad.addColorStop(0.35, `rgba(${r},${g},${b},${0.20 * tipFrac})`);
-  grad.addColorStop(0.65, `rgba(${r},${g},${b},${0.32 * tipFrac})`);
-  grad.addColorStop(1.0,  `rgba(${r},${g},${b},${0.45 * tipFrac})`);
-
-  CX.globalAlpha = 1;
-  CX.fillStyle   = grad;
-  CX.beginPath();
-  CX.moveTo(topEdge[0].x, topEdge[0].y);
-  _drawSmoothLine(topEdge);
-  // Across to cloud extent
-  for (let i = botEdge.length-1; i >= 0; i--) {
-    CX.lineTo(botEdge[i].x, botEdge[i].y);
-  }
-  CX.closePath();
-  CX.fill();
-
-  // ── WISPS — animated tendrils floating in the gas ─────────────
-  const wispCount = Math.floor(3 + tipFrac * 6);
-  const rng = seededRand(direction > 0 ? 77 : 33);
-  for (let w = 0; w < wispCount; w++) {
-    const wIdx   = Math.floor(past.length * (0.2 + rng() * 0.8));
-    if (wIdx >= past.length) continue;
-    const wp     = past[wIdx];
-    const wStrength = Math.min(1, Math.sqrt(Math.max(0, wp.val) / (direction > 0 ? 50 : 3.0)));
-    if (wStrength < 0.05) continue;
-
-    const wPhase  = phi * (0.4 + rng() * 0.6) + w * 1.3;
-    const wOffset = Math.sin(wPhase) * 8 * wStrength;
-    const wH      = wp.bgY + direction * H * 0.35 * wStrength + wOffset;
-    const wAlpha  = wStrength * tipFrac * (0.08 + 0.12 * Math.abs(Math.sin(wPhase)));
-    const wWidth  = 20 + rng() * 40;
-
-    const wg = CX.createRadialGradient(wp.x, wH, 0, wp.x, wH, wWidth);
-    wg.addColorStop(0,   `rgba(${r},${g},${b},${wAlpha})`);
-    wg.addColorStop(0.5, `rgba(${r},${g},${b},${wAlpha * 0.4})`);
-    wg.addColorStop(1,   `rgba(${r},${g},${b},0)`);
-    CX.globalAlpha = 1;
-    CX.fillStyle   = wg;
-    CX.beginPath();
-    CX.ellipse(wp.x, wH, wWidth, wWidth * 0.4, 0, 0, Math.PI * 2);
-    CX.fill();
-  }
-
-  // ── BOUNDARY FILAMENT — glowing edge at the BG line interface ──
-  const filAlpha = Math.max(0.4, tipFrac * 0.85);
-  CX.globalAlpha = filAlpha;
-  CX.strokeStyle = `rgba(${r},${g},${b},1)`;
-  CX.lineWidth   = 1.8;
-  CX.shadowColor = `rgba(${r},${g},${b},0.9)`;
-  CX.shadowBlur  = 10;
-  _drawSmoothLine(topEdge);
-  CX.stroke();
-  CX.shadowBlur  = 0;
-
-  // ── TIP CONVERGENCE — where the force meets now ────────────────
-  const tip = past[past.length - 1];
-  if (tipFrac > 0.02 && tip) {
-    const tipR = 2 + tipFrac * 6;
-    const tg   = CX.createRadialGradient(tip.x, tip.y, 0, tip.x, tip.y, tipR * 4);
-    tg.addColorStop(0,   `rgba(${r},${g},${b},${Math.min(1, 1.0 * tipFrac)})`);
-    tg.addColorStop(0.5, `rgba(${r},${g},${b},${0.35 * tipFrac})`);
-    tg.addColorStop(1,   `rgba(${r},${g},${b},0)`);
-    CX.globalAlpha = 1;
-    CX.fillStyle   = tg;
-    CX.shadowColor = `rgba(${r},${g},${b},0.8)`;
-    CX.shadowBlur  = 12;
-    CX.beginPath(); CX.arc(tip.x, tip.y, tipR * 4, 0, Math.PI * 2); CX.fill();
-
-    // Solid core spark
-    CX.fillStyle   = `rgba(${r},${g},${b},${0.9 * tipFrac})`;
-    CX.shadowBlur  = 4;
-    CX.beginPath(); CX.arc(tip.x, tip.y, Math.max(0.5, tipFrac * 2.5), 0, Math.PI * 2); CX.fill();
-    CX.shadowBlur  = 0;
-  }
-
-  CX.restore();
+  return events.sort(function(a,b){ return a.t-b.t; });
 }
+
+function _getActiveBolusEvents() {
+  var cutoff = Date.now() - 4 * 3600000;
+  var events = [], seen = {};
+  BOLUS_EVENTS.concat(SESSION).forEach(function(ev) {
+    if (!ev.u || ev.u <= 0 || ev.t < cutoff) return;
+    var key = Math.round(ev.t / 30000);
+    if (seen[key]) return;
+    seen[key] = true;
+    events.push({ t: ev.t, u: ev.u });
+  });
+  return events.sort(function(a,b){ return a.t-b.t; });
+}
+
+function _cobFgi(mins, gi) {
+  gi = gi || 55;
+  if (mins <= 0) return 1; if (mins >= 240) return 0;
+  var pk = Math.max(15, 95 - gi), s = pk / 2.2, z = (mins - pk) / s;
+  return Math.max(0, 1 - Math.min(1, 0.5*(1+Math.tanh(0.7978845608*(z+0.044715*z*z*z)))));
+}
+
+function _iobFn(mins) {
+  if (mins <= 0) return 1; if (mins >= 240) return 0;
+  var d = 0;
+  for (var x = 0; x < mins; x += 2) d += (x<=70 ? x/70 : Math.max(0,1-(x-70)/170))*2;
+  return Math.max(0, 1 - Math.min(1, d/105));
+}
+
+// Zoom-aware sigma: bell width scales with viewSpan so it looks right at any zoom
+function _bellSigma(giModifier) {
+  // At default 2h view (7200000ms), W pixels covers viewSpan
+  // We want bell to represent ~45min of absorption time at medium GI
+  var msPerPx = viewSpan / W;
+  var widthMs = (giModifier || 1) * 45 * 60000; // 45min in ms, scaled by GI
+  return (widthMs / msPerPx) / 2.5; // convert to pixels
+}
+
+function _drawCOBReservoir() {
+  var mealEvents = _getActiveMealEvents();
+  if (mealEvents.length === 0) return;
+
+  mealEvents.forEach(function(meal) {
+    if (!meal.items) return;
+    meal.items.forEach(function(food) {
+      if (!food.carbs || food.carbs <= 0) return;
+      var gi         = food.gi || 55;
+      var peakMin    = Math.max(15, 95 - gi);
+      var peakT      = meal.t + peakMin * 60000;
+      var peakX      = tX(peakT);  // scroll-aware
+      var elapsedMin = (viewTime - meal.t) / 60000;
+      var remaining  = _cobFgi(elapsedMin, gi);
+      if (remaining < 0.02) return;
+
+      // GI speed → colour
+      var rv, gv, bv;
+      if      (gi >= 70) { rv=255; gv=90;  bv=30;  }  // hot red-orange: fast
+      else if (gi >= 55) { rv=255; gv=150; bv=40;  }  // warm orange: medium
+      else               { rv=180; gv=200; bv=60;  }  // olive-green: slow
+
+      // Zoom-aware bell width — faster GI = narrower bell
+      var sigmaFactor = gi >= 70 ? 0.6 : gi >= 55 ? 1.0 : 1.5;
+      var sigma = _bellSigma(sigmaFactor);
+      var maxD  = Math.min(90, 70 * (food.carbs / 20) * remaining);
+
+      CX.beginPath();
+      CX.moveTo(0, H);
+      for (var i = 0; i <= 280; i++) {
+        var px = (i/280)*W;
+        CX.lineTo(px, H - Math.exp(-0.5*Math.pow((px-peakX)/sigma,2))*maxD);
+      }
+      CX.lineTo(W, H); CX.closePath();
+
+      var gr = CX.createLinearGradient(0, H, 0, H-maxD);
+      gr.addColorStop(0,   'rgba('+rv+','+gv+','+bv+','+(0.22+remaining*0.28)+')');
+      gr.addColorStop(0.5, 'rgba('+rv+','+gv+','+bv+','+(remaining*0.12)+')');
+      gr.addColorStop(1,   'rgba('+rv+','+gv+','+bv+',0)');
+      CX.fillStyle = gr; CX.fill();
+
+      // Rim
+      CX.beginPath();
+      for (var i = 0; i <= 280; i++) {
+        var px = (i/280)*W;
+        var py = H - Math.exp(-0.5*Math.pow((px-peakX)/sigma,2))*maxD;
+        i===0 ? CX.moveTo(px,py) : CX.lineTo(px,py);
+      }
+      CX.strokeStyle='rgba('+rv+','+gv+','+bv+','+(0.35+remaining*0.45)+')';
+      CX.lineWidth=1.2; CX.stroke();
+
+      // Food label at peak
+      if (food.carbs >= 2 && peakX > 30 && peakX < W-30 && maxD > 14) {
+        CX.globalAlpha = remaining * 0.65;
+        CX.fillStyle   = 'rgba('+rv+','+gv+','+bv+',1)';
+        CX.font        = "300 8px 'DM Mono',monospace";
+        CX.textAlign   = 'center';
+        CX.fillText(food.name.slice(0,14)+' '+food.carbs.toFixed(0)+'g', peakX, H-maxD-6);
+        CX.globalAlpha = 1;
+      }
+    });
+  });
+}
+
+function _drawIOBReservoir() {
+  var bolusEvents = _getActiveBolusEvents();
+  if (bolusEvents.length === 0) return;
+
+  bolusEvents.forEach(function(bolus) {
+    var elapsedMin = (viewTime - bolus.t) / 60000;
+    var remaining  = _iobFn(elapsedMin);
+    if (remaining < 0.02) return;
+
+    var peakT  = bolus.t + 75 * 60000;
+    var peakX  = tX(peakT);
+    var sigma  = _bellSigma(1.1);  // slightly wider than medium GI
+    var maxD   = Math.min(88, 80 * (bolus.u/3) * remaining);
+
+    var rv=COL_IOB[0], gv=COL_IOB[1], bv=COL_IOB[2];
+
+    CX.beginPath();
+    CX.moveTo(0, 0);
+    for (var i = 0; i <= 280; i++) {
+      var px = (i/280)*W;
+      CX.lineTo(px, Math.exp(-0.5*Math.pow((px-peakX)/sigma,2))*maxD);
+    }
+    CX.lineTo(W, 0); CX.closePath();
+
+    var gr = CX.createLinearGradient(0, 0, 0, maxD);
+    gr.addColorStop(0,   'rgba('+rv+','+gv+','+bv+','+(0.22+remaining*0.28)+')');
+    gr.addColorStop(0.5, 'rgba('+rv+','+gv+','+bv+','+(remaining*0.12)+')');
+    gr.addColorStop(1,   'rgba('+rv+','+gv+','+bv+',0)');
+    CX.fillStyle = gr; CX.fill();
+
+    CX.beginPath();
+    for (var i = 0; i <= 280; i++) {
+      var px = (i/280)*W;
+      var py = Math.exp(-0.5*Math.pow((px-peakX)/sigma,2))*maxD;
+      i===0 ? CX.moveTo(px,py) : CX.lineTo(px,py);
+    }
+    CX.strokeStyle='rgba('+rv+','+gv+','+bv+','+(0.35+remaining*0.45)+')';
+    CX.lineWidth=1.2; CX.stroke();
+
+    if (peakX > 30 && peakX < W-30 && maxD > 10) {
+      CX.globalAlpha = remaining * 0.6;
+      CX.fillStyle   = 'rgba('+rv+','+gv+','+bv+',1)';
+      CX.font        = "300 8px 'DM Mono',monospace";
+      CX.textAlign   = 'center';
+      CX.fillText(bolus.u.toFixed(1)+'U', peakX, maxD+10);
+      CX.globalAlpha = 1;
+    }
+  });
+}
+
+// Smart forecast — per-food GI curves + IOB decay
+function buildSmartForecast() {
+  var d0    = dataAt(viewTime);
+  var bg    = d0.bg;
+  var ISF   = (new Date(viewTime).getHours()>=9 && new Date(viewTime).getHours()<15) ? 7.0 : 6.5;
+  var prev5 = dataAt(viewTime - 5*60000);
+  var roc   = d0.bg - prev5.bg;
+  var meals  = _getActiveMealEvents();
+  var boluses= _getActiveBolusEvents();
+  var pts    = [];
+
+  for (var i = 1; i <= 36; i++) {
+    var mins = i * 5;
+    var ft   = viewTime + mins*60000;
+    var fx   = tX(ft);
+    if (fx > W+40) break;
+
+    var cobEffect = 0;
+    meals.forEach(function(meal) {
+      var mealMins = (viewTime - meal.t) / 60000;
+      meal.items.forEach(function(food) {
+        var gi = food.gi || 55;
+        var absNow    = food.carbs * (1 - _cobFgi(mealMins, gi));
+        var absFuture = food.carbs * (1 - _cobFgi(mealMins + mins, gi));
+        cobEffect += Math.max(0, absFuture - absNow) * 0.055;
+      });
+    });
+
+    var iobEffect = 0;
+    boluses.forEach(function(bolus) {
+      var bMins = (viewTime - bolus.t) / 60000;
+      iobEffect += bolus.u * (_iobFn(bMins) - _iobFn(bMins+mins)) * ISF;
+    });
+
+    var predBG = Math.max(1.8, Math.min(22, bg + cobEffect - iobEffect + roc*Math.exp(-mins/20)));
+    pts.push({mins:mins, bg:predBG, x:fx, y:bgToY(predBG)});
+  }
+  return pts;
+}
+
+// ── PARTICLES ────────────────────────────────────────────────────────
+
+function _spawnForceParticle(type) {
+  var isCob = type==='cob';
+  var level = isCob ? _cobReservoir : _iobReservoir;
+  if (level < 0.02) return;
+  var r = 2.8 + Math.random()*2.5;
+  _forceParticles.push({
+    type:type, r:r, baseR:r,
+    x: NOW_X*W + (Math.random()-0.5)*28,
+    y: isCob ? H+4 : -4,
+    vy: isCob ? -(1.6+Math.random()*0.7) : (1.6+Math.random()*0.7),
+    phase: Math.random()*Math.PI*2,
+    alpha:0, state:'traveling',
+    sitTimer:0, sitDur:550+Math.random()*450,
+    stackSlot:0, fadeAlpha:1, age:0, paired:false,
+  });
+}
+
+function _spawnMist(type, x, y) {
+  _forceMists.push({
+    type:type, x:x, y:y,
+    r:7+Math.random()*14, life:0, maxLife:180+Math.random()*200,
+    vx:(Math.random()-0.5)*0.2,
+    vy:type==='cob' ? -(0.06+Math.random()*0.1) : (0.06+Math.random()*0.1),
+    phase:Math.random()*Math.PI*2, maxAlpha:0.06+Math.random()*0.08,
+  });
+}
+
+function _spawnSparks(x, y) {
+  for (var i=0;i<8;i++) {
+    var ang=Math.random()*Math.PI*2, spd=1.2+Math.random()*2.2;
+    _forceSparks.push({x:x,y:y, vx:Math.cos(ang)*spd, vy:Math.sin(ang)*spd,
+      r:1.2+Math.random()*1.6, alpha:1, maxLife:22+Math.random()*14, life:0});
+  }
+}
+
+function _reassignSlots() {
+  var ci=0,ii=0;
+  _forceParticles.forEach(function(p){
+    if(p.state!=='sitting'||p.paired) return;
+    p.stackSlot = p.type==='cob' ? ci++ : ii++;
+  });
+}
+
+function _tryPair() {
+  var sitting=_forceParticles.filter(function(p){return p.state==='sitting'&&!p.paired;});
+  var cobs=sitting.filter(function(p){return p.type==='cob';});
+  var iobs=sitting.filter(function(p){return p.type==='iob';});
+  cobs.forEach(function(c){
+    if(c.paired) return;
+    var best=null,bestD=999;
+    iobs.forEach(function(io){
+      if(io.paired) return;
+      var d=Math.abs(c.x-io.x);
+      if(d<bestD){bestD=d;best=io;}
+    });
+    if(best&&bestD<80){
+      _spawnSparks((c.x+best.x)/2, bgToY(dataAt(viewTime).bg));
+      c.paired=best.paired=true;
+      c.state=best.state='fading';
+    }
+  });
+}
+
+function _drawMists() {
+  _forceMists.forEach(function(m){
+    var t=m.life/m.maxLife;
+    var a=t<0.2?m.maxAlpha*(t/0.2):m.maxAlpha*(1-(t-0.2)/0.8);
+    var col=m.type==='cob'?COL_COB:COL_IOB;
+    CX.beginPath();
+    CX.arc(m.x+Math.sin(_forceFrame*0.025+m.phase)*5, m.y, m.r*(0.7+t*0.5), 0, Math.PI*2);
+    CX.fillStyle='rgba('+col[0]+','+col[1]+','+col[2]+','+Math.max(0,a)+')';
+    CX.fill();
+  });
+}
+
+function _drawForceParticles(lineY) {
+  var nx=NOW_X*W;
+  _forceParticles.forEach(function(p){
+    var isCob=p.type==='cob';
+    var col=isCob?COL_COB:COL_IOB;
+    var rv=col[0],gv=col[1],bv=col[2];
+    var wobX=Math.sin(_forceFrame*0.045+p.phase)*1.8;
+    var wobY=p.state==='sitting'?Math.sin(_forceFrame*0.07+p.phase*1.2)*1.0:0;
+    var pulse=p.state==='sitting'?1+Math.sin(_forceFrame*0.11+p.phase)*0.13:1;
+    var rad=p.baseR*pulse;
+    var a=p.state==='fading'?p.fadeAlpha:p.alpha;
+    if(a<0.02) return;
+
+    var px,py;
+    if(p.state==='traveling'){
+      px=p.x+wobX*0.3; py=p.y;
+    } else {
+      var gap=rad*2.1+1.5;
+      var offset=p.stackSlot*gap+rad+3;
+      px=nx+(p.stackSlot%2===0?1:-1)*p.baseR*0.5+wobX;
+      py=isCob?lineY+offset+wobY:lineY-offset+wobY;
+    }
+
+    if(isCob){
+      // Bubble
+      CX.beginPath(); CX.arc(px,py,rad,0,Math.PI*2);
+      CX.fillStyle='rgba('+rv+','+gv+','+bv+','+(a*0.15)+')'; CX.fill();
+      CX.strokeStyle='rgba('+rv+','+gv+','+bv+','+(a*0.88)+')';
+      CX.lineWidth=1.3; CX.stroke();
+      CX.beginPath(); CX.arc(px-rad*0.28,py-rad*0.32,rad*0.25,0,Math.PI*2);
+      CX.fillStyle='rgba(255,228,175,'+(a*0.48)+')'; CX.fill();
+      if(p.age>120){
+        var haze=Math.min((p.age-120)/150,0.6);
+        CX.beginPath(); CX.arc(px,py,rad*1.6,0,Math.PI*2);
+        CX.fillStyle='rgba('+rv+','+gv+','+bv+','+(haze*0.09)+')'; CX.fill();
+      }
+      if(p.state==='sitting'){
+        var aw=rad*0.5,ay=py+rad+2;
+        CX.beginPath(); CX.moveTo(px,ay-aw*1.1);
+        CX.lineTo(px-aw,ay+aw*0.5); CX.lineTo(px+aw,ay+aw*0.5); CX.closePath();
+        CX.fillStyle='rgba('+rv+','+gv+','+bv+','+(a*0.35)+')'; CX.fill();
+      }
+    } else {
+      // Teardrop
+      var s=rad;
+      CX.beginPath();
+      CX.moveTo(px,py-s*1.4);
+      CX.bezierCurveTo(px+s*0.95,py-s*0.25,px+s*0.95,py+s*0.65,px,py+s*0.75);
+      CX.bezierCurveTo(px-s*0.95,py+s*0.65,px-s*0.95,py-s*0.25,px,py-s*1.4);
+      CX.fillStyle='rgba('+rv+','+gv+','+bv+','+(a*0.72)+')'; CX.fill();
+      CX.strokeStyle='rgba('+rv+','+gv+','+bv+','+(a*0.28)+')';
+      CX.lineWidth=0.7; CX.stroke();
+      CX.beginPath(); CX.arc(px+s*0.2,py-s*0.42,s*0.2,0,Math.PI*2);
+      CX.fillStyle='rgba(195,228,255,'+(a*0.52)+')'; CX.fill();
+      if(p.age>120){
+        var haze=Math.min((p.age-120)/150,0.6);
+        CX.beginPath(); CX.arc(px,py,rad*1.6,0,Math.PI*2);
+        CX.fillStyle='rgba('+rv+','+gv+','+bv+','+(haze*0.09)+')'; CX.fill();
+      }
+      if(p.state==='sitting'){
+        CX.beginPath(); CX.moveTo(px,py-s*1.5); CX.lineTo(px,py-s*1.5-s*1.2);
+        CX.strokeStyle='rgba('+rv+','+gv+','+bv+','+(a*0.38)+')';
+        CX.lineWidth=1.1; CX.stroke();
+        CX.beginPath(); CX.arc(px,py-s*1.5-s*1.2,1.5,0,Math.PI*2);
+        CX.fillStyle='rgba('+rv+','+gv+','+bv+','+(a*0.38)+')'; CX.fill();
+      }
+    }
+  });
+}
+
+function _drawSparks() {
+  _forceSparks.forEach(function(s){
+    var a=s.alpha*(1-s.life/s.maxLife);
+    if(a<0.02) return;
+    CX.beginPath(); CX.arc(s.x,s.y,s.r,0,Math.PI*2);
+    CX.fillStyle='rgba(255,242,210,'+Math.max(0,a)+')'; CX.fill();
+  });
+}
+
+function _drawPressureGlow(lineY) {
+  var nx=NOW_X*W, cobC=0, iobC=0;
+  _forceParticles.forEach(function(p){
+    if(p.state==='traveling') return;
+    var a=p.state==='fading'?p.fadeAlpha:1;
+    if(p.type==='cob') cobC+=a*p.baseR; else iobC+=a*p.baseR;
+  });
+  if(cobC>0.5){
+    var h=Math.min(cobC*2.4,52);
+    var gr=CX.createLinearGradient(0,lineY,0,lineY+h);
+    gr.addColorStop(0,'rgba('+COL_COB[0]+','+COL_COB[1]+','+COL_COB[2]+',0.3)');
+    gr.addColorStop(1,'rgba('+COL_COB[0]+','+COL_COB[1]+','+COL_COB[2]+',0)');
+    CX.beginPath(); CX.ellipse(nx,lineY+h/2,44,h/2,0,0,Math.PI*2);
+    CX.fillStyle=gr; CX.fill();
+  }
+  if(iobC>0.5){
+    var h=Math.min(iobC*2.4,52);
+    var gr=CX.createLinearGradient(0,lineY,0,lineY-h);
+    gr.addColorStop(0,'rgba('+COL_IOB[0]+','+COL_IOB[1]+','+COL_IOB[2]+',0.3)');
+    gr.addColorStop(1,'rgba('+COL_IOB[0]+','+COL_IOB[1]+','+COL_IOB[2]+',0)');
+    CX.beginPath(); CX.ellipse(nx,lineY-h/2,44,h/2,0,0,Math.PI*2);
+    CX.fillStyle=gr; CX.fill();
+  }
+}
+
+function drawGasCloud(cobPts, col, direction, d) {
+  var isCob = direction > 0;
+
+  if(isCob) {
+    _forceFrame++;
+    if(d) {
+      _cobReservoir += (Math.min(1,(d.cob||0)/80) - _cobReservoir)*0.005;
+      _iobReservoir += (Math.min(1,(d.iob||0)/6)  - _iobReservoir)*0.005;
+      _cobReservoir  = Math.max(0,Math.min(1,_cobReservoir));
+      _iobReservoir  = Math.max(0,Math.min(1,_iobReservoir));
+    }
+    if(_forceFrame%20===0){
+      if(Math.random()<_cobReservoir*0.88) _spawnForceParticle('cob');
+      if(Math.random()<_iobReservoir*0.82) _spawnForceParticle('iob');
+    }
+    if(_forceFrame%15===0){
+      var lineY=d?bgToY(d.bg):H/2;
+      _forceParticles.forEach(function(p){
+        if(p.state==='sitting'&&p.age>70&&Math.random()<0.065)
+          _spawnMist(p.type, p.x+(Math.random()-0.5)*24,
+            lineY+(p.type==='cob'?1:-1)*(10+Math.random()*20));
+      });
+    }
+    var lineY=d?bgToY(d.bg):H/2;
+    _forceParticles.forEach(function(p){
+      p.age++;
+      var isCobP=p.type==='cob';
+      if(p.state==='traveling'){
+        p.alpha=Math.min(1,p.alpha+0.065);
+        p.y+=p.vy;
+        p.x+=(NOW_X*W-p.x)*0.015;
+        if(isCobP?p.y<=lineY:p.y>=lineY){p.state='sitting';p.y=lineY;}
+      } else if(p.state==='sitting'&&!p.paired){
+        p.alpha=Math.min(1,p.alpha+0.04);
+        p.y=lineY; p.sitTimer++;
+        if(p.sitTimer>p.sitDur){p.paired=true;p.state='fading';}
+      } else {
+        p.fadeAlpha=Math.max(0,p.fadeAlpha-0.022);
+        p.alpha=Math.max(0,p.alpha-0.022);
+      }
+    });
+    _forceParticles=_forceParticles.filter(function(p){return p.alpha>0.01;});
+    if(_forceParticles.length>200) _forceParticles.splice(0,_forceParticles.length-200);
+    if(_forceFrame%28===0) _tryPair();
+    _reassignSlots();
+    _forceMists.forEach(function(m){m.life++;m.x+=m.vx;m.y+=m.vy;});
+    _forceMists=_forceMists.filter(function(m){return m.life<m.maxLife;});
+    if(_forceMists.length>130) _forceMists.splice(0,_forceMists.length-130);
+    _forceSparks.forEach(function(s){s.life++;s.x+=s.vx;s.y+=s.vy;s.vy+=0.04;s.alpha*=0.92;});
+    _forceSparks=_forceSparks.filter(function(s){return s.alpha>0.04;});
+  }
+
+  if(isCob) _drawCOBReservoir();
+  else       _drawIOBReservoir();
+
+  if(isCob){
+    var lineY=d?bgToY(d.bg):H/2;
+    _drawMists();
+    _drawPressureGlow(lineY);
+    _drawForceParticles(lineY);
+    _drawSparks();
+  }
+}
+
+
 
 // ── FUTURE CLOUDS — projected gas beyond now ─────────────────────────
 function drawFutureClouds(cobPts, iobPts, d, pal) {
@@ -1154,21 +1492,55 @@ let _orbLongPressHint = 0;
 
 
 function drawEquilibriumZone(pal) {
-  const loY = bgToY(BG_HIGH); // top of target (high mmol = higher on screen)
-  const hiY = bgToY(BG_LOW);  // bottom of target
+  const loY = bgToY(BG_HIGH);
+  const hiY = bgToY(BG_LOW);
+  const zH  = hiY - loY;
+  const [r, g, b] = pal.bgLine;
   CX.save();
-  // Subtle band — just a hint, not a clinical range marker
-  CX.globalAlpha = 0.04;
-  CX.fillStyle   = `rgb(${pal.bgLine.join(',')})`;
-  CX.fillRect(0, loY, W, hiY - loY);
-  // Edge lines — very faint
-  CX.globalAlpha = 0.07;
-  CX.strokeStyle = `rgb(${pal.bgLine.join(',')})`;
-  CX.lineWidth   = 0.5;
-  CX.setLineDash([4, 12]);
+
+  // Zen tunnel — glowing corridor, brightest at edges
+  const grad = CX.createLinearGradient(0, loY, 0, hiY);
+  grad.addColorStop(0,    `rgba(${r},${g},${b},0.10)`);
+  grad.addColorStop(0.15, `rgba(${r},${g},${b},0.04)`);
+  grad.addColorStop(0.5,  `rgba(${r},${g},${b},0.02)`);
+  grad.addColorStop(0.85, `rgba(${r},${g},${b},0.04)`);
+  grad.addColorStop(1,    `rgba(${r},${g},${b},0.10)`);
+  CX.globalAlpha = 1;
+  CX.fillStyle   = grad;
+  CX.fillRect(0, loY, W, zH);
+
+  // Animated flowing edge lines — breeze through the tunnel
+  CX.globalAlpha = 0.18;
+  CX.strokeStyle = `rgba(${r},${g},${b},1)`;
+  CX.lineWidth   = 0.8;
+  CX.setLineDash([6, 18]);
+  CX.lineDashOffset = -(phi * 12) % 24;
   CX.beginPath(); CX.moveTo(0, loY); CX.lineTo(W, loY); CX.stroke();
+  CX.lineDashOffset = -(phi * 8 + 12) % 24;
   CX.beginPath(); CX.moveTo(0, hiY); CX.lineTo(W, hiY); CX.stroke();
-  CX.setLineDash([]);
+  CX.setLineDash([]); CX.lineDashOffset = 0;
+
+  // Danger glow above (high) and below (hypo)
+  const dangerTop = CX.createLinearGradient(0, loY - zH*0.4, 0, loY);
+  dangerTop.addColorStop(0, 'rgba(230,140,40,0)');
+  dangerTop.addColorStop(1, 'rgba(230,140,40,0.06)');
+  CX.globalAlpha = 1; CX.fillStyle = dangerTop;
+  CX.fillRect(0, loY - zH*0.4, W, zH*0.4);
+
+  const dangerBot = CX.createLinearGradient(0, hiY, 0, hiY + zH*0.4);
+  dangerBot.addColorStop(0, 'rgba(80,130,220,0.06)');
+  dangerBot.addColorStop(1, 'rgba(80,130,220,0)');
+  CX.fillStyle = dangerBot;
+  CX.fillRect(0, hiY, W, zH*0.4);
+
+  // Edge mmol labels
+  CX.globalAlpha = 0.22;
+  CX.fillStyle   = `rgba(${r},${g},${b},1)`;
+  CX.font        = "200 9px 'DM Mono',monospace";
+  CX.textAlign   = 'right';
+  CX.fillText('10.0', NOW_X * W - 12, loY - 4);
+  CX.fillText('3.9',  NOW_X * W - 12, hiY + 11);
+
   CX.globalAlpha = 1;
   CX.restore();
 }
@@ -1454,13 +1826,11 @@ function drawTimeLabels(pal) {
   CX.globalAlpha=0.28;CX.fillStyle='rgba(200,220,240,1)';
   CX.font="300 9px 'DM Mono',monospace";CX.textAlign='right';
   CX.fillText('__BUILD_ID__',W-10,H-8);
-  // Sync status on canvas
-  if(typeof _syncState !== 'undefined' && _syncState !== 'idle') {
-    var syncCol = _syncState==='ok'?'rgba(62,180,120,0.55)':_syncState==='error'?'rgba(220,80,60,0.7)':'rgba(200,200,200,0.4)';
-    var syncLbl = _syncState==='ok'?'✓ synced':_syncState==='error'?'! sync err':'↻';
-    CX.globalAlpha=1; CX.fillStyle=syncCol;
-    CX.font="300 9px 'DM Mono',monospace"; CX.textAlign='right';
-    CX.fillText(syncLbl, W-10, H-20);
+  if(typeof _syncState!=='undefined'&&_syncState!=='idle'){
+    var _sc=_syncState==='ok'?'rgba(62,180,120,0.55)':_syncState==='error'?'rgba(220,80,60,0.7)':'rgba(200,200,200,0.4)';
+    CX.globalAlpha=1;CX.fillStyle=_sc;
+    CX.font="300 9px 'DM Mono',monospace";CX.textAlign='right';
+    CX.fillText(_syncState==='ok'?'✓ synced':_syncState==='error'?'! sync err':'↻',W-10,H-20);
   }
   CX.restore();
 }
@@ -1881,8 +2251,8 @@ function frame(ts) {
   drawEquilibriumZone(pal);
 
   // ── GAS CLOUDS — living forces above and below the BG line ──────
-  const cobPts = buildForcePts('cob',  1, 90);
-  const iobPts = buildForcePts('iob', -1, 90);
+  const cobPts = buildForcePts('cob',  1, 180);
+  const iobPts = buildForcePts('iob', -1, 180);
   drawGasCloud(cobPts, COL_COB,  1, d);   // carbs: warm orange rising
   drawGasCloud(iobPts, COL_IOB, -1, d);   // insulin: cool blue falling
 
@@ -2782,11 +3152,17 @@ function logMealEntry(carbsOnly) {
     LOGGED_EVENTS.push({t: t, c: 0, u: u, note: 'bolus'});
   }
 
-  // Log carbs at eat time
+  // Log carbs at eat time — include per-food breakdown for GI-aware rendering
+  var avgGI = _mealItems.length > 0
+    ? _mealItems.reduce(function(s,i){return s+(i.food.gi||55)*i.carbs;},0) / Math.max(totalCarbs,1)
+    : 55;
+  var foodItems = _mealItems.map(function(i){
+    return {name:i.food.name, carbs:i.carbs, gi:i.food.gi||55, g:i.grams};
+  });
   if (totalCarbs > 0) {
-    SESSION.push({t: carbT, c: totalCarbs, u: 0});
-    BOLUS_EVENTS.push({t: carbT, c: totalCarbs, u: 0});
-    LOGGED_EVENTS.push({t: carbT, c: totalCarbs, u: 0, note: 'carbs'});
+    SESSION.push({t: carbT, c: totalCarbs, u: 0, gi: avgGI, items: foodItems});
+    BOLUS_EVENTS.push({t: carbT, c: totalCarbs, u: 0, gi: avgGI, items: foodItems});
+    LOGGED_EVENTS.push({t: carbT, c: totalCarbs, u: 0, gi: avgGI, items: foodItems, note: 'carbs'});
   }
 
   try{localStorage.setItem('river_logged',JSON.stringify(LOGGED_EVENTS));}catch(err){}
@@ -5049,7 +5425,7 @@ window.addEventListener('load',()=>{
     setTimeout(()=>document.getElementById('loading').style.display='none',700);
   },1000);
 
-  // Start Supabase multi-device sync
+  // Start Supabase sync
   startSyncPolling();
 
   // CGM source — auto-connect if configured, show setup if not
