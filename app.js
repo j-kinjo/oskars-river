@@ -1745,6 +1745,7 @@ function drawBolusMarkers(pal) {
       CX.beginPath(); CX.arc(x, bgY, 3.2, 0, Math.PI*2); CX.fill(); CX.shadowBlur = 0;
       // Pill label
       const lbl = b.c + 'g';
+      const who = b.logged_by ? getPersonInitial(b.logged_by) : '';
       CX.font = "300 9px 'DM Mono',monospace";
       const lw = CX.measureText(lbl).width + 12;
       CX.globalAlpha = 0.92;
@@ -1755,6 +1756,11 @@ function drawBolusMarkers(pal) {
       CX.globalAlpha = 1.0; CX.fillStyle = 'rgba(240,248,255,0.95)';
       CX.textAlign   = 'center';
       CX.fillText(lbl, x, cardY + 10.5);
+      if (who) {
+        CX.globalAlpha = 0.5; CX.font = "300 7px 'DM Mono',monospace";
+        CX.fillText(who, x + lw/2 - 5, cardY + 1);
+        CX.globalAlpha = 1;
+      }
       window._eventCards.push({x:x, y:cardY+8, w:lw+4, h:16, data:b, idx:_bIdx, type:'carb'});
     }
 
@@ -2663,6 +2669,847 @@ function saveMealHistory() {
   try { localStorage.setItem('river_meal_hist', JSON.stringify(MEAL_HISTORY.slice(0, 30))); } catch(e) {}
 }
 
+// ═══════════════════════════════════════════════════════════════════════
+//  PEOPLE IN THE FLOW
+//  Device identity — who's using this device right now
+//  Profiles stored in localStorage, device_id links to a person
+// ═══════════════════════════════════════════════════════════════════════
+
+var FLOW_PEOPLE = (function() {
+  try { return JSON.parse(localStorage.getItem('river_people') || '[]'); } catch(e) { return []; }
+})();
+
+var _thisPersonId = localStorage.getItem('river_person_id') || null;
+
+function savePeople() {
+  try { localStorage.setItem('river_people', JSON.stringify(FLOW_PEOPLE)); } catch(e) {}
+}
+
+function getThisPerson() {
+  if (!_thisPersonId) return null;
+  return FLOW_PEOPLE.find(function(p){ return p.id === _thisPersonId; }) || null;
+}
+
+function setThisPerson(id) {
+  _thisPersonId = id;
+  localStorage.setItem('river_person_id', id);
+}
+
+function getPersonInitial(id) {
+  var p = FLOW_PEOPLE.find(function(p){ return p.id === id; });
+  return p ? p.name.slice(0,1).toUpperCase() : '?';
+}
+
+function getPersonColour(id) {
+  var p = FLOW_PEOPLE.find(function(p){ return p.id === id; });
+  return p ? p.colour : 'rgba(150,150,150,0.7)';
+}
+
+// Open "people in the flow" management screen
+function openPeopleInFlow() {
+  var ex = document.getElementById('people-overlay');
+  if (ex) { ex.remove(); return; }
+  var el = document.createElement('div');
+  el.id = 'people-overlay';
+  el.style.cssText = 'position:fixed;inset:0;z-index:85;background:rgba(3,5,20,0.95);backdrop-filter:blur(16px);display:flex;flex-direction:column;align-items:center;justify-content:flex-start;padding:48px 24px 40px;overflow-y:auto;transition:opacity .2s;opacity:0;touch-action:pan-y';
+  el.addEventListener('touchstart',function(e){e.stopPropagation();},{passive:true});
+  renderPeopleScreen(el);
+  document.body.appendChild(el);
+  requestAnimationFrame(function(){ el.style.opacity='1'; });
+}
+
+function closePeopleInFlow() {
+  var el = document.getElementById('people-overlay');
+  if (el) { el.style.opacity='0'; setTimeout(function(){ el.remove(); }, 200); }
+}
+
+function renderPeopleScreen(el) {
+  if (!el) el = document.getElementById('people-overlay');
+  if (!el) return;
+
+  var colours = ['rgba(62,180,120,0.9)','rgba(60,130,220,0.9)','rgba(255,140,50,0.9)',
+                 'rgba(200,80,160,0.9)','rgba(180,160,60,0.9)','rgba(120,160,220,0.9)'];
+
+  var html = '<div style="max-width:380px;width:100%">';
+  html += '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px">';
+  html += '<div style="font-family:\'Fraunces\',serif;font-style:italic;font-weight:200;font-size:26px;color:rgba(180,220,200,0.9)">people in the flow</div>';
+  html += '<button onclick="closePeopleInFlow()" style="background:none;border:none;cursor:pointer;font-size:24px;color:rgba(255,255,255,0.25);padding:4px">×</button>';
+  html += '</div>';
+  html += '<div style="font-family:\'DM Mono\',monospace;font-size:9px;color:rgba(100,160,140,0.35);letter-spacing:1px;text-transform:uppercase;margin-bottom:28px">who\'s watching the river</div>';
+
+  // This device
+  var me = getThisPerson();
+  html += '<div style="font-family:\'DM Mono\',monospace;font-size:8px;letter-spacing:1px;text-transform:uppercase;color:rgba(255,255,255,0.2);margin-bottom:10px">this device</div>';
+  if (me) {
+    html += '<div style="display:flex;align-items:center;gap:12px;padding:14px 16px;border-radius:12px;background:rgba(255,255,255,0.05);border:1px solid rgba(255,255,255,0.1);margin-bottom:20px">';
+    html += '<div style="width:40px;height:40px;border-radius:50%;background:'+me.colour+';display:flex;align-items:center;justify-content:center;font-family:\'Fraunces\',serif;font-size:18px;color:#fff;font-weight:200">'+me.name.slice(0,1).toUpperCase()+'</div>';
+    html += '<div style="flex:1"><div style="font-family:\'Fraunces\',serif;font-weight:200;font-size:18px;color:rgba(255,255,255,0.9)">'+me.name+'</div>';
+    html += '<div style="font-family:\'DM Mono\',monospace;font-size:9px;color:rgba(255,255,255,0.3)">'+me.role+'</div></div>';
+    html += '<button onclick="clearThisDevice()" style="padding:6px 12px;border-radius:8px;border:1px solid rgba(255,255,255,0.1);background:transparent;font-family:\'DM Mono\',monospace;font-size:9px;color:rgba(255,255,255,0.25);cursor:pointer">change</button>';
+    html += '</div>';
+  } else {
+    html += '<div style="padding:14px 16px;border-radius:12px;background:rgba(255,255,255,0.03);border:1px dashed rgba(255,255,255,0.1);margin-bottom:20px;font-family:\'DM Mono\',monospace;font-size:11px;color:rgba(255,255,255,0.3)">not set — pick below</div>';
+  }
+
+  // All people
+  html += '<div style="font-family:\'DM Mono\',monospace;font-size:8px;letter-spacing:1px;text-transform:uppercase;color:rgba(255,255,255,0.2);margin-bottom:10px">the team</div>';
+  html += '<div style="display:flex;flex-direction:column;gap:8px;margin-bottom:20px">';
+
+  FLOW_PEOPLE.forEach(function(person) {
+    var isMe = person.id === _thisPersonId;
+    html += '<div style="display:flex;align-items:center;gap:12px;padding:12px 14px;border-radius:10px;background:'+(isMe?'rgba(62,180,120,0.1)':'rgba(255,255,255,0.03)')+';border:1px solid '+(isMe?'rgba(62,180,120,0.3)':'rgba(255,255,255,0.07)')+';">';
+    html += '<div style="width:34px;height:34px;border-radius:50%;background:'+person.colour+';display:flex;align-items:center;justify-content:center;font-family:\'Fraunces\',serif;font-size:16px;color:#fff;font-weight:200;flex-shrink:0">'+person.name.slice(0,1).toUpperCase()+'</div>';
+    html += '<div style="flex:1"><div style="font-family:\'Fraunces\',serif;font-weight:200;font-size:16px;color:rgba(255,255,255,0.85)">'+person.name+'</div>';
+    html += '<div style="font-family:\'DM Mono\',monospace;font-size:9px;color:rgba(255,255,255,0.3)">'+person.role+'</div></div>';
+    if (!isMe) {
+      html += '<button onclick="setThisDeviceTo(\''+person.id+'\')" style="padding:6px 12px;border-radius:8px;border:1px solid rgba(255,255,255,0.12);background:transparent;font-family:\'DM Mono\',monospace;font-size:9px;color:rgba(255,255,255,0.4);cursor:pointer">this is me</button>';
+    } else {
+      html += '<div style="font-family:\'DM Mono\',monospace;font-size:9px;color:rgba(62,180,120,0.7)">← you</div>';
+    }
+    html += '<button onclick="removePerson(\''+person.id+'\')" style="padding:4px 8px;border-radius:6px;border:none;background:transparent;font-family:\'DM Mono\',monospace;font-size:11px;color:rgba(255,255,255,0.15);cursor:pointer">×</button>';
+    html += '</div>';
+  });
+  html += '</div>';
+
+  // Add person form
+  html += '<div style="padding:16px;border-radius:12px;background:rgba(255,255,255,0.03);border:1px solid rgba(255,255,255,0.08)">';
+  html += '<div style="font-family:\'DM Mono\',monospace;font-size:8px;letter-spacing:1px;text-transform:uppercase;color:rgba(255,255,255,0.2);margin-bottom:12px">add someone</div>';
+  html += '<div style="display:flex;gap:8px;margin-bottom:10px">';
+  html += '<input id="new-person-name" type="text" placeholder="name" autocorrect="off" style="flex:1;padding:10px 12px;border-radius:8px;border:1px solid rgba(255,255,255,0.12);background:rgba(255,255,255,0.06);font-family:\'DM Mono\',monospace;font-size:13px;color:rgba(255,255,255,0.8);outline:none">';
+  html += '<select id="new-person-role" style="padding:10px;border-radius:8px;border:1px solid rgba(255,255,255,0.12);background:rgba(255,255,255,0.06);font-family:\'DM Mono\',monospace;font-size:11px;color:rgba(255,255,255,0.6);outline:none">';
+  ['parent','carer','school TA','family','other'].forEach(function(r){
+    html += '<option value="'+r+'">'+r+'</option>';
+  });
+  html += '</select></div>';
+  // Colour picker
+  html += '<div style="display:flex;gap:8px;margin-bottom:12px">';
+  colours.forEach(function(c,i){
+    html += '<button onclick="selectNewPersonColour(\''+c+'\')" id="colour-btn-'+i+'" style="width:28px;height:28px;border-radius:50%;background:'+c+';border:2px solid transparent;cursor:pointer;transition:border .1s" data-colour="'+c+'"></button>';
+  });
+  html += '</div>';
+  html += '<button onclick="addPerson()" style="width:100%;padding:11px;border-radius:9px;border:1px solid rgba(62,180,120,0.3);background:rgba(62,180,120,0.08);font-family:\'Fraunces\',serif;font-style:italic;font-weight:200;font-size:16px;color:rgba(62,180,120,0.9);cursor:pointer">add to the flow</button>';
+  html += '</div></div>';
+
+  el.innerHTML = html;
+  // Default colour selection
+  window._newPersonColour = colours[0];
+  var btn = el.querySelector('[data-colour="'+colours[0]+'"]');
+  if (btn) btn.style.border = '2px solid rgba(255,255,255,0.7)';
+}
+
+function selectNewPersonColour(col) {
+  window._newPersonColour = col;
+  document.querySelectorAll('[data-colour]').forEach(function(b){
+    b.style.border = b.getAttribute('data-colour')===col ? '2px solid rgba(255,255,255,0.7)' : '2px solid transparent';
+  });
+}
+
+function addPerson() {
+  var name = (document.getElementById('new-person-name').value||'').trim();
+  var role = document.getElementById('new-person-role').value;
+  if (!name) return;
+  var id = 'person_' + Date.now().toString(36);
+  var colour = window._newPersonColour || 'rgba(62,180,120,0.9)';
+  FLOW_PEOPLE.push({id:id, name:name, role:role, colour:colour});
+  savePeople();
+  // Auto-set as this device if no one set yet
+  if (!_thisPersonId) setThisDevice(id);
+  renderPeopleScreen();
+}
+
+function removePerson(id) {
+  var idx = FLOW_PEOPLE.findIndex(function(p){ return p.id===id; });
+  if (idx>=0) FLOW_PEOPLE.splice(idx,1);
+  savePeople();
+  if (_thisPersonId===id) { _thisPersonId=null; localStorage.removeItem('river_person_id'); }
+  renderPeopleScreen();
+}
+
+function setThisDeviceTo(id) {
+  setThisPerson(id);
+  renderPeopleScreen();
+}
+
+function clearThisDevice() {
+  _thisPersonId = null;
+  localStorage.removeItem('river_person_id');
+  renderPeopleScreen();
+}
+
+// First-run prompt if no person set and no people defined
+function promptPersonIfNeeded() {
+  if (_thisPersonId || FLOW_PEOPLE.length === 0) return;
+  // Silently skip — they'll set it via settings
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+//  RECIPE SYSTEM
+//  Templates with carb-relevant ingredients
+//  Each cook creates an instance with actual weights → ratio
+//  Portion logging uses ratio × weight
+// ═══════════════════════════════════════════════════════════════════════
+
+var RECIPES = (function() {
+  try { return JSON.parse(localStorage.getItem('river_recipes') || '[]'); } catch(e) { return []; }
+})();
+
+function saveRecipes() {
+  try { localStorage.setItem('river_recipes', JSON.stringify(RECIPES)); } catch(e) {}
+}
+
+// A recipe instance = one cook of a template with actual weights recorded
+// recipe.instances = [{date, weights:{ingredientName: grams}, batchWeight, ratio, notes}]
+
+function calcRecipeRatio(recipe, weights, batchWeight) {
+  // Total carbs from weighed ingredients
+  var totalCarbs = 0;
+  recipe.ingredients.forEach(function(ing) {
+    var g = parseFloat(weights[ing.name]) || 0;
+    totalCarbs += (ing.c100 * g / 100);
+  });
+  var ratio = batchWeight > 0 ? totalCarbs / batchWeight : 0;
+  return { totalCarbs: totalCarbs, ratio: ratio };
+}
+
+// Get most recent ratio for a recipe
+function getLatestRatio(recipe) {
+  if (!recipe.instances || recipe.instances.length === 0) return null;
+  return recipe.instances[recipe.instances.length - 1].ratio;
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+//  PLATE BUILDER — KITCHEN MODE
+//  Running tally of Oskar's plate while cooking
+//  Supports: regular foods, recipe portions, manual entries
+//  Persists across sheet open/close during a cooking session
+// ═══════════════════════════════════════════════════════════════════════
+
+var _plateItems   = [];   // [{type:'food'|'recipe'|'manual', name, carbs, grams, note}]
+var _plateActive  = false;
+var _plateBolused = false;
+var _plateBolusU  = 0;
+var _plateBolusTm = 0;
+var _cookingTimer = null;
+var _servingMins  = null; // estimated mins until ready
+
+function startPlateBuilder() {
+  _plateActive  = true;
+  _plateBolused = false;
+  _plateBolusU  = 0;
+  _plateBolusTm = 0;
+  _servingMins  = null;
+  renderKitchen();
+  document.getElementById('sheet').classList.add('open');
+  document.getElementById('overlay').classList.add('open');
+}
+
+function openKitchen() {
+  _sheetMode = 'kitchen';
+  startPlateBuilder();
+}
+
+function totalPlateCarbs() {
+  return _plateItems.reduce(function(s,i){ return s + (i.carbs||0); }, 0);
+}
+
+function addPlateFood(name) {
+  var all  = FOOD_DB.concat(FOOD_LIBRARY);
+  var food = all.find(function(f){ return f.name===name; });
+  if (!food) return;
+  var defaultG = food.g_each || food.g_serv || 100;
+  var carbs    = Math.round((food.c100 * defaultG / 100) * 10) / 10;
+  _plateItems.push({
+    type:'food', name:food.name, grams:defaultG, carbs:carbs,
+    gi:food.gi||55, c100:food.c100, food:food,
+  });
+  renderKitchen();
+}
+
+function addPlateRecipe(recipeId) {
+  var recipe = RECIPES.find(function(r){ return r.id===recipeId; });
+  if (!recipe) return;
+  var ratio = getLatestRatio(recipe);
+  _plateItems.push({
+    type:'recipe', name:recipe.name, grams:100,
+    ratio:ratio, carbs:ratio ? Math.round(ratio*100*10)/10 : 0,
+    recipeId:recipeId, needsWeighing:true,
+  });
+  renderKitchen();
+}
+
+function updatePlateItemGrams(idx, grams) {
+  var p = _plateItems[idx];
+  if (!p) return;
+  p.grams = parseFloat(grams) || 0;
+  if (p.type==='food' || p.type==='manual') {
+    p.carbs = p.c100 ? Math.round((p.c100*p.grams/100)*10)/10 : p.carbs;
+  } else if (p.type==='recipe' && p.ratio) {
+    p.carbs = Math.round(p.ratio * p.grams * 10) / 10;
+  }
+  renderKitchen();
+}
+
+function removePlateItem(idx) {
+  _plateItems.splice(idx, 1);
+  renderKitchen();
+}
+
+function renderKitchen() {
+  var sheet = document.getElementById('sheet');
+  if (!sheet) return;
+  var d      = dataAt(viewTime);
+  var bg     = d.bg;
+  var total  = totalPlateCarbs();
+  var avgGI  = _plateItems.length>0
+    ? _plateItems.reduce(function(s,i){return s+(i.gi||55)*(i.carbs||0);},0)/Math.max(total,1)
+    : 55;
+  var eatWait = _eatWaitOverride!==null?_eatWaitOverride:suggestEatWait(bg,avgGI);
+  var bolus   = total>0 ? calcBolus(total,bg,getEntryTime()) : null;
+
+  // Whisper — pattern memory for this meal context
+  var whisperHTML = buildKitchenWhisper(avgGI, total);
+
+  // Items HTML
+  var itemsHTML = _plateItems.map(function(item,idx){
+    var isCook = item.type==='recipe';
+    var col    = isCook?'rgba(180,160,60,0.8)':'rgba(62,180,120,0.8)';
+    return '<div style="display:flex;align-items:center;gap:8px;padding:8px 0;border-bottom:1px solid rgba(255,255,255,0.05)">' +
+      '<div style="flex:1">' +
+        '<div style="font-family:\'DM Mono\',monospace;font-size:11px;color:rgba(255,255,255,0.75)">'+item.name+'</div>' +
+        (isCook&&item.needsWeighing?'<div style="font-family:\'DM Mono\',monospace;font-size:9px;color:rgba(200,160,60,0.6)">⚖ weigh the portion</div>':'') +
+      '</div>' +
+      '<input type="number" value="'+item.grams+'" min="0" max="2000" step="1" ' +
+        'onchange="updatePlateItemGrams('+idx+',this.value)" ' +
+        'style="width:58px;padding:6px;border-radius:7px;border:1px solid rgba(255,255,255,0.12);background:rgba(255,255,255,0.07);font-family:\'DM Mono\',monospace;font-size:12px;color:rgba(255,255,255,0.8);text-align:right;outline:none">'+
+      '<span style="font-family:\'DM Mono\',monospace;font-size:9px;color:rgba(255,255,255,0.3);width:12px">g</span>' +
+      '<div style="min-width:36px;text-align:right;font-family:\'DM Mono\',monospace;font-size:12px;color:'+col+'">'+item.carbs.toFixed(1)+'g</div>' +
+      '<button onclick="removePlateItem('+idx+')" style="background:none;border:none;cursor:pointer;color:rgba(255,255,255,0.2);font-size:16px;padding:0 4px">×</button>' +
+    '</div>';
+  }).join('');
+
+  // Food search for plate
+  var searchHTML =
+    '<div style="position:relative;margin-bottom:10px">' +
+      '<input id="plate-search" type="text" placeholder="add food to plate..." autocomplete="off" autocorrect="off" ' +
+        'oninput="searchPlateFood(this.value)" ' +
+        'style="width:100%;padding:10px 12px;border-radius:10px;border:1px solid rgba(255,255,255,0.12);background:rgba(255,255,255,0.06);font-family:\'DM Mono\',monospace;font-size:13px;color:rgba(255,255,255,0.8);outline:none;box-sizing:border-box">' +
+      '<div id="plate-results" style="display:none;position:absolute;top:100%;left:0;right:0;z-index:50;background:rgba(15,20,35,0.99);border:1px solid rgba(255,255,255,0.1);border-radius:10px;max-height:180px;overflow-y:auto;margin-top:4px"></div>' +
+    '</div>';
+
+  // Recipe chips
+  var recipeChips = '';
+  if (RECIPES.length > 0) {
+    recipeChips = '<div style="margin-bottom:12px"><div style="font-family:\'DM Mono\',monospace;font-size:8px;letter-spacing:1px;text-transform:uppercase;color:rgba(255,255,255,0.2);margin-bottom:6px">saved recipes</div>' +
+      '<div style="display:flex;flex-wrap:wrap;gap:6px">' +
+      RECIPES.map(function(r){
+        var ratio = getLatestRatio(r);
+        return '<button onclick="addPlateRecipe(\''+r.id+'\')" style="padding:6px 12px;border-radius:10px;border:1px solid rgba(180,160,60,0.3);background:rgba(180,160,60,0.08);font-family:\'DM Mono\',monospace;font-size:10px;color:rgba(200,180,80,0.8);cursor:pointer">' +
+          r.name + (ratio?' · '+ratio.toFixed(2)+'g/g':'') + '</button>';
+      }).join('') +
+      '</div></div>';
+  }
+
+  // Bolus section
+  var bolusHTML = '';
+  if (total > 0 && bolus) {
+    var eatTime = new Date(getEntryTime() + eatWait*60000);
+    var eatStr  = eatTime.toLocaleTimeString('en-GB',{hour:'2-digit',minute:'2-digit'});
+    if (_plateBolused) {
+      bolusHTML =
+        '<div style="padding:14px;border-radius:12px;background:rgba(60,130,220,0.1);border:1px solid rgba(60,130,220,0.25);margin-bottom:12px">' +
+          '<div style="font-family:\'DM Mono\',monospace;font-size:10px;color:rgba(60,130,220,0.7);margin-bottom:4px">✓ bolus given</div>' +
+          '<div style="font-family:\'Fraunces\',serif;font-weight:200;font-size:28px;color:rgba(100,160,255,0.9)">' + _plateBolusU.toFixed(1) + 'U</div>' +
+          '<div style="font-family:\'DM Mono\',monospace;font-size:9px;color:rgba(100,140,200,0.5);margin-top:4px">eat by ' + eatStr + ' · timer running</div>' +
+          '<button onclick="logPlate()" style="margin-top:10px;width:100%;padding:11px;border-radius:9px;border:1px solid rgba(62,180,120,0.3);background:rgba(62,180,120,0.08);font-family:\'Fraunces\',serif;font-style:italic;font-weight:200;font-size:15px;color:rgba(62,180,120,0.9);cursor:pointer">✓ confirm plate + log</button>' +
+        '</div>';
+    } else {
+      bolusHTML =
+        '<div style="padding:14px;border-radius:12px;background:rgba(40,50,80,0.4);border:1px solid rgba(255,255,255,0.08);margin-bottom:12px">' +
+          // Carb total prominent
+          '<div style="text-align:center;margin-bottom:12px">' +
+            '<div style="font-family:\'Fraunces\',serif;font-weight:200;font-size:48px;color:rgba(255,160,60,0.95);letter-spacing:-2px;line-height:1">' + total.toFixed(0) + '</div>' +
+            '<div style="font-family:\'DM Mono\',monospace;font-size:8px;letter-spacing:1.5px;text-transform:uppercase;color:rgba(255,140,50,0.4)">grams carbs · GI ' + avgGI.toFixed(0) + '</div>' +
+          '</div>' +
+          // Wait time
+          '<div style="display:flex;align-items:center;gap:8px;margin-bottom:12px;padding:8px 10px;border-radius:8px;background:rgba(255,255,255,0.04)">' +
+            '<div style="flex:1;font-family:\'Fraunces\',serif;font-style:italic;font-weight:200;font-size:13px;color:rgba(255,255,255,0.5)">bolus now → eat ~' + eatStr + ' (+' + eatWait + 'min)</div>' +
+            '<button onclick="setWait(-5)" style="width:28px;height:28px;border-radius:7px;border:1px solid rgba(255,255,255,0.12);background:rgba(255,255,255,0.06);color:rgba(255,255,255,0.6);font-size:16px;cursor:pointer">−</button>' +
+            '<input id="wait-mins" type="number" value="'+eatWait+'" min="0" max="60" step="5" onchange="setWaitDirect(this.value)" style="width:40px;text-align:center;padding:4px;border-radius:6px;border:1px solid rgba(255,255,255,0.1);background:rgba(255,255,255,0.06);font-family:\'DM Mono\',monospace;font-size:12px;color:rgba(255,255,255,0.7);outline:none">' +
+            '<button onclick="setWait(5)" style="width:28px;height:28px;border-radius:7px;border:1px solid rgba(255,255,255,0.12);background:rgba(255,255,255,0.06);color:rgba(255,255,255,0.6);font-size:16px;cursor:pointer">+</button>' +
+          '</div>' +
+          // Bolus input
+          '<div style="display:flex;align-items:center;gap:10px;margin-bottom:10px">' +
+            '<input id="plate-bolus" type="number" inputmode="decimal" placeholder="'+bolus.total.toFixed(1)+'" step="0.5" min="0" max="20" ' +
+              'style="flex:1;padding:12px;border-radius:9px;border:1px solid rgba(60,130,220,0.25);background:rgba(60,130,220,0.07);font-family:\'Fraunces\',serif;font-size:24px;color:rgba(100,160,255,0.9);text-align:center;outline:none">' +
+            '<span style="font-family:\'DM Mono\',monospace;font-size:13px;color:rgba(255,255,255,0.3)">U</span>' +
+          '</div>' +
+          '<div style="font-family:\'DM Mono\',monospace;font-size:9px;color:rgba(255,255,255,0.2);text-align:center;margin-bottom:10px">' +
+            'context: '+bolus.carbDose.toFixed(1)+'U carbs + '+bolus.corrDose.toFixed(1)+'U corr · ISF 1:'+bolus.isf+'</div>' +
+          '<button onclick="bolusNow()" style="width:100%;padding:13px;border-radius:10px;border:1px solid rgba(60,130,220,0.3);background:rgba(60,130,220,0.1);font-family:\'Fraunces\',serif;font-style:italic;font-weight:200;font-size:17px;color:rgba(100,160,255,0.9);cursor:pointer">bolus now · keep cooking</button>' +
+        '</div>';
+    }
+  }
+
+  sheet.innerHTML =
+    '<div class="handle"></div>' +
+    '<div style="display:flex;align-items:center;justify-content:space-between;padding:0 8px 0 0;margin-bottom:4px">' +
+      '<div style="font-family:\'Fraunces\',serif;font-style:italic;font-weight:200;font-size:22px;color:rgba(180,220,200,0.9)">building Oskar\'s plate</div>' +
+      '<button onclick="closeKitchen()" style="background:none;border:none;cursor:pointer;font-size:26px;color:rgba(255,255,255,0.25);padding:4px;line-height:1">×</button>' +
+    '</div>' +
+    // BG live strip
+    '<div style="display:flex;align-items:center;gap:10px;padding:8px 12px;border-radius:10px;background:rgba(255,255,255,0.04);margin-bottom:14px">' +
+      '<div style="font-family:\'Fraunces\',serif;font-weight:200;font-size:22px;color:'+(bg<3.9?'rgba(100,140,255,0.9)':bg>10?'rgba(255,120,40,0.9)':'rgba(62,180,120,0.9)')+'">'+bg.toFixed(1)+'</div>' +
+      '<div style="font-family:\'DM Mono\',monospace;font-size:9px;color:rgba(255,255,255,0.3)">mmol · live</div>' +
+      '<div style="flex:1"></div>' +
+      '<button onclick="openRecipeManager()" style="padding:5px 10px;border-radius:7px;border:1px solid rgba(180,160,60,0.25);background:rgba(180,160,60,0.06);font-family:\'DM Mono\',monospace;font-size:9px;color:rgba(200,180,70,0.7);cursor:pointer">recipes</button>' +
+    '</div>' +
+    whisperHTML +
+    searchHTML +
+    recipeChips +
+    (itemsHTML ? '<div style="margin-bottom:12px">'+itemsHTML+'</div>' : '') +
+    bolusHTML +
+    '<div style="height:max(20px,env(safe-area-inset-bottom,20px))"></div>';
+}
+
+function searchPlateFood(q) {
+  var results = document.getElementById('plate-results');
+  if (!q||q.length<1){ results.style.display='none'; return; }
+  var all = FOOD_DB.concat(FOOD_LIBRARY);
+  var matches = all.filter(function(f){ return f.name.toLowerCase().indexOf(q.toLowerCase())>=0; }).slice(0,8);
+  if (matches.length===0){ results.style.display='none'; return; }
+  results.style.display='block';
+  results.innerHTML = matches.map(function(f){
+    return '<div onclick="addPlateFood(\''+f.name.replace(/'/g,"\\'")+'\')" style="padding:10px 14px;cursor:pointer;border-bottom:1px solid rgba(255,255,255,0.05);display:flex;justify-content:space-between;align-items:center">' +
+      '<div style="font-family:\'DM Mono\',monospace;font-size:12px;color:rgba(255,255,255,0.75)">'+f.name+'</div>' +
+      '<div style="font-family:\'DM Mono\',monospace;font-size:10px;color:rgba(62,180,120,0.6)">'+f.c100+'g/100g</div>' +
+    '</div>';
+  }).join('');
+}
+
+function bolusNow() {
+  var inp = document.getElementById('plate-bolus');
+  var u   = parseFloat(inp&&inp.value) || 0;
+  if (u<=0) return;
+  var t = getEntryTime() || Date.now();
+  SESSION.push({t:t, c:0, u:u});
+  BOLUS_EVENTS.push({t:t, c:0, u:u});
+  LOGGED_EVENTS.push({t:t, c:0, u:u, note:'bolus', logged_by:_thisPersonId||'unknown'});
+  try{localStorage.setItem('river_session',JSON.stringify(SESSION));}catch(e){}
+  try{localStorage.setItem('river_logged',JSON.stringify(LOGGED_EVENTS));}catch(e){}
+  topUpIOB(u);
+  syncAfterLog();
+  _plateBolused = true;
+  _plateBolusU  = u;
+  _plateBolusTm = t;
+  // Eat reminder
+  var eatWait = _eatWaitOverride!==null?_eatWaitOverride:suggestEatWait(dataAt(viewTime).bg);
+  if (_cookingTimer) clearTimeout(_cookingTimer);
+  _cookingTimer = setTimeout(function(){
+    showRiverPebble('time to plate up — bolus was '+eatWait+'min ago','eat');
+    if(navigator.vibrate) navigator.vibrate([200,100,200]);
+  }, Math.max(0, eatWait*60000));
+  renderKitchen();
+  showToast(u.toFixed(1)+'U bolused\nkeep cooking ↻');
+}
+
+function logPlate() {
+  var total    = totalPlateCarbs();
+  var avgGI    = _plateItems.length>0
+    ? _plateItems.reduce(function(s,i){return s+(i.gi||55)*(i.carbs||0);},0)/Math.max(total,1) : 55;
+  var t = _plateBolusTm || Date.now();
+  var eatWait  = _eatWaitOverride!==null?_eatWaitOverride:suggestEatWait(dataAt(viewTime).bg,avgGI);
+  var carbT    = t + eatWait*60000;
+  var foodItems= _plateItems.map(function(i){return {name:i.name,carbs:i.carbs,gi:i.gi||55,g:i.grams};});
+
+  if (total>0) {
+    SESSION.push({t:carbT, c:total, u:0, gi:avgGI, items:foodItems});
+    BOLUS_EVENTS.push({t:carbT, c:total, u:0, gi:avgGI, items:foodItems});
+    LOGGED_EVENTS.push({t:carbT, c:total, u:0, gi:avgGI, items:foodItems, note:'plate',
+      logged_by:_thisPersonId||'unknown'});
+    topUpCOB(total);
+  }
+
+  // Save to meal history
+  MEAL_HISTORY.unshift({
+    name: (function(){
+      var hr=new Date().getHours();
+      var meal=hr<10?'Breakfast':hr<14?'Lunch':hr<17?'Snack':'Dinner';
+      return meal+' · '+new Date().toLocaleDateString('en-GB',{weekday:'short',day:'numeric',month:'short'});
+    })(),
+    totalCarbs: Math.round(total), items:foodItems, t:carbT, u:_plateBolusU,
+    logged_by:_thisPersonId||'unknown',
+  });
+  saveMealHistory();
+
+  try{localStorage.setItem('river_session',JSON.stringify(SESSION));}catch(e){}
+  try{localStorage.setItem('river_logged',JSON.stringify(LOGGED_EVENTS));}catch(e){}
+  syncAfterLog();
+  showToast(total.toFixed(0)+'g carbs\nplate logged ✓');
+  closeKitchen();
+}
+
+function closeKitchen() {
+  _plateActive     = false;
+  _eatWaitOverride = null;
+  _bolusVal        = null;
+  if (_cookingTimer) { clearTimeout(_cookingTimer); _cookingTimer=null; }
+  var s=document.getElementById('sheet');
+  var o=document.getElementById('overlay');
+  if(s) s.classList.remove('open');
+  if(o) o.classList.remove('open');
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+//  RECIPE MANAGER
+//  Create/edit recipe templates, log cook instances, calculate ratios
+// ═══════════════════════════════════════════════════════════════════════
+
+function openRecipeManager() {
+  var ex=document.getElementById('recipe-overlay');
+  if(ex){ex.remove();return;}
+  var el=document.createElement('div');
+  el.id='recipe-overlay';
+  el.style.cssText='position:fixed;inset:0;z-index:90;background:rgba(3,5,20,0.96);overflow-y:auto;transition:opacity .2s;opacity:0;touch-action:pan-y;-webkit-overflow-scrolling:touch';
+  el.addEventListener('touchstart',function(e){e.stopPropagation();},{passive:true});
+  renderRecipeManager(el);
+  document.body.appendChild(el);
+  requestAnimationFrame(function(){el.style.opacity='1';});
+}
+
+function closeRecipeManager() {
+  var el=document.getElementById('recipe-overlay');
+  if(el){el.style.opacity='0';setTimeout(function(){el.remove();},200);}
+}
+
+function renderRecipeManager(el) {
+  if(!el) el=document.getElementById('recipe-overlay');
+  if(!el) return;
+  var html='<div style="max-width:480px;margin:0 auto;padding:48px 20px 60px">';
+  html+='<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:24px">';
+  html+='<div style="font-family:\'Fraunces\',serif;font-style:italic;font-weight:200;font-size:24px;color:rgba(200,180,80,0.9)">recipes</div>';
+  html+='<div style="display:flex;gap:8px">';
+  html+='<button onclick="startNewRecipe()" style="padding:8px 14px;border-radius:9px;border:1px solid rgba(200,180,60,0.3);background:rgba(200,180,60,0.07);font-family:\'DM Mono\',monospace;font-size:10px;color:rgba(200,180,70,0.8);cursor:pointer">+ new recipe</button>';
+  html+='<button onclick="closeRecipeManager()" style="padding:8px 12px;border-radius:9px;border:1px solid rgba(255,255,255,0.1);background:transparent;font-family:\'DM Mono\',monospace;font-size:10px;color:rgba(255,255,255,0.3);cursor:pointer">close</button>';
+  html+='</div></div>';
+
+  if(RECIPES.length===0){
+    html+='<div style="font-family:\'DM Mono\',monospace;font-size:11px;color:rgba(255,255,255,0.25);text-align:center;padding:40px 0">no recipes yet<br><span style="opacity:0.5">add Kaarina\'s specials here</span></div>';
+  } else {
+    RECIPES.forEach(function(r){
+      var ratio=getLatestRatio(r);
+      var instances=r.instances||[];
+      html+='<div style="padding:16px;border-radius:12px;background:rgba(255,255,255,0.03);border:1px solid rgba(200,180,60,0.15);margin-bottom:12px">';
+      html+='<div style="display:flex;align-items:flex-start;justify-content:space-between;margin-bottom:8px">';
+      html+='<div><div style="font-family:\'Fraunces\',serif;font-weight:200;font-size:18px;color:rgba(220,200,80,0.9)">'+r.name+'</div>';
+      html+='<div style="font-family:\'DM Mono\',monospace;font-size:9px;color:rgba(255,255,255,0.25)">'+r.ingredients.length+' ingredients · '+instances.length+' cook'+(instances.length!==1?'s':'')+'</div></div>';
+      html+='<div style="display:flex;gap:6px">';
+      html+='<button onclick="cookRecipe(\''+r.id+'\')" style="padding:6px 12px;border-radius:8px;border:1px solid rgba(200,180,60,0.3);background:rgba(200,180,60,0.08);font-family:\'DM Mono\',monospace;font-size:9px;color:rgba(200,180,70,0.8);cursor:pointer">cook now</button>';
+      html+='<button onclick="editRecipe(\''+r.id+'\')" style="padding:6px 10px;border-radius:8px;border:1px solid rgba(255,255,255,0.1);background:transparent;font-family:\'DM Mono\',monospace;font-size:9px;color:rgba(255,255,255,0.3);cursor:pointer">edit</button>';
+      html+='</div></div>';
+      if(ratio){
+        html+='<div style="font-family:\'DM Mono\',monospace;font-size:10px;color:rgba(200,180,70,0.6)">'+ratio.toFixed(3)+'g carbs/g · last cook '+(instances.length>0?new Date(instances[instances.length-1].date).toLocaleDateString('en-GB',{day:'numeric',month:'short'}):'')+'</div>';
+      }
+      // Show last 3 instances
+      if(instances.length>0){
+        html+='<div style="margin-top:8px;display:flex;flex-wrap:wrap;gap:4px">';
+        instances.slice(-3).reverse().forEach(function(inst){
+          html+='<div style="font-family:\'DM Mono\',monospace;font-size:8px;color:rgba(255,255,255,0.2);padding:3px 7px;border-radius:5px;background:rgba(255,255,255,0.04)">'+
+            new Date(inst.date).toLocaleDateString('en-GB',{day:'numeric',month:'short'})+' · '+inst.ratio.toFixed(3)+'g/g</div>';
+        });
+        html+='</div>';
+      }
+      html+='</div>';
+    });
+  }
+  html+='</div>';
+  el.innerHTML=html;
+}
+
+function startNewRecipe() {
+  showRecipeForm(null);
+}
+
+function editRecipe(id) {
+  var r=RECIPES.find(function(r){return r.id===id;});
+  showRecipeForm(r);
+}
+
+function showRecipeForm(recipe) {
+  var el=document.getElementById('recipe-overlay');
+  if(!el) return;
+  var isNew=!recipe;
+  var ings=recipe?recipe.ingredients:[];
+
+  var html='<div style="max-width:480px;margin:0 auto;padding:48px 20px 60px">';
+  html+='<div style="display:flex;align-items:center;gap:12px;margin-bottom:24px">';
+  html+='<button onclick="renderRecipeManager()" style="background:none;border:none;cursor:pointer;font-family:\'DM Mono\',monospace;font-size:10px;color:rgba(255,255,255,0.3);padding:4px">← back</button>';
+  html+='<div style="font-family:\'Fraunces\',serif;font-style:italic;font-weight:200;font-size:22px;color:rgba(200,180,80,0.9)">'+(isNew?'new recipe':'edit recipe')+'</div>';
+  html+='</div>';
+
+  html+='<div style="margin-bottom:14px"><div style="font-family:\'DM Mono\',monospace;font-size:8px;letter-spacing:1px;text-transform:uppercase;color:rgba(255,255,255,0.3);margin-bottom:5px">recipe name</div>';
+  html+='<input id="recipe-name" type="text" value="'+(recipe?recipe.name:'')+'" placeholder="e.g. Kaarina\'s Macaroni Laatikko" autocorrect="off" style="width:100%;padding:11px 14px;border-radius:9px;border:1px solid rgba(200,180,60,0.2);background:rgba(200,180,60,0.05);font-family:\'DM Mono\',monospace;font-size:13px;color:rgba(255,255,255,0.8);outline:none;box-sizing:border-box"></div>';
+
+  html+='<div style="margin-bottom:14px"><div style="font-family:\'DM Mono\',monospace;font-size:8px;letter-spacing:1px;text-transform:uppercase;color:rgba(255,255,255,0.3);margin-bottom:6px">carb ingredients <span style="opacity:0.5">(skip zero-carb items like meat, eggs)</span></div>';
+  html+='<div id="recipe-ings">';
+  ings.forEach(function(ing,i){
+    html+=recipeIngRow(i,ing.name,ing.c100,ing.gi);
+  });
+  html+='</div>';
+  html+='<div style="position:relative;margin-top:8px">';
+  html+='<input id="recipe-ing-search" type="text" placeholder="search to add ingredient..." autocomplete="off" autocorrect="off" oninput="searchRecipeIng(this.value)" style="width:100%;padding:9px 12px;border-radius:9px;border:1px solid rgba(255,255,255,0.1);background:rgba(255,255,255,0.05);font-family:\'DM Mono\',monospace;font-size:12px;color:rgba(255,255,255,0.7);outline:none;box-sizing:border-box">';
+  html+='<div id="recipe-ing-results" style="display:none;position:absolute;top:100%;left:0;right:0;z-index:50;background:rgba(15,20,35,0.99);border:1px solid rgba(255,255,255,0.1);border-radius:9px;max-height:160px;overflow-y:auto;margin-top:4px"></div>';
+  html+='</div></div>';
+
+  html+='<div style="font-family:\'DM Mono\',monospace;font-size:9px;color:rgba(255,255,255,0.25);margin-bottom:16px;line-height:1.7">';
+  html+='When you cook, you\'ll enter the actual weight of each ingredient. The app calculates total carbs, you weigh the finished dish, and it works out the ratio (g carbs per g of dish).</div>';
+
+  html+='<div style="display:flex;gap:8px">';
+  html+='<button onclick="saveRecipeForm(\''+encodeURIComponent(recipe?recipe.id:'')+'\','+isNew+')" style="flex:1;padding:12px;border-radius:10px;border:1px solid rgba(200,180,60,0.3);background:rgba(200,180,60,0.08);font-family:\'Fraunces\',serif;font-style:italic;font-weight:200;font-size:16px;color:rgba(220,200,80,0.9);cursor:pointer">save recipe</button>';
+  if(!isNew) html+='<button onclick="deleteRecipe(\''+recipe.id+'\')" style="padding:12px 16px;border-radius:10px;border:1px solid rgba(200,60,60,0.2);background:transparent;font-family:\'DM Mono\',monospace;font-size:10px;color:rgba(200,80,80,0.5);cursor:pointer">delete</button>';
+  html+='<button onclick="renderRecipeManager()" style="padding:12px 14px;border-radius:10px;border:1px solid rgba(255,255,255,0.08);background:transparent;font-family:\'DM Mono\',monospace;font-size:10px;color:rgba(255,255,255,0.25);cursor:pointer">cancel</button>';
+  html+='</div></div>';
+
+  el.innerHTML=html;
+  window._recipeIngredients = ings.slice(); // working copy
+}
+
+function recipeIngRow(i, name, c100, gi) {
+  return '<div id="ring-'+i+'" style="display:flex;align-items:center;gap:8px;padding:7px 0;border-bottom:1px solid rgba(255,255,255,0.05)">' +
+    '<div style="flex:1;font-family:\'DM Mono\',monospace;font-size:11px;color:rgba(255,255,255,0.7)">'+name+'</div>' +
+    '<div style="font-family:\'DM Mono\',monospace;font-size:10px;color:rgba(62,180,120,0.6)">'+c100+'g/100g</div>' +
+    '<button onclick="removeRecipeIng('+i+')" style="background:none;border:none;cursor:pointer;color:rgba(255,255,255,0.2);font-size:15px;padding:0 4px">×</button>' +
+  '</div>';
+}
+
+function searchRecipeIng(q) {
+  var res=document.getElementById('recipe-ing-results');
+  if(!q||q.length<1){res.style.display='none';return;}
+  var all=FOOD_DB.concat(FOOD_LIBRARY);
+  var matches=all.filter(function(f){return f.name.toLowerCase().indexOf(q.toLowerCase())>=0&&f.c100>0;}).slice(0,8);
+  if(matches.length===0){res.style.display='none';return;}
+  res.style.display='block';
+  res.innerHTML=matches.map(function(f){
+    return '<div onclick="addRecipeIng(\''+f.name.replace(/'/g,"\\'")+'\','+f.c100+','+(f.gi||55)+')" style="padding:9px 12px;cursor:pointer;border-bottom:1px solid rgba(255,255,255,0.05);display:flex;justify-content:space-between">' +
+      '<div style="font-family:\'DM Mono\',monospace;font-size:11px;color:rgba(255,255,255,0.7)">'+f.name+'</div>' +
+      '<div style="font-family:\'DM Mono\',monospace;font-size:10px;color:rgba(62,180,120,0.5)">'+f.c100+'g/100g</div>' +
+    '</div>';
+  }).join('');
+}
+
+function addRecipeIng(name, c100, gi) {
+  if (!window._recipeIngredients) window._recipeIngredients=[];
+  window._recipeIngredients.push({name:name, c100:c100, gi:gi||55});
+  var container=document.getElementById('recipe-ings');
+  if(container){
+    var i=window._recipeIngredients.length-1;
+    container.insertAdjacentHTML('beforeend', recipeIngRow(i,name,c100,gi||55));
+  }
+  var inp=document.getElementById('recipe-ing-search');
+  if(inp) inp.value='';
+  document.getElementById('recipe-ing-results').style.display='none';
+}
+
+function removeRecipeIng(i) {
+  if(window._recipeIngredients) window._recipeIngredients.splice(i,1);
+  var el=document.getElementById('ring-'+i);
+  if(el) el.remove();
+}
+
+function saveRecipeForm(encodedId, isNew) {
+  var name=(document.getElementById('recipe-name').value||'').trim();
+  if(!name){showToast('recipe needs a name');return;}
+  var ings=window._recipeIngredients||[];
+  if(ings.length===0){showToast('add at least one ingredient');return;}
+
+  if(isNew) {
+    var r={id:'recipe_'+Date.now().toString(36), name:name, ingredients:ings, instances:[]};
+    RECIPES.push(r);
+  } else {
+    var id=decodeURIComponent(encodedId);
+    var idx=RECIPES.findIndex(function(r){return r.id===id;});
+    if(idx>=0){RECIPES[idx].name=name;RECIPES[idx].ingredients=ings;}
+  }
+  saveRecipes();
+  showToast(name+'\nsaved');
+  renderRecipeManager();
+}
+
+function deleteRecipe(id) {
+  var idx=RECIPES.findIndex(function(r){return r.id===id;});
+  if(idx>=0) RECIPES.splice(idx,1);
+  saveRecipes();
+  renderRecipeManager();
+}
+
+// Cook a recipe — open the cook session to enter actual weights
+function cookRecipe(id) {
+  var recipe=RECIPES.find(function(r){return r.id===id;});
+  if(!recipe) return;
+  var el=document.getElementById('recipe-overlay');
+  if(!el) return;
+
+  var html='<div style="max-width:480px;margin:0 auto;padding:48px 20px 60px">';
+  html+='<div style="display:flex;align-items:center;gap:12px;margin-bottom:6px">';
+  html+='<button onclick="renderRecipeManager()" style="background:none;border:none;cursor:pointer;font-family:\'DM Mono\',monospace;font-size:10px;color:rgba(255,255,255,0.3);padding:4px">← back</button>';
+  html+='<div style="font-family:\'Fraunces\',serif;font-style:italic;font-weight:200;font-size:22px;color:rgba(200,180,80,0.9)">'+recipe.name+'</div>';
+  html+='</div>';
+  html+='<div style="font-family:\'DM Mono\',monospace;font-size:9px;color:rgba(255,255,255,0.25);margin-bottom:24px">weigh each ingredient as you add it</div>';
+
+  // Ingredient weight inputs
+  html+='<div style="margin-bottom:16px">';
+  recipe.ingredients.forEach(function(ing,i){
+    html+='<div style="display:flex;align-items:center;gap:10px;padding:10px 0;border-bottom:1px solid rgba(255,255,255,0.05)">';
+    html+='<div style="flex:1;font-family:\'DM Mono\',monospace;font-size:12px;color:rgba(255,255,255,0.75)">'+ing.name+'<span style="opacity:0.4;margin-left:6px;font-size:9px">'+ing.c100+'g/100g</span></div>';
+    html+='<input id="cook-ing-'+i+'" type="number" inputmode="decimal" placeholder="grams" min="0" max="2000" step="1" oninput="updateCookPreview(\''+recipe.id+'\')" style="width:70px;padding:8px;border-radius:8px;border:1px solid rgba(200,180,60,0.2);background:rgba(200,180,60,0.05);font-family:\'DM Mono\',monospace;font-size:13px;color:rgba(220,200,80,0.9);text-align:right;outline:none">';
+    html+='<span style="font-family:\'DM Mono\',monospace;font-size:9px;color:rgba(255,255,255,0.25)">g</span>';
+    html+='</div>';
+  });
+  html+='</div>';
+
+  // Totals preview
+  html+='<div id="cook-preview" style="padding:12px;border-radius:10px;background:rgba(255,255,255,0.03);border:1px solid rgba(255,255,255,0.07);margin-bottom:14px;font-family:\'DM Mono\',monospace;font-size:10px;color:rgba(255,255,255,0.35)">enter weights above to see carb total</div>';
+
+  // Batch weight
+  html+='<div style="margin-bottom:16px"><div style="font-family:\'DM Mono\',monospace;font-size:8px;letter-spacing:1px;text-transform:uppercase;color:rgba(255,255,255,0.3);margin-bottom:6px">finished dish weight (g)</div>';
+  html+='<input id="cook-batch-weight" type="number" inputmode="decimal" placeholder="weigh the whole dish" min="0" max="10000" step="1" oninput="updateCookPreview(\''+recipe.id+'\')" style="width:100%;padding:11px 14px;border-radius:9px;border:1px solid rgba(255,255,255,0.12);background:rgba(255,255,255,0.05);font-family:\'DM Mono\',monospace;font-size:16px;color:rgba(255,255,255,0.8);outline:none;box-sizing:border-box">';
+  html+='</div>';
+
+  html+='<div id="cook-ratio-preview" style="font-family:\'DM Mono\',monospace;font-size:11px;color:rgba(200,180,70,0.7);margin-bottom:16px;min-height:16px"></div>';
+
+  html+='<div style="display:flex;gap:8px">';
+  html+='<button onclick="saveCookInstance(\''+recipe.id+'\')" style="flex:1;padding:12px;border-radius:10px;border:1px solid rgba(200,180,60,0.3);background:rgba(200,180,60,0.08);font-family:\'Fraunces\',serif;font-style:italic;font-weight:200;font-size:16px;color:rgba(220,200,80,0.9);cursor:pointer">save this cook</button>';
+  html+='<button onclick="renderRecipeManager()" style="padding:12px 14px;border-radius:10px;border:1px solid rgba(255,255,255,0.08);background:transparent;font-family:\'DM Mono\',monospace;font-size:10px;color:rgba(255,255,255,0.25);cursor:pointer">cancel</button>';
+  html+='</div></div>';
+
+  el.innerHTML=html;
+  window._cookingRecipeId=id;
+}
+
+function updateCookPreview(recipeId) {
+  var recipe=RECIPES.find(function(r){return r.id===recipeId;});
+  if(!recipe) return;
+  var weights={};
+  recipe.ingredients.forEach(function(ing,i){
+    var el=document.getElementById('cook-ing-'+i);
+    weights[ing.name]=parseFloat(el&&el.value)||0;
+  });
+  var batchEl=document.getElementById('cook-batch-weight');
+  var batchW=parseFloat(batchEl&&batchEl.value)||0;
+  var calc=calcRecipeRatio(recipe,weights,batchW);
+
+  var prev=document.getElementById('cook-preview');
+  if(prev){
+    var lines=recipe.ingredients.map(function(ing,i){
+      var g=weights[ing.name]||0;
+      var c=g?Math.round(ing.c100*g/100*10)/10:0;
+      return ing.name+(g?' '+g+'g → '+c+'g carbs':'');
+    }).filter(function(l){return l.indexOf('→')>-1;});
+    prev.innerHTML=lines.length?
+      lines.join('<br>')+'<br><strong style="color:rgba(255,200,60,0.8)">total: '+calc.totalCarbs.toFixed(1)+'g carbs</strong>':
+      'enter weights above to see carb total';
+  }
+  var rp=document.getElementById('cook-ratio-preview');
+  if(rp && batchW>0 && calc.totalCarbs>0){
+    rp.textContent='ratio: '+calc.ratio.toFixed(3)+'g carbs per gram · 100g portion = '+Math.round(calc.ratio*100)+'g carbs';
+  } else if(rp) {
+    rp.textContent='';
+  }
+}
+
+function saveCookInstance(recipeId) {
+  var recipe=RECIPES.find(function(r){return r.id===recipeId;});
+  if(!recipe) return;
+  var weights={};
+  recipe.ingredients.forEach(function(ing,i){
+    var el=document.getElementById('cook-ing-'+i);
+    weights[ing.name]=parseFloat(el&&el.value)||0;
+  });
+  var batchEl=document.getElementById('cook-batch-weight');
+  var batchW=parseFloat(batchEl&&batchEl.value)||0;
+  if(batchW<=0){showToast('enter the finished dish weight');return;}
+  var calc=calcRecipeRatio(recipe,weights,batchW);
+  if(calc.totalCarbs<=0){showToast('enter at least one ingredient weight');return;}
+
+  if(!recipe.instances) recipe.instances=[];
+  recipe.instances.push({
+    date:Date.now(), weights:weights, batchWeight:batchW,
+    totalCarbs:calc.totalCarbs, ratio:calc.ratio,
+    cooked_by:_thisPersonId||'unknown',
+  });
+  saveRecipes();
+  showToast(recipe.name+'\nratio: '+calc.ratio.toFixed(3)+'g/g saved');
+  renderRecipeManager();
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+//  KITCHEN WHISPER — pattern memory surfaced while cooking
+//  One line. Quiet. What the river remembers about meals like this one.
+// ═══════════════════════════════════════════════════════════════════════
+
+function buildKitchenWhisper(avgGI, totalCarbs) {
+  // Find similar past meals from MEAL_HISTORY
+  // Similar = same time of day (±2h) and similar carb range (±30%)
+  if (!MEAL_HISTORY || MEAL_HISTORY.length < 3) return '';
+
+  var nowHour = new Date().getHours() + new Date().getMinutes()/60;
+  var similar = MEAL_HISTORY.filter(function(m) {
+    if (!m.t || !m.totalCarbs) return false;
+    var mHour = new Date(m.t).getHours() + new Date(m.t).getMinutes()/60;
+    var hourDiff = Math.min(Math.abs(mHour-nowHour), 24-Math.abs(mHour-nowHour));
+    var carbDiff = totalCarbs > 0 ? Math.abs(m.totalCarbs - totalCarbs) / totalCarbs : 1;
+    return hourDiff < 2.5 && carbDiff < 0.4;
+  });
+
+  if (similar.length < 2) return '';
+
+  // What happened to BG in the 2h after these meals?
+  var peaks = [], lows = [], times = [];
+  similar.forEach(function(m) {
+    var mealT = m.t;
+    var bgAtMeal = histAt(mealT).bg;
+    if (!bgAtMeal || bgAtMeal <= 0) return;
+    var peakBG = bgAtMeal, peakT = 0, minBG = bgAtMeal;
+    for (var mins = 10; mins <= 120; mins += 5) {
+      var bg = histAt(mealT + mins*60000).bg;
+      if (!bg||bg<=0) continue;
+      if (bg > peakBG) { peakBG=bg; peakT=mins; }
+      if (bg < minBG)  minBG=bg;
+    }
+    if (peakT>0) {
+      peaks.push(peakBG - bgAtMeal);
+      times.push(peakT);
+    }
+  });
+
+  if (peaks.length < 2) return '';
+
+  var avgRise = peaks.reduce(function(s,v){return s+v;},0)/peaks.length;
+  var avgPeakT = times.reduce(function(s,v){return s+v;},0)/times.length;
+  var wentHigh = peaks.filter(function(p){return p>3;}).length;
+
+  var msg = '';
+  var col = 'rgba(200,200,220,0.55)';
+
+  if (wentHigh >= Math.ceil(peaks.length * 0.6)) {
+    msg = similar.length+' similar meals · peaked +'+avgRise.toFixed(1)+' mmol ~'+Math.round(avgPeakT)+'min · went high '+wentHigh+'/'+peaks.length+' times';
+    col = 'rgba(255,140,50,0.55)';
+  } else if (avgRise > 1.5) {
+    msg = similar.length+' similar meals · usually +'+avgRise.toFixed(1)+' mmol around '+Math.round(avgPeakT)+'min';
+    col = 'rgba(200,200,100,0.5)';
+  } else {
+    msg = similar.length+' similar meals · usually settled well · avg rise +'+avgRise.toFixed(1)+' mmol';
+    col = 'rgba(62,180,120,0.5)';
+  }
+
+  return '<div style="padding:8px 12px;border-radius:8px;background:rgba(255,255,255,0.03);border-left:2px solid '+col+';margin-bottom:12px">' +
+    '<div style="font-family:\'DM Mono\',monospace;font-size:8px;letter-spacing:1px;text-transform:uppercase;color:rgba(255,255,255,0.2);margin-bottom:3px">the river remembers</div>' +
+    '<div style="font-family:\'DM Mono\',monospace;font-size:10px;color:'+col+'">'+msg+'</div>' +
+  '</div>';
+}
+
+
+
+
 // ── BOLUS CALCULATION ─────────────────────────────────────────────────
 function calcBolus(totalCarbs, currentBG, entryTime) {
   var d    = dataAt(viewTime);
@@ -2787,6 +3634,14 @@ function openSheet() {
   document.getElementById('sheet').classList.add('open');
   document.getElementById('overlay').classList.add('open');
   setTimeNow();
+}
+
+// Long-press food button → kitchen mode; tap → quick log
+function foodBtnTap() {
+  openSheet();
+}
+function foodBtnLongPress() {
+  openKitchen();
 }
 
 function closeSheet() {
@@ -3292,7 +4147,7 @@ function logMealEntry(carbsOnly) {
   if (totalCarbs > 0) {
     SESSION.push({t: carbT, c: totalCarbs, u: 0, gi: avgGI, items: foodItems});
     BOLUS_EVENTS.push({t: carbT, c: totalCarbs, u: 0, gi: avgGI, items: foodItems});
-    LOGGED_EVENTS.push({t: carbT, c: totalCarbs, u: 0, gi: avgGI, items: foodItems, note: 'carbs'});
+    LOGGED_EVENTS.push({t: carbT, c: totalCarbs, u: 0, gi: avgGI, items: foodItems, note: 'carbs', logged_by: _thisPersonId||'unknown'});
   }
 
   try{localStorage.setItem('river_logged',JSON.stringify(LOGGED_EVENTS));}catch(err){}
@@ -4310,7 +5165,7 @@ function logCorrection(){
   var now=getTimeVal('corr-time');
   SESSION.push({t:now,c:0,u:u});
   try{localStorage.setItem('river_session',JSON.stringify(SESSION));}catch(e){}
-  BOLUS_EVENTS.push({t:now,c:0,u:u});
+  BOLUS_EVENTS.push({t:now,c:0,u:u,logged_by:_thisPersonId||'unknown'});
   ALERTS.snooze('corr_nudge',90*60000); ALERTS.snooze('corr_high',90*60000);
   _riverPebble=null;
   syncAfterLog();
@@ -5557,6 +6412,8 @@ window.addEventListener('load',()=>{
 
   // Start Supabase sync
   startSyncPolling();
+  // People in the flow — prompt if first run
+  promptPersonIfNeeded();
 
   // CGM source — auto-connect if configured, show setup if not
   const saved = loadCGMConfig();
