@@ -1,15 +1,10 @@
 // ═══════════════════════════════════════════════════════════════
-//  OSKAR'S RIVER  v4
-//  Mood: zen void river — balance, breath, flow
-//  Forces: COB (warm orange) rises from below — carbs absorbing
-//          IOB (cool blue) falls from above — insulin working
-//  Reservoirs anchor to event time, peak at absorption peak
-//  Particles pair and annihilate when forces balance
-//  Accumulated weight IS the pressure moving the BG line
-//  Drops evaporate on contact when BG is high (critical mass model)
-//  Target corridor glows — the zen tunnel, aim for stillness
-//  Time of day shifts the void palette — midnight to dawn to dusk
-//  Scroll = time travel; reservoirs reflect that moment's forces
+//  OSKAR'S RIVER  v3
+//  Mood: zenful Japanese ink-wash river
+//  Camera: rear-elevated, looking at boat from behind / above
+//  Wake = mana lines (COB warm upper, IOB cool lower)
+//  Banks = lily pads (hyper top, hypo bottom)
+//  Time of day drives full palette shift
 // ═══════════════════════════════════════════════════════════════
 
 // ── DATA PLACEHOLDER (injected at build time) ─────────────────
@@ -351,66 +346,61 @@ function drawBGTrail(pal) {
     CX.shadowBlur  = 0;
   }
 
-  // ── PREDICTION — soft range cloud, not a single line ─────────────────
-  const d0    = dataAt(viewTime);
-  const prev5 = dataAt(viewTime - 5*60000);
-  const roc   = d0.bg - prev5.bg;
-  const ISF   = (new Date(viewTime).getHours() >= 9 && new Date(viewTime).getHours() < 15) ? 7.0 : 6.0;
-
-  // Build centre prediction
-  const predC = [];
-  for (let i=1; i<=24; i++) {
-    const mins = i*5;
-    const ft   = viewTime + mins*60000;
-    const fx   = tX(ft);
-    if (fx > W+20) break;
-    const iobDelta = d0.iob > 0 ? -d0.iob*(1-iobF(mins))*ISF : 0;
-    const cobDelta = d0.cob > 0 ?  d0.cob*(1-cobF(mins))*0.05 : 0;
-    const rocD     = roc * Math.exp(-mins/25);
-    const bg       = Math.max(1.5, Math.min(22, d0.bg+iobDelta+cobDelta+rocD));
-    predC.push({x:fx, y:bgToY(bg), bg});
-  }
+  // ── SMART FORECAST — per-food GI curves + IOB decay ─────────────────
+  const predC = buildSmartForecast();
 
   if (predC.length > 1) {
-    // Uncertainty cloud — draw 5 bands with increasing offset
-    const bands = [0.4, 0.6, 1.0, 0.6, 0.4];
-    const offsets = [-2, -1, 0, 1, 2];
-    for (let b=0; b<5; b++) {
-      const offset = offsets[b] * 8; // vertical spread
-      CX.globalAlpha = 0.06 * bands[b];
+    const last   = predC[predC.length-1];
+    const endCol = last.bg > BG_HIGH ? 'rgba(230,140,40,' :
+                   last.bg < BG_LOW  ? 'rgba(80,130,220,' :
+                   `rgba(${pal.bgLine.join(',')},`;
+
+    // Uncertainty bands — wider as we go further out
+    const startPt = pts[pts.length-1] || predC[0];
+    for (let b = 0; b < 5; b++) {
+      const spread = [-2,-1,0,1,2][b] * 7;
+      const alpha  = [0.04,0.06,0.10,0.06,0.04][b];
+      CX.globalAlpha = alpha;
       CX.strokeStyle = `rgba(${pal.bgLine.join(',')},1)`;
       CX.lineWidth   = 3;
       CX.setLineDash([3, 6]);
       CX.beginPath();
-      CX.moveTo(pts[pts.length-1].x, pts[pts.length-1].y + offset);
-      for (const p of predC) CX.lineTo(p.x, p.y + offset);
+      CX.moveTo(startPt.x, startPt.y + spread);
+      for (const p of predC) CX.lineTo(p.x, p.y + spread);
       CX.stroke();
     }
-    // Centre prediction line — slightly brighter
-    CX.globalAlpha = 0.35;
-    CX.strokeStyle = `rgba(${pal.bgLine.join(',')},1)`;
-    CX.lineWidth   = 1.5;
+
+    // Centre line — colour shifts with predicted landing BG
+    CX.globalAlpha = 0.45;
+    CX.strokeStyle = endCol + '1)';
+    CX.lineWidth   = 1.8;
     CX.setLineDash([4, 7]);
     CX.beginPath();
-    CX.moveTo(pts[pts.length-1].x, pts[pts.length-1].y);
+    CX.moveTo(startPt.x, startPt.y);
     for (const p of predC) CX.lineTo(p.x, p.y);
     CX.stroke();
     CX.setLineDash([]);
 
-    // Predicted endpoint — ghost dot
-    const last = predC[predC.length-1];
-    const endCol = last.bg > BG_HIGH ? 'rgba(230,140,40,0.5)' :
-                   last.bg < BG_LOW  ? 'rgba(80,130,220,0.5)' :
-                   `rgba(${pal.bgLine.join(',')},0.5)`;
-    CX.globalAlpha = 0.6;
-    CX.fillStyle   = endCol;
-    CX.beginPath(); CX.arc(last.x, last.y, 3, 0, Math.PI*2); CX.fill();
-    // Predicted value — faint
-    CX.globalAlpha = 0.4;
-    CX.fillStyle   = endCol;
-    CX.font        = "200 10px 'Fraunces',serif";
+    // Landing dot + value
+    CX.globalAlpha = 0.75;
+    CX.fillStyle   = endCol + '0.9)';
+    CX.shadowColor = endCol + '0.6)';
+    CX.shadowBlur  = 6;
+    CX.beginPath(); CX.arc(last.x, last.y, 3.5, 0, Math.PI*2); CX.fill();
+    CX.shadowBlur  = 0;
+
+    // Landing mmol label
+    CX.globalAlpha = 0.55;
+    CX.fillStyle   = endCol + '1)';
+    CX.font        = "300 10px 'Fraunces',serif";
     CX.textAlign   = 'center';
-    CX.fillText(last.bg.toFixed(1), last.x, last.y - 7);
+    CX.fillText(last.bg.toFixed(1), last.x, last.y - 8);
+
+    // Time-to-arrival label
+    const minsAway = predC[predC.length-1].mins;
+    CX.globalAlpha = 0.3;
+    CX.font        = "300 8px 'DM Mono',monospace";
+    CX.fillText('+' + minsAway + 'min', last.x, last.y + 14);
   }
 
   CX.globalAlpha = 1;
@@ -611,11 +601,12 @@ function drawForceRibbon(pts, colorR, direction) {
 // ── EQUILIBRIUM ZONE — the calm corridor between forces ───────────────
 // When BG is in range and forces are roughly balanced, draw a soft
 // glowing band showing the target zone — the zone of equilibrium
-// ── PARTICLE FORCE SYSTEM ─────────────────────────────────────────────
-// Reservoirs anchor to event time (dose/meal timestamp).
-// Bell peak sits at event_time + absorption_peak offset.
-// Scroll-aware: reservoir x-position tracks viewTime so it moves with history.
-// Particles travel straight down/up (no bounce), pair on contact, annihilate.
+// ── PARTICLE FORCE SYSTEM v2 — per-food GI curves ────────────────────
+// Each logged food contributes its own absorption bell to the COB reservoir.
+// High GI foods (gummies, juice) peak early and sharp.
+// Low GI foods (oats, sourdough) peak late and wide.
+// IOB reservoir anchors to bolus time + Novorapid peak (~75 min).
+// Forecast line factors per-food curves + IOB decay for accurate landing.
 
 var _cobReservoir   = 0;
 var _iobReservoir   = 0;
@@ -624,21 +615,269 @@ var _forceMists     = [];
 var _forceSparks    = [];
 var _forceFrame     = 0;
 
-// Called when meal/bolus logged — fills reservoir immediately
 function topUpCOB(grams)  { _cobReservoir = Math.min(1, _cobReservoir + grams / 80); }
 function topUpIOB(units)  { _iobReservoir = Math.min(1, _iobReservoir + units / 6);  }
 
-function _spawnForceParticle(type, originX) {
+// Get active carb events with per-food breakdown from recent SESSION/BOLUS_EVENTS
+// Returns array of {t, items:[{carbs,gi,name}]} for events within 4h
+function _getActiveMealEvents() {
+  var cutoff = Date.now() - 4 * 3600000;
+  var events = [];
+  var allSrc = BOLUS_EVENTS.concat(SESSION);
+  allSrc.forEach(function(ev) {
+    if (!ev.c || ev.c <= 0) return;
+    if (ev.t < cutoff) return;
+    if (events.some(function(e){ return Math.abs(e.t - ev.t) < 30000; })) return;
+    events.push({
+      t:     ev.t,
+      c:     ev.c,
+      gi:    ev.gi || 55,
+      items: ev.items || [{name:'meal', carbs:ev.c, gi:ev.gi||55}],
+    });
+  });
+  return events.sort(function(a,b){ return a.t - b.t; });
+}
+
+// Get active bolus events within IOB duration (4h)
+function _getActiveBolusEvents() {
+  var cutoff = Date.now() - 4 * 3600000;
+  var events = [];
+  BOLUS_EVENTS.concat(SESSION).forEach(function(ev) {
+    if (!ev.u || ev.u <= 0) return;
+    if (ev.t < cutoff) return;
+    if (events.some(function(e){ return Math.abs(e.t - ev.t) < 30000; })) return;
+    events.push({t: ev.t, u: ev.u});
+  });
+  return events.sort(function(a,b){ return a.t - b.t; });
+}
+
+// cobF from GI — absorption fraction remaining at `mins` elapsed
+// Returns 0 (all absorbed) → 1 (none absorbed)
+function _cobFgi(mins, gi) {
+  gi = gi || 55;
+  if (mins <= 0) return 1;
+  if (mins >= 240) return 0;
+  var pk = Math.max(15, 95 - gi);  // high GI peaks earlier
+  var s  = pk / 2.2;
+  var z  = (mins - pk) / s;
+  return Math.max(0, 1 - Math.min(1, 0.5 * (1 + Math.tanh(0.7978845608 * (z + 0.044715 * z * z * z)))));
+}
+
+// iobF — Novorapid IOB fraction remaining at `mins` elapsed
+function _iobF(mins) {
+  if (mins <= 0) return 1;
+  if (mins >= 240) return 0;
+  var d = 0;
+  for (var x = 0; x < mins; x += 2) d += (x <= 70 ? x/70 : Math.max(0, 1-(x-70)/170)) * 2;
+  return Math.max(0, 1 - Math.min(1, d / 105));
+}
+
+// Draw the COB reservoir as stacked per-food GI curves
+// Each food is a translucent bell, colour-coded by GI speed
+function _drawCOBReservoir() {
+  var mealEvents = _getActiveMealEvents();
+  if (mealEvents.length === 0) return;
+
+  var now = viewTime; // scroll-aware
+
+  mealEvents.forEach(function(meal) {
+    if (!meal.items) return;
+    meal.items.forEach(function(food) {
+      if (!food.carbs || food.carbs <= 0) return;
+      var gi      = food.gi || 55;
+      var peakMin = Math.max(15, 95 - gi);       // mins post-meal to peak absorption
+      var peakT   = meal.t + peakMin * 60000;
+      var peakX   = tX(peakT);                   // screen x of peak (scroll-aware)
+
+      // How much of this food is still absorbing at viewTime?
+      var elapsedMins = (now - meal.t) / 60000;
+      var remaining   = _cobFgi(elapsedMins, gi);
+      if (remaining < 0.02) return;
+
+      // Colour by GI speed
+      var rv, g, b, label;
+      if (gi >= 70) {
+        rv=255; g=90;  b=30;  label='fast';   // hot orange-red
+      } else if (gi >= 55) {
+        rv=255; g=150; b=40;  label='medium'; // warm orange
+      } else {
+        rv=180; g=200; b=60;  label='slow';   // olive-green
+      }
+
+      // Bell width proportional to GI — fast foods are narrower
+      var sigma = W * (gi >= 70 ? 0.06 : gi >= 55 ? 0.09 : 0.13);
+      var maxD  = 75 * (food.carbs / 20) * remaining; // height scales with carbs remaining
+      maxD = Math.min(maxD, 90);
+
+      CX.beginPath();
+      CX.moveTo(0, H);
+      for (var i = 0; i <= 280; i++) {
+        var px   = (i / 280) * W;
+        var bell = Math.exp(-0.5 * Math.pow((px - peakX) / sigma, 2));
+        CX.lineTo(px, H - bell * maxD);
+      }
+      CX.lineTo(W, H);
+      CX.closePath();
+
+      var gr = CX.createLinearGradient(0, H, 0, H - maxD);
+      gr.addColorStop(0,    'rgba(' + rv + ',' + g + ',' + b + ',' + (0.22 + remaining * 0.28) + ')');
+      gr.addColorStop(0.5,  'rgba(' + rv + ',' + g + ',' + b + ',' + (remaining * 0.12) + ')');
+      gr.addColorStop(1,    'rgba(' + rv + ',' + g + ',' + b + ',0)');
+      CX.fillStyle = gr;
+      CX.fill();
+
+      // Rim line
+      CX.beginPath();
+      for (var i = 0; i <= 280; i++) {
+        var px   = (i / 280) * W;
+        var bell = Math.exp(-0.5 * Math.pow((px - peakX) / sigma, 2));
+        var py   = H - bell * maxD;
+        i === 0 ? CX.moveTo(px, py) : CX.lineTo(px, py);
+      }
+      CX.strokeStyle = 'rgba(' + rv + ',' + g + ',' + b + ',' + (0.35 + remaining * 0.45) + ')';
+      CX.lineWidth = 1.2;
+      CX.stroke();
+
+      // Food label at peak — if peak is on screen and food has meaningful carbs
+      if (food.carbs >= 2 && peakX > 20 && peakX < W - 20 && maxD > 12) {
+        var labelY = H - maxD - 6;
+        CX.globalAlpha = remaining * 0.65;
+        CX.fillStyle   = 'rgba(' + rv + ',' + g + ',' + b + ',1)';
+        CX.font        = "300 8px 'DM Mono',monospace";
+        CX.textAlign   = 'center';
+        CX.fillText(food.name.slice(0, 14) + ' ' + food.carbs.toFixed(0) + 'g', peakX, labelY);
+        CX.globalAlpha = 1;
+      }
+    });
+  });
+}
+
+// Draw IOB reservoir — single bell anchored to bolus peak time
+function _drawIOBReservoir() {
+  var bolusEvents = _getActiveBolusEvents();
+  if (bolusEvents.length === 0) return;
+
+  bolusEvents.forEach(function(bolus) {
+    var elapsedMins = (viewTime - bolus.t) / 60000;
+    var remaining   = _iobF(elapsedMins);
+    if (remaining < 0.02) return;
+
+    // Novorapid peaks at ~75 min
+    var peakT  = bolus.t + 75 * 60000;
+    var peakX  = tX(peakT);
+    var sigma  = W * 0.10;
+    var maxD   = 80 * (bolus.u / 3) * remaining;
+    maxD = Math.min(maxD, 88);
+
+    var rv = COL_IOB[0], g = COL_IOB[1], b = COL_IOB[2];
+
+    CX.beginPath();
+    CX.moveTo(0, 0);
+    for (var i = 0; i <= 280; i++) {
+      var px   = (i / 280) * W;
+      var bell = Math.exp(-0.5 * Math.pow((px - peakX) / sigma, 2));
+      CX.lineTo(px, bell * maxD);
+    }
+    CX.lineTo(W, 0);
+    CX.closePath();
+
+    var gr = CX.createLinearGradient(0, 0, 0, maxD);
+    gr.addColorStop(0,   'rgba(' + rv + ',' + g + ',' + b + ',' + (0.22 + remaining * 0.28) + ')');
+    gr.addColorStop(0.5, 'rgba(' + rv + ',' + g + ',' + b + ',' + (remaining * 0.12) + ')');
+    gr.addColorStop(1,   'rgba(' + rv + ',' + g + ',' + b + ',0)');
+    CX.fillStyle = gr;
+    CX.fill();
+
+    // Rim
+    CX.beginPath();
+    for (var i = 0; i <= 280; i++) {
+      var px   = (i / 280) * W;
+      var bell = Math.exp(-0.5 * Math.pow((px - peakX) / sigma, 2));
+      var py   = bell * maxD;
+      i === 0 ? CX.moveTo(px, py) : CX.lineTo(px, py);
+    }
+    CX.strokeStyle = 'rgba(' + rv + ',' + g + ',' + b + ',' + (0.35 + remaining * 0.45) + ')';
+    CX.lineWidth = 1.2;
+    CX.stroke();
+
+    // Label
+    if (peakX > 20 && peakX < W - 20 && maxD > 10) {
+      var labelY = maxD + 10;
+      CX.globalAlpha = remaining * 0.6;
+      CX.fillStyle   = 'rgba(' + rv + ',' + g + ',' + b + ',1)';
+      CX.font        = "300 8px 'DM Mono',monospace";
+      CX.textAlign   = 'center';
+      CX.fillText(bolus.u.toFixed(1) + 'U', peakX, labelY);
+      CX.globalAlpha = 1;
+    }
+  });
+}
+
+// ── SMART FORECAST LINE ───────────────────────────────────────────────
+// Replaces the simple blended prediction with per-food GI curves + IOB decay
+// Returns array of {mins, bg, x, y} from viewTime forward
+function buildSmartForecast() {
+  var d0   = dataAt(viewTime);
+  var bg   = d0.bg;
+  var ISF  = (new Date(viewTime).getHours() >= 9 && new Date(viewTime).getHours() < 15) ? 7.0 : 6.5;
+  var prev5 = dataAt(viewTime - 5 * 60000);
+  var roc   = (d0.bg - prev5.bg);
+
+  var mealEvents  = _getActiveMealEvents();
+  var bolusEvents = _getActiveBolusEvents();
+
+  var pts = [];
+  for (var i = 1; i <= 36; i++) {  // 3h in 5-min steps
+    var mins = i * 5;
+    var ft   = viewTime + mins * 60000;
+    var fx   = tX(ft);
+    if (fx > W + 40) break;
+
+    // Sum carb effect from each food item individually
+    var cobEffect = 0;
+    mealEvents.forEach(function(meal) {
+      var mealMins = (viewTime - meal.t) / 60000; // how old is this meal at viewTime
+      meal.items.forEach(function(food) {
+        var gi = food.gi || 55;
+        // Carbs absorbed between viewTime and viewTime+mins
+        var absorbedNow   = food.carbs * (1 - _cobFgi(mealMins, gi));
+        var absorbedFuture= food.carbs * (1 - _cobFgi(mealMins + mins, gi));
+        var deltaAbsorbed = Math.max(0, absorbedFuture - absorbedNow);
+        // Each gram absorbed raises BG by ~0.05 mmol (rough average)
+        cobEffect += deltaAbsorbed * 0.055;
+      });
+    });
+
+    // IOB effect — how much insulin still working between now and now+mins
+    var iobEffect = 0;
+    bolusEvents.forEach(function(bolus) {
+      var bolusMinsSinceNow = (viewTime - bolus.t) / 60000;
+      var iobNow    = bolus.u * _iobF(bolusMinsSinceNow);
+      var iobFuture = bolus.u * _iobF(bolusMinsSinceNow + mins);
+      var iobWorked = Math.max(0, iobNow - iobFuture);
+      iobEffect += iobWorked * ISF;
+    });
+
+    // Rate of change momentum — decays over time
+    var rocEffect = roc * Math.exp(-mins / 20);
+
+    var predBG = Math.max(1.8, Math.min(22, bg + cobEffect - iobEffect + rocEffect));
+    pts.push({mins: mins, bg: predBG, x: fx, y: bgToY(predBG)});
+  }
+  return pts;
+}
+
+// ── PARTICLES ────────────────────────────────────────────────────────
+
+function _spawnForceParticle(type) {
   var isCob = type === 'cob';
   var level = isCob ? _cobReservoir : _iobReservoir;
   if (level < 0.02) return;
   var r = 2.8 + Math.random() * 2.5;
-  var ox = originX !== undefined ? originX : NOW_X * W;
   _forceParticles.push({
     type: type, r: r, baseR: r,
-    x:  ox + (Math.random() - 0.5) * 28,
+    x:  NOW_X * W + (Math.random() - 0.5) * 28,
     y:  isCob ? H + 4 : -4,
-    // Smooth fall/rise — no horizontal bounce, just gentle wobble
     vy: isCob ? -(1.6 + Math.random() * 0.7) : (1.6 + Math.random() * 0.7),
     phase: Math.random() * Math.PI * 2,
     alpha: 0, state: 'traveling',
@@ -648,13 +887,12 @@ function _spawnForceParticle(type, originX) {
 }
 
 function _spawnMist(type, x, y) {
-  var isCob = type === 'cob';
   _forceMists.push({
     type: type, x: x, y: y,
     r: 7 + Math.random() * 14,
     life: 0, maxLife: 180 + Math.random() * 200,
     vx: (Math.random() - 0.5) * 0.2,
-    vy: isCob ? -(0.06 + Math.random() * 0.1) : (0.06 + Math.random() * 0.1),
+    vy: type === 'cob' ? -(0.06 + Math.random() * 0.1) : (0.06 + Math.random() * 0.1),
     phase: Math.random() * Math.PI * 2,
     maxAlpha: 0.06 + Math.random() * 0.08,
   });
@@ -701,94 +939,13 @@ function _tryPair() {
   });
 }
 
-// Get the x-position on screen for a given event time
-// (respects scroll — moves with the timeline)
-function _eventX(eventT) {
-  return tX(eventT);
-}
-
-// Get the x-position of the reservoir peak for a force type
-// COB: peaks at meal_time + absorption_peak (~35 min for medium GI)
-// IOB: peaks at bolus_time + insulin_peak (~75 min for Novorapid)
-function _reservoirPeakX(type) {
-  var isCob = type === 'cob';
-  // Find most recent relevant event
-  var allEvents = [];
-  for (var i = 0; i < BOLUS_EVENTS.length; i++) {
-    var ev = BOLUS_EVENTS[i];
-    if (isCob && ev.c > 0) allEvents.push(ev.t);
-    if (!isCob && ev.u > 0) allEvents.push(ev.t);
-  }
-  for (var i = 0; i < SESSION.length; i++) {
-    var s = SESSION[i];
-    if (isCob && s.c > 0) allEvents.push(s.t);
-    if (!isCob && s.u > 0) allEvents.push(s.t);
-  }
-  if (allEvents.length === 0) return NOW_X * W;
-
-  // Most recent event
-  var latestT = Math.max.apply(null, allEvents);
-  // Offset to absorption peak
-  var peakOffsetMs = isCob ? 35 * 60000 : 75 * 60000;
-  var peakT = latestT + peakOffsetMs;
-  return tX(peakT);
-}
-
-function _drawReservoir(type) {
-  var isCob = type === 'cob';
-  var col   = isCob ? COL_COB : COL_IOB;
-  var rv    = col[0], g = col[1], b = col[2];
-  var level = isCob ? _cobReservoir : _iobReservoir;
-  if (level < 0.01) return;
-
-  // Peak anchored to absorption peak time (scroll-aware)
-  var peakX = _reservoirPeakX(type);
-  var sigma  = W * 0.11;  // wider bell
-  var maxD   = 88;        // taller reservoir — takes more screen
-
-  CX.beginPath();
-  if (isCob) {
-    CX.moveTo(0, H);
-    for (var i = 0; i <= 300; i++) {
-      var px = (i / 300) * W;
-      CX.lineTo(px, H - Math.exp(-0.5 * Math.pow((px - peakX) / sigma, 2)) * level * maxD);
-    }
-    CX.lineTo(W, H);
-  } else {
-    CX.moveTo(0, 0);
-    for (var i = 0; i <= 300; i++) {
-      var px = (i / 300) * W;
-      CX.lineTo(px, Math.exp(-0.5 * Math.pow((px - peakX) / sigma, 2)) * level * maxD);
-    }
-    CX.lineTo(W, 0);
-  }
-  CX.closePath();
-
-  var gr = CX.createLinearGradient(0, isCob ? H : 0, 0, isCob ? H - 130 : 130);
-  gr.addColorStop(0,    'rgba(' + rv + ',' + g + ',' + b + ',' + (0.20 + level * 0.40) + ')');
-  gr.addColorStop(0.5,  'rgba(' + rv + ',' + g + ',' + b + ',' + (level * 0.13) + ')');
-  gr.addColorStop(1,    'rgba(' + rv + ',' + g + ',' + b + ',0)');
-  CX.fillStyle = gr; CX.fill();
-
-  // Rim line
-  CX.beginPath();
-  for (var i = 0; i <= 300; i++) {
-    var px  = (i / 300) * W;
-    var yv  = Math.exp(-0.5 * Math.pow((px - peakX) / sigma, 2)) * level * maxD;
-    var py  = isCob ? H - yv : yv;
-    i === 0 ? CX.moveTo(px, py) : CX.lineTo(px, py);
-  }
-  CX.strokeStyle = 'rgba(' + rv + ',' + g + ',' + b + ',' + (0.32 + level * 0.42) + ')';
-  CX.lineWidth = 1.4; CX.stroke();
-}
-
 function _drawMists() {
   _forceMists.forEach(function(m) {
     var t   = m.life / m.maxLife;
     var a   = t < 0.2 ? m.maxAlpha * (t / 0.2) : m.maxAlpha * (1 - (t - 0.2) / 0.8);
     var col = m.type === 'cob' ? COL_COB : COL_IOB;
     CX.beginPath();
-    CX.arc(m.x + Math.sin(_forceFrame * 0.025 + m.phase) * 6, m.y, m.r * (0.7 + t * 0.5), 0, Math.PI * 2);
+    CX.arc(m.x + Math.sin(_forceFrame * 0.025 + m.phase) * 5, m.y, m.r * (0.7 + t * 0.5), 0, Math.PI * 2);
     CX.fillStyle = 'rgba(' + col[0] + ',' + col[1] + ',' + col[2] + ',' + Math.max(0, a) + ')';
     CX.fill();
   });
@@ -800,9 +957,8 @@ function _drawForceParticles(lineY) {
     var isCob = p.type === 'cob';
     var col   = isCob ? COL_COB : COL_IOB;
     var rv = col[0], g = col[1], b = col[2];
-    // Gentle horizontal wobble only — no vertical bounce
-    var wobX = Math.sin(_forceFrame * 0.045 + p.phase) * 1.8;
-    var wobY = p.state === 'sitting' ? Math.sin(_forceFrame * 0.07 + p.phase * 1.2) * 1.0 : 0;
+    var wobX  = Math.sin(_forceFrame * 0.045 + p.phase) * 1.8;
+    var wobY  = p.state === 'sitting' ? Math.sin(_forceFrame * 0.07 + p.phase * 1.2) * 1.0 : 0;
     var pulse = p.state === 'sitting' ? 1 + Math.sin(_forceFrame * 0.11 + p.phase) * 0.13 : 1;
     var rad   = p.baseR * pulse;
     var a     = p.state === 'fading' ? p.fadeAlpha : p.alpha;
@@ -810,8 +966,7 @@ function _drawForceParticles(lineY) {
 
     var px, py;
     if (p.state === 'traveling') {
-      px = p.x + wobX * 0.3;
-      py = p.y;
+      px = p.x + wobX * 0.3; py = p.y;
     } else {
       var gap    = rad * 2.1 + 1.5;
       var offset = p.stackSlot * gap + rad + 3;
@@ -820,57 +975,45 @@ function _drawForceParticles(lineY) {
     }
 
     if (isCob) {
-      // Bubble — crisp ring, inner gleam, no bounce
       CX.beginPath(); CX.arc(px, py, rad, 0, Math.PI * 2);
       CX.fillStyle   = 'rgba(' + rv + ',' + g + ',' + b + ',' + (a * 0.15) + ')'; CX.fill();
-      CX.strokeStyle = 'rgba(' + rv + ',' + g + ',' + b + ',' + (a * 0.88)  + ')';
+      CX.strokeStyle = 'rgba(' + rv + ',' + g + ',' + b + ',' + (a * 0.88) + ')';
       CX.lineWidth = 1.3; CX.stroke();
-      // Inner highlight
-      CX.beginPath(); CX.arc(px - rad * 0.28, py - rad * 0.32, rad * 0.25, 0, Math.PI * 2);
-      CX.fillStyle = 'rgba(255,228,175,' + (a * 0.48) + ')'; CX.fill();
-      // Haze for older particles
+      CX.beginPath(); CX.arc(px - rad*0.28, py - rad*0.32, rad*0.25, 0, Math.PI*2);
+      CX.fillStyle = 'rgba(255,228,175,' + (a*0.48) + ')'; CX.fill();
       if (p.age > 120) {
-        var haze = Math.min((p.age - 120) / 150, 0.6);
-        CX.beginPath(); CX.arc(px, py, rad * 1.6, 0, Math.PI * 2);
-        CX.fillStyle = 'rgba(' + rv + ',' + g + ',' + b + ',' + (haze * 0.09) + ')'; CX.fill();
+        var haze = Math.min((p.age-120)/150, 0.6);
+        CX.beginPath(); CX.arc(px, py, rad*1.6, 0, Math.PI*2);
+        CX.fillStyle = 'rgba('+rv+','+g+','+b+','+(haze*0.09)+')'; CX.fill();
       }
-      // Upward push indicator when sitting
       if (p.state === 'sitting') {
-        var aw = rad * 0.5, ay = py + rad + 2;
-        CX.beginPath();
-        CX.moveTo(px, ay - aw * 1.1);
-        CX.lineTo(px - aw, ay + aw * 0.5);
-        CX.lineTo(px + aw, ay + aw * 0.5);
-        CX.closePath();
-        CX.fillStyle = 'rgba(' + rv + ',' + g + ',' + b + ',' + (a * 0.35) + ')'; CX.fill();
+        var aw = rad*0.5, ay = py+rad+2;
+        CX.beginPath(); CX.moveTo(px, ay-aw*1.1);
+        CX.lineTo(px-aw, ay+aw*0.5); CX.lineTo(px+aw, ay+aw*0.5); CX.closePath();
+        CX.fillStyle = 'rgba('+rv+','+g+','+b+','+(a*0.35)+')'; CX.fill();
       }
     } else {
-      // Teardrop — smooth, falls straight, no physics bounce
       var s = rad;
       CX.beginPath();
-      CX.moveTo(px, py - s * 1.4);
-      CX.bezierCurveTo(px + s * 0.95, py - s * 0.25, px + s * 0.95, py + s * 0.65, px, py + s * 0.75);
-      CX.bezierCurveTo(px - s * 0.95, py + s * 0.65, px - s * 0.95, py - s * 0.25, px, py - s * 1.4);
-      CX.fillStyle   = 'rgba(' + rv + ',' + g + ',' + b + ',' + (a * 0.72) + ')'; CX.fill();
-      CX.strokeStyle = 'rgba(' + rv + ',' + g + ',' + b + ',' + (a * 0.28) + ')';
+      CX.moveTo(px, py - s*1.4);
+      CX.bezierCurveTo(px+s*0.95, py-s*0.25, px+s*0.95, py+s*0.65, px, py+s*0.75);
+      CX.bezierCurveTo(px-s*0.95, py+s*0.65, px-s*0.95, py-s*0.25, px, py-s*1.4);
+      CX.fillStyle   = 'rgba('+rv+','+g+','+b+','+(a*0.72)+')'; CX.fill();
+      CX.strokeStyle = 'rgba('+rv+','+g+','+b+','+(a*0.28)+')';
       CX.lineWidth = 0.7; CX.stroke();
-      // Gleam
-      CX.beginPath(); CX.arc(px + s * 0.2, py - s * 0.42, s * 0.2, 0, Math.PI * 2);
-      CX.fillStyle = 'rgba(195,228,255,' + (a * 0.52) + ')'; CX.fill();
-      // Haze
+      CX.beginPath(); CX.arc(px+s*0.2, py-s*0.42, s*0.2, 0, Math.PI*2);
+      CX.fillStyle = 'rgba(195,228,255,'+(a*0.52)+')'; CX.fill();
       if (p.age > 120) {
-        var haze = Math.min((p.age - 120) / 150, 0.6);
-        CX.beginPath(); CX.arc(px, py, rad * 1.6, 0, Math.PI * 2);
-        CX.fillStyle = 'rgba(' + rv + ',' + g + ',' + b + ',' + (haze * 0.09) + ')'; CX.fill();
+        var haze = Math.min((p.age-120)/150, 0.6);
+        CX.beginPath(); CX.arc(px, py, rad*1.6, 0, Math.PI*2);
+        CX.fillStyle = 'rgba('+rv+','+g+','+b+','+(haze*0.09)+')'; CX.fill();
       }
-      // Downward press indicator
       if (p.state === 'sitting') {
-        CX.beginPath();
-        CX.moveTo(px, py - s * 1.5); CX.lineTo(px, py - s * 1.5 - s * 1.2);
-        CX.strokeStyle = 'rgba(' + rv + ',' + g + ',' + b + ',' + (a * 0.38) + ')';
+        CX.beginPath(); CX.moveTo(px, py-s*1.5); CX.lineTo(px, py-s*1.5-s*1.2);
+        CX.strokeStyle = 'rgba('+rv+','+g+','+b+','+(a*0.38)+')';
         CX.lineWidth = 1.1; CX.stroke();
-        CX.beginPath(); CX.arc(px, py - s * 1.5 - s * 1.2, 1.5, 0, Math.PI * 2);
-        CX.fillStyle = 'rgba(' + rv + ',' + g + ',' + b + ',' + (a * 0.38) + ')'; CX.fill();
+        CX.beginPath(); CX.arc(px, py-s*1.5-s*1.2, 1.5, 0, Math.PI*2);
+        CX.fillStyle = 'rgba('+rv+','+g+','+b+','+(a*0.38)+')'; CX.fill();
       }
     }
   });
@@ -880,8 +1023,8 @@ function _drawSparks() {
   _forceSparks.forEach(function(s) {
     var a = s.alpha * (1 - s.life / s.maxLife);
     if (a < 0.02) return;
-    CX.beginPath(); CX.arc(s.x, s.y, s.r, 0, Math.PI * 2);
-    CX.fillStyle = 'rgba(255,242,210,' + Math.max(0, a) + ')'; CX.fill();
+    CX.beginPath(); CX.arc(s.x, s.y, s.r, 0, Math.PI*2);
+    CX.fillStyle = 'rgba(255,242,210,' + Math.max(0,a) + ')'; CX.fill();
   });
 }
 
@@ -894,111 +1037,97 @@ function _drawPressureGlow(lineY) {
     if (p.type === 'cob') cobCount += a * p.baseR;
     else                  iobCount += a * p.baseR;
   });
-  var spread = 44;
   if (cobCount > 0.5) {
-    var h  = Math.min(cobCount * 2.4, 52);
-    var gr = CX.createLinearGradient(0, lineY, 0, lineY + h);
-    gr.addColorStop(0, 'rgba(' + COL_COB[0] + ',' + COL_COB[1] + ',' + COL_COB[2] + ',0.32)');
-    gr.addColorStop(1, 'rgba(' + COL_COB[0] + ',' + COL_COB[1] + ',' + COL_COB[2] + ',0)');
-    CX.beginPath();
-    CX.ellipse(nx, lineY + h / 2, spread, h / 2, 0, 0, Math.PI * 2);
+    var h = Math.min(cobCount*2.4, 52);
+    var gr = CX.createLinearGradient(0, lineY, 0, lineY+h);
+    gr.addColorStop(0,'rgba('+COL_COB[0]+','+COL_COB[1]+','+COL_COB[2]+',0.3)');
+    gr.addColorStop(1,'rgba('+COL_COB[0]+','+COL_COB[1]+','+COL_COB[2]+',0)');
+    CX.beginPath(); CX.ellipse(nx, lineY+h/2, 44, h/2, 0, 0, Math.PI*2);
     CX.fillStyle = gr; CX.fill();
   }
   if (iobCount > 0.5) {
-    var h  = Math.min(iobCount * 2.4, 52);
-    var gr = CX.createLinearGradient(0, lineY, 0, lineY - h);
-    gr.addColorStop(0, 'rgba(' + COL_IOB[0] + ',' + COL_IOB[1] + ',' + COL_IOB[2] + ',0.32)');
-    gr.addColorStop(1, 'rgba(' + COL_IOB[0] + ',' + COL_IOB[1] + ',' + COL_IOB[2] + ',0)');
-    CX.beginPath();
-    CX.ellipse(nx, lineY - h / 2, spread, h / 2, 0, 0, Math.PI * 2);
+    var h = Math.min(iobCount*2.4, 52);
+    var gr = CX.createLinearGradient(0, lineY, 0, lineY-h);
+    gr.addColorStop(0,'rgba('+COL_IOB[0]+','+COL_IOB[1]+','+COL_IOB[2]+',0.3)');
+    gr.addColorStop(1,'rgba('+COL_IOB[0]+','+COL_IOB[1]+','+COL_IOB[2]+',0)');
+    CX.beginPath(); CX.ellipse(nx, lineY-h/2, 44, h/2, 0, 0, Math.PI*2);
     CX.fillStyle = gr; CX.fill();
   }
 }
 
-// Main draw entry — called from frame() twice (cob then iob)
+// Main entry — called from frame() twice (cob then iob)
 function drawGasCloud(cobPts, col, direction, d) {
-  var type  = direction > 0 ? 'cob' : 'iob';
   var isCob = direction > 0;
 
-  // Full update only on COB pass to avoid double-stepping
+  // Full update on COB pass only
   if (isCob) {
     _forceFrame++;
 
-    // Sync reservoirs to live dataAt values (drain naturally with absorption)
+    // Sync reservoir levels to live dataAt values
     if (d) {
-      var targetCob = Math.min(1, (d.cob || 0) / 80);
-      var targetIob = Math.min(1, (d.iob || 0) / 6);
-      _cobReservoir += (targetCob - _cobReservoir) * 0.005;
-      _iobReservoir += (targetIob - _iobReservoir) * 0.005;
+      _cobReservoir += (Math.min(1,(d.cob||0)/80) - _cobReservoir) * 0.005;
+      _iobReservoir += (Math.min(1,(d.iob||0)/6)  - _iobReservoir) * 0.005;
       _cobReservoir  = Math.max(0, Math.min(1, _cobReservoir));
       _iobReservoir  = Math.max(0, Math.min(1, _iobReservoir));
     }
 
-    // Spawn particles from reservoir at scroll-aware origin
+    // Spawn particles
     if (_forceFrame % 20 === 0) {
-      var spawnX = NOW_X * W; // particles always emerge at NOW line
-      if (Math.random() < _cobReservoir * 0.88) _spawnForceParticle('cob', spawnX);
-      if (Math.random() < _iobReservoir * 0.82) _spawnForceParticle('iob', spawnX);
+      if (Math.random() < _cobReservoir * 0.88) _spawnForceParticle('cob');
+      if (Math.random() < _iobReservoir * 0.82) _spawnForceParticle('iob');
     }
 
-    // Mist from aged sitting particles
+    // Mist from old sitting particles
     if (_forceFrame % 15 === 0) {
-      var lineY = d ? bgToY(d.bg) : H / 2;
+      var lineY = d ? bgToY(d.bg) : H/2;
       _forceParticles.forEach(function(p) {
-        if (p.state === 'sitting' && p.age > 70 && Math.random() < 0.065) {
-          _spawnMist(p.type, p.x + (Math.random() - 0.5) * 24,
-            lineY + (p.type === 'cob' ? 1 : -1) * (10 + Math.random() * 20));
-        }
+        if (p.state==='sitting' && p.age>70 && Math.random()<0.065)
+          _spawnMist(p.type, p.x+(Math.random()-0.5)*24,
+            lineY+(p.type==='cob'?1:-1)*(10+Math.random()*20));
       });
     }
 
-    // Update particles — straight travel, no horizontal drift during travel
-    var lineY = d ? bgToY(d.bg) : H / 2;
+    // Update particles
+    var lineY = d ? bgToY(d.bg) : H/2;
     _forceParticles.forEach(function(p) {
       p.age++;
       var isCobP = p.type === 'cob';
       if (p.state === 'traveling') {
         p.alpha = Math.min(1, p.alpha + 0.065);
         p.y    += p.vy;
-        // Very slight x drift toward centre — no bounce
-        p.x    += (NOW_X * W - p.x) * 0.015;
-        var arrived = isCobP ? p.y <= lineY : p.y >= lineY;
-        if (arrived) { p.state = 'sitting'; p.y = lineY; }
-      } else if (p.state === 'sitting' && !p.paired) {
-        p.alpha = Math.min(1, p.alpha + 0.04);
-        p.y     = lineY; // track moving BG line
+        p.x    += (NOW_X*W - p.x) * 0.015;
+        if (isCobP ? p.y <= lineY : p.y >= lineY) { p.state='sitting'; p.y=lineY; }
+      } else if (p.state==='sitting' && !p.paired) {
+        p.alpha = Math.min(1, p.alpha+0.04);
+        p.y     = lineY;
         p.sitTimer++;
-        if (p.sitTimer > p.sitDur) { p.paired = true; p.state = 'fading'; }
+        if (p.sitTimer > p.sitDur) { p.paired=true; p.state='fading'; }
       } else {
-        p.fadeAlpha = Math.max(0, p.fadeAlpha - 0.022);
-        p.alpha     = Math.max(0, p.alpha     - 0.022);
+        p.fadeAlpha = Math.max(0, p.fadeAlpha-0.022);
+        p.alpha     = Math.max(0, p.alpha-0.022);
       }
     });
-    _forceParticles = _forceParticles.filter(function(p) { return p.alpha > 0.01; });
-    if (_forceParticles.length > 200) _forceParticles.splice(0, _forceParticles.length - 200);
+    _forceParticles = _forceParticles.filter(function(p){ return p.alpha>0.01; });
+    if (_forceParticles.length > 200) _forceParticles.splice(0, _forceParticles.length-200);
 
-    // Pair & annihilate every 28 frames
     if (_forceFrame % 28 === 0) _tryPair();
     _reassignSlots();
 
-    // Update mists
-    _forceMists.forEach(function(m) { m.life++; m.x += m.vx; m.y += m.vy; });
-    _forceMists = _forceMists.filter(function(m) { return m.life < m.maxLife; });
-    if (_forceMists.length > 130) _forceMists.splice(0, _forceMists.length - 130);
+    _forceMists.forEach(function(m){ m.life++; m.x+=m.vx; m.y+=m.vy; });
+    _forceMists = _forceMists.filter(function(m){ return m.life<m.maxLife; });
+    if (_forceMists.length>130) _forceMists.splice(0,_forceMists.length-130);
 
-    // Update sparks
-    _forceSparks.forEach(function(s) {
-      s.life++; s.x += s.vx; s.y += s.vy; s.vy += 0.04; s.alpha *= 0.92;
-    });
-    _forceSparks = _forceSparks.filter(function(s) { return s.alpha > 0.04; });
+    _forceSparks.forEach(function(s){ s.life++; s.x+=s.vx; s.y+=s.vy; s.vy+=0.04; s.alpha*=0.92; });
+    _forceSparks = _forceSparks.filter(function(s){ return s.alpha>0.04; });
   }
 
-  // Draw reservoir for this type (scroll-aware peak position)
-  _drawReservoir(type);
+  // Draw reservoirs (both calls draw their own side)
+  if (isCob) _drawCOBReservoir();
+  else        _drawIOBReservoir();
 
-  // Full particle draw pass on COB call
+  // Particles, mist, sparks on COB pass
   if (isCob) {
-    var lineY = d ? bgToY(d.bg) : H / 2;
+    var lineY = d ? bgToY(d.bg) : H/2;
     _drawMists();
     _drawPressureGlow(lineY);
     _drawForceParticles(lineY);
@@ -1156,14 +1285,13 @@ let _orbLongPressHint = 0;
 
 
 function drawEquilibriumZone(pal) {
-  const loY = bgToY(BG_HIGH); // top of target
-  const hiY = bgToY(BG_LOW);  // bottom of target
-  const zH  = hiY - loY;      // height of zone
+  const loY = bgToY(BG_HIGH);
+  const hiY = bgToY(BG_LOW);
+  const zH  = hiY - loY;
   const [r, g, b] = pal.bgLine;
   CX.save();
 
-  // Zen tunnel — soft glowing corridor, stronger near edges (like light bending)
-  // Central fill: gentle teal glow, the happy place
+  // Zen tunnel — glowing corridor, strongest at edges
   const grad = CX.createLinearGradient(0, loY, 0, hiY);
   grad.addColorStop(0,    `rgba(${r},${g},${b},0.10)`);
   grad.addColorStop(0.15, `rgba(${r},${g},${b},0.04)`);
@@ -1174,37 +1302,31 @@ function drawEquilibriumZone(pal) {
   CX.fillStyle   = grad;
   CX.fillRect(0, loY, W, zH);
 
-  // Edge breeze lines — animated soft dashes, like gentle current
-  // Upper edge (10 mmol)
+  // Animated flowing edge lines
   CX.globalAlpha = 0.18;
   CX.strokeStyle = `rgba(${r},${g},${b},1)`;
   CX.lineWidth   = 0.8;
   CX.setLineDash([6, 18]);
-  CX.lineDashOffset = -(phi * 12) % 24; // animate — flows rightward
+  CX.lineDashOffset = -(phi * 12) % 24;
   CX.beginPath(); CX.moveTo(0, loY); CX.lineTo(W, loY); CX.stroke();
-
-  // Lower edge (3.9 mmol)
-  CX.lineDashOffset = -(phi * 8 + 12) % 24; // slightly different speed
+  CX.lineDashOffset = -(phi * 8 + 12) % 24;
   CX.beginPath(); CX.moveTo(0, hiY); CX.lineTo(W, hiY); CX.stroke();
-  CX.setLineDash([]);
-  CX.lineDashOffset = 0;
+  CX.setLineDash([]); CX.lineDashOffset = 0;
 
-  // Soft outer glow above upper edge — danger zone above
+  // Danger glow above and below
   const dangerTop = CX.createLinearGradient(0, loY - zH*0.4, 0, loY);
-  dangerTop.addColorStop(0,   'rgba(230,140,40,0)');
-  dangerTop.addColorStop(1,   'rgba(230,140,40,0.06)');
-  CX.globalAlpha = 1;
-  CX.fillStyle   = dangerTop;
+  dangerTop.addColorStop(0, 'rgba(230,140,40,0)');
+  dangerTop.addColorStop(1, 'rgba(230,140,40,0.06)');
+  CX.globalAlpha = 1; CX.fillStyle = dangerTop;
   CX.fillRect(0, loY - zH*0.4, W, zH*0.4);
 
-  // Soft outer glow below lower edge — hypo zone below
   const dangerBot = CX.createLinearGradient(0, hiY, 0, hiY + zH*0.4);
-  dangerBot.addColorStop(0,   'rgba(80,130,220,0.06)');
-  dangerBot.addColorStop(1,   'rgba(80,130,220,0)');
-  CX.fillStyle   = dangerBot;
+  dangerBot.addColorStop(0, 'rgba(80,130,220,0.06)');
+  dangerBot.addColorStop(1, 'rgba(80,130,220,0)');
+  CX.fillStyle = dangerBot;
   CX.fillRect(0, hiY, W, zH*0.4);
 
-  // mmol labels on the edges — very faint, always there
+  // Edge mmol labels
   CX.globalAlpha = 0.22;
   CX.fillStyle   = `rgba(${r},${g},${b},1)`;
   CX.font        = "200 9px 'DM Mono',monospace";
@@ -1919,8 +2041,8 @@ function frame(ts) {
   drawEquilibriumZone(pal);
 
   // ── GAS CLOUDS — living forces above and below the BG line ──────
-  const cobPts = buildForcePts('cob',  1, 180);
-  const iobPts = buildForcePts('iob', -1, 180);
+  const cobPts = buildForcePts('cob',  1, 90);
+  const iobPts = buildForcePts('iob', -1, 90);
   drawGasCloud(cobPts, COL_COB,  1, d);   // carbs: warm orange rising
   drawGasCloud(iobPts, COL_IOB, -1, d);   // insulin: cool blue falling
 
@@ -2820,11 +2942,17 @@ function logMealEntry(carbsOnly) {
     LOGGED_EVENTS.push({t: t, c: 0, u: u, note: 'bolus'});
   }
 
-  // Log carbs at eat time
+  // Log carbs at eat time — include per-food breakdown for GI-aware rendering
+  var avgGI = _mealItems.length > 0
+    ? _mealItems.reduce(function(s,i){return s+(i.food.gi||55)*i.carbs;},0) / Math.max(totalCarbs,1)
+    : 55;
+  var foodItems = _mealItems.map(function(i){
+    return {name:i.food.name, carbs:i.carbs, gi:i.food.gi||55, g:i.grams};
+  });
   if (totalCarbs > 0) {
-    SESSION.push({t: carbT, c: totalCarbs, u: 0});
-    BOLUS_EVENTS.push({t: carbT, c: totalCarbs, u: 0});
-    LOGGED_EVENTS.push({t: carbT, c: totalCarbs, u: 0, note: 'carbs'});
+    SESSION.push({t: carbT, c: totalCarbs, u: 0, gi: avgGI, items: foodItems});
+    BOLUS_EVENTS.push({t: carbT, c: totalCarbs, u: 0, gi: avgGI, items: foodItems});
+    LOGGED_EVENTS.push({t: carbT, c: totalCarbs, u: 0, gi: avgGI, items: foodItems, note: 'carbs'});
   }
 
   try{localStorage.setItem('river_logged',JSON.stringify(LOGGED_EVENTS));}catch(err){}
@@ -3817,7 +3945,6 @@ function openCorrectionLog(){
   var s='<div style="max-width:320px;width:100%">';
   s+='<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:4px">';
   s+='<div style="font-family:\'Fraunces\',serif;font-style:italic;font-weight:200;font-size:22px;color:rgba(220,160,60,0.9)">correction</div>';
-  s+='<div style="font-family:\'DM Mono\',monospace;font-size:8px;letter-spacing:1px;text-transform:uppercase;color:rgba(180,140,60,0.35);margin-top:2px">set the actual time — can be backdated</div>';
   s+='<button onclick="closeCorrectionLog()" style="background:none;border:none;cursor:pointer;font-size:24px;color:rgba(255,255,255,0.2);padding:4px;touch-action:manipulation">×</button>';
   s+='</div>';
   s+=timePickerHTML('corr-time', _corrDefault, false);
