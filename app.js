@@ -1342,6 +1342,135 @@ function drawGasCloud(cobPts, col, direction, d) {
 
 
 
+
+// ── UNKNOWN FORCE — silver mist where reality diverges from forecast ──
+// When BG moves in ways COB+IOB don't explain, a mysterious residual appears.
+// Not labelled. Not categorised. Just present — waiting to be named.
+// Cold pool? Stress? Growth hormone? The mist knows something we don't yet.
+
+var _mistParticles = [];
+var _mistFrame = 0;
+
+function drawUnknownForce(pal) {
+  _mistFrame++;
+
+  // Build forecast from 2h ago to now in 5min steps
+  var steps = 24; // 2h
+  var residuals = [];
+
+  for (var i = 0; i <= steps; i++) {
+    var t       = viewTime - (steps - i) * 5 * 60000;
+    var actual  = dataAt(t).bg;
+    if (!actual || actual <= 0) continue;
+
+    // Simple forward forecast from 5min prior
+    var tPrev   = t - 5 * 60000;
+    var dPrev   = dataAt(tPrev);
+    var ISF     = (new Date(t).getHours() >= 9 && new Date(t).getHours() < 15) ? 7.0 : 6.5;
+
+    // What IOB+COB alone would predict over 5 mins
+    var cobDelta = dPrev.cob > 0 ? dPrev.cob * (1 - cobF(5)) * 0.055 : 0;
+    var iobDelta = dPrev.iob > 0 ? -dPrev.iob * (1 - iobF(5)) * ISF  : 0;
+    var predicted = dPrev.bg + cobDelta + iobDelta;
+
+    var residual = actual - predicted; // + means went higher than expected, - means lower
+    var x = tX(t);
+
+    // Only show residuals beyond noise threshold (±0.3 mmol)
+    if (Math.abs(residual) > 0.3 && x > 0 && x < W) {
+      residuals.push({ t, x, actual, predicted, residual });
+    }
+  }
+
+  if (residuals.length === 0) return;
+
+  CX.save();
+
+  // Draw the residual gap as a shaded region between actual and predicted
+  residuals.forEach(function(pt) {
+    var actualY    = bgToY(pt.actual);
+    var predictedY = bgToY(pt.predicted);
+    var gapPx      = Math.abs(actualY - predictedY);
+    if (gapPx < 2) return;
+
+    var topY = Math.min(actualY, predictedY);
+    var botY = Math.max(actualY, predictedY);
+    var intensity = Math.min(1, Math.abs(pt.residual) / 3); // max at 3 mmol divergence
+
+    // Silver-white fill — ethereal, not force-coloured
+    var gr = CX.createLinearGradient(0, topY, 0, botY);
+    gr.addColorStop(0,   'rgba(200,210,230,' + (intensity * 0.18) + ')');
+    gr.addColorStop(0.5, 'rgba(180,195,220,' + (intensity * 0.10) + ')');
+    gr.addColorStop(1,   'rgba(200,210,230,' + (intensity * 0.18) + ')');
+    CX.fillStyle = gr;
+    CX.fillRect(pt.x - 2, topY, 5, gapPx);
+  });
+
+  // Spawn swirling mist particles at points of high divergence
+  if (_mistFrame % 12 === 0) {
+    residuals.forEach(function(pt) {
+      if (Math.abs(pt.residual) < 0.8) return;
+      if (Math.random() > 0.35) return;
+      var intensity = Math.min(1, Math.abs(pt.residual) / 3);
+      var goingUp   = pt.residual < 0; // actual lower than predicted = unknown pulling down
+      _mistParticles.push({
+        x:        pt.x + (Math.random() - 0.5) * 20,
+        y:        bgToY(pt.actual) + (Math.random() - 0.5) * 12,
+        vx:       (Math.random() - 0.5) * 0.4,
+        vy:       (goingUp ? -0.3 : 0.3) * (0.5 + Math.random() * 0.5),
+        r:        4 + Math.random() * 10,
+        alpha:    0,
+        maxAlpha: 0.12 + intensity * 0.14,
+        life:     0,
+        maxLife:  80 + Math.random() * 120,
+        phase:    Math.random() * Math.PI * 2,
+        intensity: intensity,
+      });
+    });
+    if (_mistParticles.length > 200) _mistParticles.splice(0, _mistParticles.length - 200);
+  }
+
+  // Update and draw mist particles
+  for (var i = _mistParticles.length - 1; i >= 0; i--) {
+    var m = _mistParticles[i];
+    m.life++;
+    m.x  += m.vx + Math.sin(m.life * 0.04 + m.phase) * 0.3;
+    m.y  += m.vy + Math.sin(m.life * 0.06 + m.phase * 1.3) * 0.2;
+
+    var t = m.life / m.maxLife;
+    if (t < 0.2)      m.alpha = m.maxAlpha * (t / 0.2);
+    else if (t < 0.7) m.alpha = m.maxAlpha;
+    else              m.alpha = m.maxAlpha * (1 - (t - 0.7) / 0.3);
+
+    if (m.life >= m.maxLife) { _mistParticles.splice(i, 1); continue; }
+
+    CX.beginPath();
+    CX.arc(m.x, m.y, m.r * (0.6 + t * 0.6), 0, Math.PI * 2);
+    // Silver-white — cooler than IOB blue, warmer than pure white
+    CX.fillStyle = 'rgba(210,220,235,' + Math.max(0, m.alpha) + ')';
+    CX.fill();
+  }
+
+  // Subtle edge line tracing the predicted path
+  // Shows what "should have happened" as a ghost beneath reality
+  if (residuals.length > 2) {
+    CX.globalAlpha = 0.15;
+    CX.strokeStyle = 'rgba(200,215,235,1)';
+    CX.lineWidth   = 1;
+    CX.setLineDash([2, 8]);
+    CX.beginPath();
+    residuals.forEach(function(pt, i) {
+      var py = bgToY(pt.predicted);
+      i === 0 ? CX.moveTo(pt.x, py) : CX.lineTo(pt.x, py);
+    });
+    CX.stroke();
+    CX.setLineDash([]);
+  }
+
+  CX.globalAlpha = 1;
+  CX.restore();
+}
+
 // ── FUTURE CLOUDS — projected gas beyond now ─────────────────────────
 function drawFutureClouds(cobPts, iobPts, d, pal) {
   const nowX = NOW_X * W;
@@ -2258,6 +2387,7 @@ function frame(ts) {
 
   // ── BG TRACE — the life-line ────────────────────────────────────
   drawBGTrail(pal);
+  drawUnknownForce(pal);  // silver mist where forces are unexplained
 
   // ── EVENT MARKERS — ripples where forces entered ───────────────
   drawBolusMarkers(pal);
