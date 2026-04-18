@@ -9,7 +9,283 @@
 
 // ── DATA PLACEHOLDER (injected at build time) ─────────────────
 const HISTORY_RAW = window.__RIVER_HISTORY__ || [];
+// ═══════════════════════════════════════════════════════════════════════
+//  OSKAR'S RIVER — SUPABASE SYNC MODULE
+//  Multi-device sync: John (read/write) + Elisa (read)
+//  Offline-first: app works fully without connection
+//  Sync on: startup, after logging, every 5 minutes
+//  Conflict resolution: last-write-wins on events, merge on readings
+// ═══════════════════════════════════════════════════════════════════════
 
+// ── CONFIG — paste your values here ───────────────────────────────────
+const SUPABASE_URL     = ''; // 'https://oafnrfxypmllyvdewztm.supabase.co'
+const SUPABASE_ANON_KEY = ''; // 'sb_publishable_MFxi8_3Nsj4O-8_oSG8a7Q_OwpnjKWy'
+const SUPABASE_READY   = !!(SUPABASE_URL && SUPABASE_ANON_KEY);
+
+// ── SCHEMA (run this SQL in Supabase → SQL Editor) ─────────────────────
+// Paste and run once to create tables + policies:
+//
+// -- CGM readings (from Nightscout/Libre)
+// create table if not exists readings (
+//   id          bigserial primary key,
+//   t           bigint not null unique,   -- unix ms timestamp
+//   bg          float  not null,          -- mmol/L
+//   trend       text,
+//   src         text,
+//   created_at  timestamptz default now()
+// );
+//
+// -- Logged events (meals, boluses, corrections, hypo treatments)
+// create table if not exists events (
+//   id          bigserial primary key,
+//   t           bigint not null,          -- event time unix ms
+//   c           float  default 0,         -- carbs g
+//   u           float  default 0,         -- insulin units
+//   gi          float,                    -- avg GI of meal
+//   note        text,                     -- 'carbs'|'bolus'|'hypo:glucose_tabs' etc
+//   items       jsonb,                    -- per-food breakdown [{name,carbs,gi,g}]
+//   device_id   text,                     -- which device logged it
+//   created_at  timestamptz default now(),
+//   updated_at  timestamptz default now()
+// );
+//
+// -- RLS policies (allow anon read, write with device token)
+// alter table readings enable row level security;
+// alter table events   enable row level security;
+//
+// create policy "anyone can read readings" on readings for select using (true);
+// create policy "anyone can insert readings" on readings for insert with check (true);
+//
+// create policy "anyone can read events" on events for select using (true);
+// create policy "anyone can insert events" on events for insert with check (true);
+// create policy "anyone can update events" on events for update using (true);
+//
+// -- Index for time-range queries
+// create index if not exists readings_t_idx on readings (t desc);
+// create index if not exists events_t_idx   on events   (t desc);
+
+// ── DEVICE ID — identifies this install ───────────────────────────────
+const _deviceId = (function() {
+  var id = localStorage.getItem('river_device_id');
+  if (!id) {
+    id = 'dev_' + Math.random().toString(36).slice(2, 10);
+    localStorage.setItem('river_device_id', id);
+  }
+  return id;
+})();
+
+// ── SYNC STATE ─────────────────────────────────────────────────────────
+var _syncState    = 'idle';  // idle | syncing | error | ok
+var _lastSyncT    = 0;
+var _syncError    = null;
+var _pendingPush  = [];      // events queued while offline
+
+// ── HTTP HELPER ────────────────────────────────────────────────────────
+async function _sbFetch(path, opts) {
+  if (!SUPABASE_READY) throw new Error('Supabase not configured');
+  var url = SUPABASE_URL + '/rest/v1/' + path;
+  var headers = {
+    'Content-Type':  'application/json',
+    'apikey':        SUPABASE_ANON_KEY,
+    'Authorization': 'Bearer ' + SUPABASE_ANON_KEY,
+    'Prefer':        opts.prefer || 'return=minimal',
+  };
+  var r = await fetch(url, {
+    method:  opts.method || 'GET',
+    headers: Object.assign(headers, opts.headers || {}),
+    body:    opts.body ? JSON.stringify(opts.body) : undefined,
+  });
+  if (!r.ok) {
+    var txt = await r.text().catch(function(){ return ''; });
+    throw new Error('Supabase ' + r.status + ': ' + txt.slice(0, 120));
+  }
+  if (r.status === 204) return null;
+  return r.json();
+}
+
+// ── PUSH: local events → Supabase ─────────────────────────────────────
+async function syncPushEvents(events) {
+  if (!SUPABASE_READY || !events || events.length === 0) return;
+  // Upsert — safe to call multiple times
+  var rows = events.map(function(ev) {
+    return {
+      t:         ev.t,
+      c:         ev.c   || 0,
+      u:         ev.u   || 0,
+      gi:        ev.gi  || null,
+      note:      ev.note || null,
+      items:     ev.items ? ev.items : null,
+      device_id: _deviceId,
+      updated_at: new Date().toISOString(),
+    };
+  });
+  await _sbFetch('events?on_conflict=t', {
+    method:  'POST',
+    prefer:  'resolution=merge-duplicates,return=minimal',
+    body:    rows,
+  });
+}
+
+// ── PUSH: CGM readings → Supabase ────────────────────────────────────
+async function syncPushReadings(readings) {
+  if (!SUPABASE_READY || !readings || readings.length === 0) return;
+  var rows = readings.map(function(r) {
+    return { t: r.t, bg: r.bg, trend: r.trend || null, src: r.src || null };
+  });
+  // Upsert on t (unique) — ignore conflicts
+  await _sbFetch('readings?on_conflict=t', {
+    method: 'POST',
+    prefer: 'resolution=ignore-duplicates,return=minimal',
+    body:   rows,
+  });
+}
+
+// ── PULL: Supabase readings → local ───────────────────────────────────
+async function syncPullReadings(sinceT) {
+  var since = sinceT || (Date.now() - 7 * 86400000);
+  var rows  = await _sbFetch(
+    'readings?t=gte.' + since + '&order=t.asc&limit=2000',
+    { method: 'GET' }
+  );
+  if (!rows || rows.length === 0) return 0;
+  var added = 0;
+  rows.forEach(function(row) {
+    var exists = HISTORY_RAW.findIndex(function(h){ return Math.abs(h.t - row.t) < 90000; });
+    if (exists < 0) {
+      HISTORY_RAW.push({ t: row.t, bg: row.bg, iob: 0, cob: 0, pen: 1 });
+      added++;
+    }
+  });
+  if (added > 0) {
+    HISTORY_RAW.sort(function(a,b){ return a.t - b.t; });
+    updateCGMBounds();
+  }
+  return added;
+}
+
+// ── PULL: Supabase events → local ─────────────────────────────────────
+async function syncPullEvents(sinceT) {
+  var since = sinceT || (Date.now() - 7 * 86400000);
+  var rows  = await _sbFetch(
+    'events?t=gte.' + since + '&order=t.asc&limit=500',
+    { method: 'GET' }
+  );
+  if (!rows || rows.length === 0) return 0;
+  var added = 0;
+  rows.forEach(function(row) {
+    // Merge into LOGGED_EVENTS
+    var existsL = LOGGED_EVENTS.findIndex(function(e){ return Math.abs(e.t - row.t) < 30000 && Math.abs((e.c||0) - (row.c||0)) < 0.5; });
+    if (existsL < 0) {
+      var ev = { t: row.t, c: row.c||0, u: row.u||0, gi: row.gi, note: row.note, items: row.items };
+      LOGGED_EVENTS.push(ev);
+      BOLUS_EVENTS.push(ev);
+      SESSION.push(ev);
+      added++;
+    }
+  });
+  if (added > 0) {
+    try { localStorage.setItem('river_logged', JSON.stringify(LOGGED_EVENTS)); } catch(e){}
+    try { localStorage.setItem('river_session', JSON.stringify(SESSION)); } catch(e){}
+  }
+  return added;
+}
+
+// ── FULL SYNC ─────────────────────────────────────────────────────────
+var _syncTimer = null;
+
+async function syncNow(silent) {
+  if (!SUPABASE_READY) return;
+  if (_syncState === 'syncing') return;
+  _syncState = 'syncing';
+  _updateSyncIndicator();
+
+  try {
+    // Push any pending local events first
+    var localEvents = LOGGED_EVENTS.filter(function(e){
+      return e.t > (_lastSyncT || Date.now() - 7*86400000);
+    });
+    if (localEvents.length > 0) await syncPushEvents(localEvents);
+
+    // Push recent CGM readings (last hour)
+    var recentReadings = HISTORY_RAW.filter(function(h){
+      return h.t > Date.now() - 3600000 && h.bg > 0;
+    });
+    if (recentReadings.length > 0) await syncPushReadings(recentReadings);
+
+    // Pull everything from other devices
+    var sinceT    = _lastSyncT || Date.now() - 7 * 86400000;
+    var newRead   = await syncPullReadings(sinceT);
+    var newEvents = await syncPullEvents(sinceT);
+
+    _lastSyncT  = Date.now();
+    _syncState  = 'ok';
+    _syncError  = null;
+
+    if (!silent && (newRead > 0 || newEvents > 0)) {
+      console.log('[sync] pulled ' + newRead + ' readings, ' + newEvents + ' events');
+    }
+  } catch(err) {
+    _syncState = 'error';
+    _syncError = err.message;
+    console.warn('[sync] failed:', err.message);
+  }
+
+  _updateSyncIndicator();
+}
+
+function startSyncPolling() {
+  if (!SUPABASE_READY) return;
+  syncNow(true); // immediate on startup
+  _syncTimer = setInterval(function(){ syncNow(true); }, 5 * 60000);
+}
+
+function stopSyncPolling() {
+  if (_syncTimer) { clearInterval(_syncTimer); _syncTimer = null; }
+}
+
+// ── SYNC AFTER LOGGING — call after any event is saved ────────────────
+function syncAfterLog() {
+  if (!SUPABASE_READY) return;
+  // Small delay to let localStorage settle
+  setTimeout(function(){ syncNow(true); }, 800);
+}
+
+// ── SYNC STATUS INDICATOR ─────────────────────────────────────────────
+function _updateSyncIndicator() {
+  var el = document.getElementById('sync-indicator');
+  if (!el) return;
+  var labels = { syncing:'↻', ok:'✓', error:'!', idle:'' };
+  var colors = {
+    syncing: 'rgba(200,200,200,0.5)',
+    ok:      'rgba(62,180,120,0.6)',
+    error:   'rgba(220,80,60,0.7)',
+    idle:    'rgba(100,100,100,0.3)',
+  };
+  el.textContent = labels[_syncState] || '';
+  el.style.color = colors[_syncState] || colors.idle;
+  el.title = _syncError || (_syncState === 'ok' ? 'synced ' + new Date(_lastSyncT).toLocaleTimeString('en-GB',{hour:'2-digit',minute:'2-digit'}) : _syncState);
+}
+
+// ── SETTINGS UI — Supabase config in the settings screen ──────────────
+function buildSupabaseSettingsHTML() {
+  var configured = SUPABASE_READY;
+  var lastSync   = _lastSyncT > 0
+    ? 'last sync ' + new Date(_lastSyncT).toLocaleTimeString('en-GB',{hour:'2-digit',minute:'2-digit'})
+    : 'not yet synced';
+
+  return '<div style="margin-top:24px;padding-top:20px;border-top:1px solid rgba(40,55,50,0.08)">' +
+    '<div style="font-family:\'DM Mono\',monospace;font-size:9px;letter-spacing:1.5px;text-transform:uppercase;color:rgba(40,55,50,0.3);margin-bottom:12px">multi-device sync</div>' +
+    (configured
+      ? '<div style="font-family:\'DM Mono\',monospace;font-size:11px;color:rgba(62,180,120,0.8);margin-bottom:8px">✓ connected · ' + lastSync + '</div>'
+      : '<div style="font-family:\'DM Mono\',monospace;font-size:11px;color:rgba(200,140,60,0.7);margin-bottom:8px">not configured — add URL + key to app.js</div>'
+    ) +
+    '<div style="font-family:\'DM Mono\',monospace;font-size:9px;color:rgba(40,55,50,0.35);line-height:1.7">' +
+      'Syncs readings and logged events across John\'s phone and Elisa\'s device.<br>' +
+      'Data stored in Supabase (your account, your data).' +
+    '</div>' +
+    (configured ? '<button onclick="syncNow(false)" style="margin-top:10px;padding:7px 14px;border-radius:8px;border:1px solid rgba(62,180,120,0.25);background:rgba(62,180,120,0.06);font-family:\'DM Mono\',monospace;font-size:10px;color:rgba(62,180,120,0.7);cursor:pointer">sync now</button>' : '') +
+  '</div>';
+}
 var BOLUS_EVENTS = [];
 var LOGGED_EVENTS = [];
 try { LOGGED_EVENTS = JSON.parse(localStorage.getItem('river_logged')||'[]');
