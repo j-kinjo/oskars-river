@@ -3085,19 +3085,24 @@ function renderKitchen() {
   var kitchenTopHTML = '';
   if (_sheetMode === 'kitchen') {
     var whisper = buildKitchenWhisper(avgGI, totalCarbs);
-    kitchenTopHTML =
-      '<div style="display:flex;align-items:center;gap:10px;padding:8px 14px;border-radius:10px;' +
-        'background:rgba(255,255,255,0.05);border:1px solid rgba(255,255,255,0.08);margin-bottom:14px">' +
-        '<div style="font-family:\'Fraunces\',serif;font-weight:200;font-size:24px;color:' +
-          (bg<3.9?'rgba(100,140,255,0.95)':bg>10?'rgba(255,120,40,0.95)':'rgba(62,200,140,0.95)') + '">' +
-          bg.toFixed(1) + '</div>' +
-        '<div style="font-family:'DM Mono',monospace;font-size:9px;color:rgba(255,255,255,0.3)">mmol · live</div>' +
-        '<div style="flex:1"></div>' +
-        '<button onclick="openRecipeManager()" style="padding:5px 10px;border-radius:7px;' +
-          'border:1px solid rgba(200,180,60,0.3);background:rgba(200,180,60,0.07);' +
-          'font-family:'DM Mono',monospace;font-size:9px;color:rgba(200,180,70,0.8);cursor:pointer">🍳 recipes</button>' +
-      '</div>' +
-      whisper;
+    var _kDiv = document.createElement('div');
+    _kDiv.style.cssText = 'display:flex;align-items:center;gap:10px;padding:8px 14px;border-radius:10px;background:rgba(255,255,255,0.05);border:1px solid rgba(255,255,255,0.08);margin-bottom:14px';
+    var _kBG = document.createElement('div');
+    _kBG.style.fontSize = '24px';
+    _kBG.style.color = bg<3.9 ? 'rgba(100,140,255,0.95)' : bg>10 ? 'rgba(255,120,40,0.95)' : 'rgba(62,200,140,0.95)';
+    _kBG.textContent = bg.toFixed(1);
+    var _kLbl = document.createElement('div');
+    _kLbl.style.fontFamily = 'monospace';
+    _kLbl.style.fontSize = '9px';
+    _kLbl.style.color = 'rgba(255,255,255,0.3)';
+    _kLbl.textContent = 'mmol · live';
+    var _kSp = document.createElement('div'); _kSp.style.flex = '1';
+    var _kBtn = document.createElement('button');
+    _kBtn.style.cssText = 'padding:5px 10px;border-radius:7px;border:1px solid rgba(200,180,60,0.3);background:rgba(200,180,60,0.07);font-family:monospace;font-size:9px;color:rgba(200,180,70,0.8);cursor:pointer';
+    _kBtn.textContent = '🍳 recipes';
+    _kBtn.onclick = function(){ openRecipeManager(); };
+    _kDiv.appendChild(_kBG); _kDiv.appendChild(_kLbl); _kDiv.appendChild(_kSp); _kDiv.appendChild(_kBtn);
+    kitchenTopHTML = _kDiv.outerHTML + whisper;
   }
 
   sheet.innerHTML =
