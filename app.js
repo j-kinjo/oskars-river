@@ -2441,6 +2441,10 @@ function frame(ts) {
   } catch(e) {
     console.error('[river] frame error:', e);
     requestAnimationFrame(frame); // keep running even if a frame errors
+    // Auto-capture to debug log for easy reporting
+    if (window.__debugLog) {
+      window.__debugLog.unshift('[FRAME ERR] ' + e.message + ' (line ~' + (e.stack||'').split('\n')[1] + ')');
+    }
   }
 }
 
@@ -6418,10 +6422,13 @@ function openDebugPanel() {
   var buildStr = '__BUILD_ID__';
 
   el.innerHTML =
-    '<div style="display:flex;justify-content:space-between;margin-bottom:6px">' +
+    '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">' +
       '<span style="color:rgba(62,207,160,0.8);font-weight:bold">River Debug</span>' +
-      '<button onclick="document.getElementById(\'debug-panel\').remove()" ' +
-        'style="background:none;border:none;color:rgba(255,255,255,0.4);cursor:pointer;font-size:16px;padding:0">×</button>' +
+      '<div style="display:flex;gap:6px;align-items:center">' +
+        '<button onclick="deployToGitHub()" style="padding:3px 8px;border-radius:6px;border:1px solid rgba(62,207,160,0.3);background:rgba(62,207,160,0.08);color:rgba(62,207,160,0.8);font-family:monospace;font-size:9px;cursor:pointer">deploy</button>' +
+        '<button onclick="document.getElementById(\'debug-panel\').remove()" ' +
+          'style="background:none;border:none;color:rgba(255,255,255,0.4);cursor:pointer;font-size:16px;padding:0">×</button>' +
+      '</div>' +
     '</div>' +
     '<div style="color:rgba(150,200,150,0.6);margin-bottom:6px;line-height:1.6">' +
       buildStr + ' · source: ' + src + '<br>' +
@@ -6434,6 +6441,68 @@ function openDebugPanel() {
 
   document.body.appendChild(el);
   if (window.__updateDebugPanel) window.__updateDebugPanel();
+}
+
+// ── AUTO-DEPLOY — push app.js to GitHub via Cloudflare Worker ───────
+var _deployStatus = null;
+
+async function deployToGitHub() {
+  var btn = document.querySelector('[onclick="deployToGitHub()"]');
+  if (btn) { btn.textContent = '⬆ deploying...'; btn.disabled = true; }
+
+  try {
+    // Fetch current app.js from GitHub raw
+    var rawResp = await fetch('https://raw.githubusercontent.com/j-kinjo/oskars-river/main/app.js?t=' + Date.now());
+    if (!rawResp.ok) throw new Error('Could not fetch current app.js');
+    var currentCode = await rawResp.text();
+
+    // Send to worker /deploy endpoint
+    var proxyBase = 'https://orange-surf-6f98.john-king-uk.workers.dev';
+    var resp = await fetch(proxyBase + '/deploy', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        path: 'app.js',
+        content: currentCode,
+        message: 'manual deploy from debug panel',
+      })
+    });
+
+    var data = await resp.json();
+    if (data.ok) {
+      showToast('deployed ✓ · building...');
+      if (btn) { btn.textContent = '✓ deployed'; }
+    } else {
+      throw new Error(data.error || 'Deploy failed');
+    }
+  } catch(err) {
+    showToast('deploy failed · ' + err.message.slice(0,40));
+    console.error('[deploy]', err);
+    if (btn) { btn.textContent = '✗ failed'; btn.disabled = false; }
+  }
+}
+
+async function reportAndFix(errorMsg) {
+  var proxyBase = 'https://orange-surf-6f98.john-king-uk.workers.dev';
+  showToast('sending to Claude...');
+  try {
+    var resp = await fetch(proxyBase + '/fix', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        error_msg: errorMsg,
+        context: 'Oskar\'s River app.js build ' + ('__BUILD_ID__'),
+      })
+    });
+    var data = await resp.json();
+    if (data.deployed) {
+      showToast('fix deployed ✓ · ' + (data.diagnosis || ''));
+    } else {
+      showToast('diagnosis: ' + (data.diagnosis || data.error || 'unknown'));
+    }
+  } catch(err) {
+    showToast('fix failed · ' + err.message.slice(0,40));
+  }
 }
 
 // ── EVENT EDITOR — edit or delete a logged event ─────────────────────
