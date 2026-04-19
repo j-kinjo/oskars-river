@@ -4060,66 +4060,72 @@ function addCustomFood(name) {
       suggestGI = giHints[i].gi; break;
     }
   }
+  var giNote = suggestGI>=90?'⚡ almost pure sugar':suggestGI>=70?'↑ fast':suggestGI>=55?'→ medium':suggestGI>0?'↓ slow':'no significant carbs';
 
   var el = document.createElement('div');
   el.id = 'food-add-overlay';
   el.style.cssText = 'position:fixed;inset:0;z-index:80;background:rgba(3,5,20,0.95);backdrop-filter:blur(14px);display:flex;flex-direction:column;align-items:center;justify-content:center;padding:24px;transition:opacity .2s;opacity:0;overflow-y:auto;-webkit-overflow-scrolling:touch';
 
-  var inpStyle = 'width:100%;padding:11px 14px;border-radius:9px;border:1px solid rgba(255,255,255,0.15);background:rgba(255,255,255,0.08);font-family:\'DM Mono\',monospace;font-size:15px;color:rgba(255,255,255,0.9);text-align:center;outline:none;box-sizing:border-box';
-  var labelStyle = 'font-family:\'DM Mono\',monospace;font-size:9px;letter-spacing:1px;text-transform:uppercase;color:rgba(255,255,255,0.45);margin-bottom:6px;display:block';
-  var subStyle = 'font-family:\'DM Mono\',monospace;font-size:8px;color:rgba(255,255,255,0.3)';
+  // Build HTML using DOM methods to avoid any string escaping issues
+  var wrap = document.createElement('div');
+  wrap.style.cssText = 'max-width:320px;width:100%';
 
-  el.innerHTML =
-    '<div style="max-width:320px;width:100%">' +
-    '<div style="font-family:\'Fraunces\',serif;font-style:italic;font-weight:200;font-size:22px;color:rgba(180,220,200,0.95);margin-bottom:3px">add food</div>' +
-    '<div style="font-family:\'DM Mono\',monospace;font-size:12px;color:rgba(100,200,160,0.6);margin-bottom:22px">' + name + '</div>' +
+  wrap.innerHTML = [
+    '<div style="font-family:serif;font-style:italic;font-weight:200;font-size:22px;color:rgba(180,220,200,0.95);margin-bottom:3px">add food</div>',
+    '<div style="font-family:monospace;font-size:12px;color:rgba(100,200,160,0.6);margin-bottom:22px">' + name + '</div>',
 
     // Carbs per 100g
-    '<div style="margin-bottom:14px">' +
-      '<label style="'+labelStyle+'">carbs per 100g <span style="'+subStyle+'">· enter 0 for meat, eggs, cheese</span></label>' +
-      '<input id="new-food-c100" type="number" inputmode="decimal" placeholder="e.g. 28" min="0" max="100" step="0.1" oninput="updateAddFoodPreview()" style="'+inpStyle+';border-color:rgba(62,180,120,0.4);color:rgba(100,220,160,0.95)">' +
-    '</div>' +
+    '<div style="margin-bottom:14px">',
+      '<div style="font-family:monospace;font-size:9px;letter-spacing:1px;text-transform:uppercase;color:rgba(255,255,255,0.55);margin-bottom:6px">',
+        'carbs per 100g <span style="opacity:0.6;font-size:8px">· enter 0 for meat, eggs, cheese</span>',
+      '</div>',
+      '<input id="new-food-c100" type="number" inputmode="decimal" placeholder="e.g. 28" min="0" max="100" step="0.1" oninput="updateAddFoodPreview()"',
+        ' style="width:100%;padding:11px 14px;border-radius:9px;border:1px solid rgba(62,180,120,0.4);background:rgba(62,180,120,0.08);font-family:monospace;font-size:15px;color:rgba(100,220,160,0.95);text-align:center;outline:none;box-sizing:border-box">',
+    '</div>',
 
     // GI
-    '<div style="margin-bottom:6px">' +
-      '<label style="'+labelStyle+'">glycaemic index (GI) <span style="'+subStyle+'">· how fast it absorbs</span></label>' +
-      '<input id="new-food-gi" type="number" inputmode="decimal" placeholder="0–100" min="0" max="100" step="1" value="' + suggestGI + '" oninput="updateAddFoodPreview()" style="'+inpStyle+';border-color:rgba(200,160,60,0.4);color:rgba(220,180,80,0.95)">' +
-      '<div id="new-food-gi-note" style="font-family:\'DM Mono\',monospace;font-size:9px;margin-top:5px;text-align:center;color:rgba(200,160,60,0.7)">' +
-        (suggestGI>=90?'⚡ almost pure sugar':suggestGI>=70?'↑ fast':suggestGI>=55?'→ medium':suggestGI>0?'↓ slow':'no significant carbs') +
-      '</div>' +
-    '</div>' +
-
-    '<div style="font-family:\'DM Mono\',monospace;font-size:8px;color:rgba(255,255,255,0.25);margin-bottom:16px;line-height:1.7">low &lt;55 · medium 55–70 · high &gt;70 · 95+ = pure sugar</div>' +
+    '<div style="margin-bottom:6px">',
+      '<div style="font-family:monospace;font-size:9px;letter-spacing:1px;text-transform:uppercase;color:rgba(255,255,255,0.55);margin-bottom:6px">',
+        'glycaemic index <span style="opacity:0.6;font-size:8px">· how fast it absorbs · low &lt;55 · medium 55–70 · high &gt;70</span>',
+      '</div>',
+      '<input id="new-food-gi" type="number" inputmode="decimal" placeholder="0–100" min="0" max="100" step="1" value="' + suggestGI + '" oninput="updateAddFoodPreview()"',
+        ' style="width:100%;padding:11px 14px;border-radius:9px;border:1px solid rgba(200,160,60,0.4);background:rgba(200,160,60,0.07);font-family:monospace;font-size:15px;color:rgba(220,180,80,0.95);text-align:center;outline:none;box-sizing:border-box">',
+      '<div id="new-food-gi-note" style="font-family:monospace;font-size:9px;margin-top:5px;text-align:center;color:rgba(200,160,60,0.8)">' + giNote + '</div>',
+    '</div>',
 
     // Serving sizes
-    '<div style="display:flex;gap:10px;margin-bottom:14px">' +
-      '<div style="flex:1">' +
-        '<label style="'+labelStyle+'">typical serving (g)</label>' +
-        '<input id="new-food-g_serv" type="number" inputmode="decimal" placeholder="e.g. 30" min="0" max="2000" step="1" oninput="updateAddFoodPreview()" style="'+inpStyle+'">' +
-      '</div>' +
-      '<div style="flex:1">' +
-        '<label style="'+labelStyle+'">weight each (g)</label>' +
-        '<input id="new-food-g_each" type="number" inputmode="decimal" placeholder="e.g. 2" min="0" max="1000" step="0.1" oninput="updateAddFoodPreview()" style="'+inpStyle+'">' +
-      '</div>' +
-    '</div>' +
+    '<div style="display:flex;gap:10px;margin-bottom:14px">',
+      '<div style="flex:1">',
+        '<div style="font-family:monospace;font-size:9px;letter-spacing:1px;text-transform:uppercase;color:rgba(255,255,255,0.55);margin-bottom:6px">typical serving (g)</div>',
+        '<input id="new-food-g_serv" type="number" inputmode="decimal" placeholder="e.g. 30" min="0" max="2000" step="1" oninput="updateAddFoodPreview()"',
+          ' style="width:100%;padding:10px;border-radius:9px;border:1px solid rgba(255,255,255,0.15);background:rgba(255,255,255,0.07);font-family:monospace;font-size:14px;color:rgba(255,255,255,0.85);text-align:center;outline:none;box-sizing:border-box">',
+      '</div>',
+      '<div style="flex:1">',
+        '<div style="font-family:monospace;font-size:9px;letter-spacing:1px;text-transform:uppercase;color:rgba(255,255,255,0.55);margin-bottom:6px">weight each (g)</div>',
+        '<input id="new-food-g_each" type="number" inputmode="decimal" placeholder="e.g. 2" min="0" max="1000" step="0.1" oninput="updateAddFoodPreview()"',
+          ' style="width:100%;padding:10px;border-radius:9px;border:1px solid rgba(255,255,255,0.15);background:rgba(255,255,255,0.07);font-family:monospace;font-size:14px;color:rgba(255,255,255,0.85);text-align:center;outline:none;box-sizing:border-box">',
+      '</div>',
+    '</div>',
 
-    // Live preview
-    '<div id="new-food-preview" style="font-family:\'DM Mono\',monospace;font-size:10px;color:rgba(100,200,160,0.7);text-align:center;margin-bottom:16px;min-height:16px"></div>' +
+    // Preview
+    '<div id="new-food-preview" style="font-family:monospace;font-size:10px;color:rgba(100,200,160,0.8);text-align:center;margin-bottom:16px;min-height:16px"></div>',
 
-    '<div style="display:flex;gap:8px">' +
-      '<button onclick="saveCustomFood(\'' + encodeURIComponent(name) + '\')" ' +
-        'style="flex:1;padding:13px;border-radius:10px;border:1px solid rgba(62,180,120,0.4);background:rgba(62,180,120,0.12);font-family:\'Fraunces\',serif;font-style:italic;font-weight:200;font-size:17px;color:rgba(100,220,160,0.95);cursor:pointer">save + add</button>' +
-      '<button onclick="document.getElementById(\'food-add-overlay\').remove()" ' +
-        'style="padding:13px 16px;border-radius:10px;border:1px solid rgba(255,255,255,0.12);background:transparent;font-family:\'DM Mono\',monospace;font-size:10px;color:rgba(255,255,255,0.4);cursor:pointer">cancel</button>' +
-    '</div></div>';
+    // Buttons
+    '<div style="display:flex;gap:8px">',
+      '<button onclick="saveCustomFood('' + encodeURIComponent(name) + '')"',
+        ' style="flex:1;padding:13px;border-radius:10px;border:1px solid rgba(62,180,120,0.4);background:rgba(62,180,120,0.12);font-family:serif;font-style:italic;font-size:17px;color:rgba(100,220,160,0.95);cursor:pointer">save + add</button>',
+      '<button onclick="document.getElementById('food-add-overlay').remove()"',
+        ' style="padding:13px 16px;border-radius:10px;border:1px solid rgba(255,255,255,0.15);background:transparent;font-family:monospace;font-size:10px;color:rgba(255,255,255,0.5);cursor:pointer">cancel</button>',
+    '</div>',
+  ].join('');
 
+  el.appendChild(wrap);
   el.addEventListener('click', function(e){ if(e.target===el) el.remove(); });
   el.addEventListener('keydown', function(e){ if(e.key==='Escape') el.remove(); });
   document.body.appendChild(el);
   requestAnimationFrame(function(){ el.style.opacity='1'; });
   setTimeout(function(){ var inp=document.getElementById('new-food-c100'); if(inp) inp.focus(); }, 300);
 }
-
 function updateAddFoodPreview() {
   var c100  = parseFloat((document.getElementById('new-food-c100')||{}).value)||0;
   var gi    = parseInt((document.getElementById('new-food-gi')||{}).value)||0;
