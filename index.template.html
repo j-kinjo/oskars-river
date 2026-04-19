@@ -279,6 +279,22 @@
 <div id="toast"></div>
 
 <span id="sync-indicator" style="position:fixed;bottom:8px;right:48px;z-index:20;font-family:'DM Mono',monospace;font-size:9px;pointer-events:none"></span>
+<script>
+window.onerror = function(msg, src, line, col, err) {
+  var d = document.createElement('div');
+  d.style.cssText = 'position:fixed;top:0;left:0;right:0;z-index:9999;background:rgba(200,0,0,0.9);color:#fff;padding:12px;font-family:monospace;font-size:11px;white-space:pre-wrap;word-break:break-all';
+  d.textContent = 'ERROR: ' + msg + '\nLine: ' + line + ':' + col + '\n' + (err&&err.stack?err.stack.slice(0,300):'');
+  document.body.appendChild(d);
+  return false;
+};
+window.addEventListener('unhandledrejection', function(e) {
+  var d = document.createElement('div');
+  d.style.cssText = 'position:fixed;top:0;left:0;right:0;z-index:9999;background:rgba(180,0,120,0.9);color:#fff;padding:12px;font-family:monospace;font-size:11px;white-space:pre-wrap;word-break:break-all';
+  d.textContent = 'PROMISE ERROR: ' + (e.reason&&e.reason.message?e.reason.message:e.reason);
+  document.body.appendChild(d);
+});
+</script>
+  
 <script src="app.bundle.js"></script>
 </body>
 </html>
