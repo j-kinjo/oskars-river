@@ -3088,7 +3088,7 @@ function renderKitchen() {
     kitchenTopHTML =
       '<div style="display:flex;align-items:center;gap:10px;padding:8px 14px;border-radius:10px;' +
         'background:rgba(255,255,255,0.05);border:1px solid rgba(255,255,255,0.08);margin-bottom:14px">' +
-        '<div style="font-family:'Fraunces',serif;font-weight:200;font-size:24px;color:' +
+        '<div style="font-family:\'Fraunces\',serif;font-weight:200;font-size:24px;color:' +
           (bg<3.9?'rgba(100,140,255,0.95)':bg>10?'rgba(255,120,40,0.95)':'rgba(62,200,140,0.95)') + '">' +
           bg.toFixed(1) + '</div>' +
         '<div style="font-family:'DM Mono',monospace;font-size:9px;color:rgba(255,255,255,0.3)">mmol · live</div>' +
@@ -4060,71 +4060,128 @@ function addCustomFood(name) {
       suggestGI = giHints[i].gi; break;
     }
   }
-  var giNote = suggestGI>=90?'⚡ almost pure sugar':suggestGI>=70?'↑ fast':suggestGI>=55?'→ medium':suggestGI>0?'↓ slow':'no significant carbs';
 
+  // Build overlay entirely with DOM — no string escaping issues
   var el = document.createElement('div');
   el.id = 'food-add-overlay';
   el.style.cssText = 'position:fixed;inset:0;z-index:80;background:rgba(3,5,20,0.95);backdrop-filter:blur(14px);display:flex;flex-direction:column;align-items:center;justify-content:center;padding:24px;transition:opacity .2s;opacity:0;overflow-y:auto;-webkit-overflow-scrolling:touch';
 
-  // Build HTML using DOM methods to avoid any string escaping issues
+  function inp(id, type, placeholder, min, max, step, val, extraStyle) {
+    var i = document.createElement('input');
+    i.id = id; i.type = type; i.placeholder = placeholder;
+    if (min !== null) i.min = min;
+    if (max !== null) i.max = max;
+    if (step) i.step = step;
+    if (val !== undefined && val !== null) i.value = val;
+    i.setAttribute('inputmode', 'decimal');
+    i.setAttribute('oninput', 'updateAddFoodPreview()');
+    i.style.cssText = 'width:100%;padding:11px 14px;border-radius:9px;border:1px solid rgba(255,255,255,0.2);background:rgba(255,255,255,0.08);font-family:monospace;font-size:15px;color:rgba(255,255,255,0.9);text-align:center;outline:none;box-sizing:border-box;' + (extraStyle||'');
+    return i;
+  }
+
+  function lbl(text, sub) {
+    var d = document.createElement('div');
+    d.style.cssText = 'font-family:monospace;font-size:9px;letter-spacing:1px;text-transform:uppercase;color:rgba(255,255,255,0.6);margin-bottom:6px';
+    d.textContent = text;
+    if (sub) {
+      var s = document.createElement('span');
+      s.style.cssText = 'opacity:0.55;font-size:8px;margin-left:6px;text-transform:none;letter-spacing:0';
+      s.textContent = sub;
+      d.appendChild(s);
+    }
+    return d;
+  }
+
+  function row(children) {
+    var d = document.createElement('div');
+    d.style.marginBottom = '14px';
+    children.forEach(function(c){ d.appendChild(c); });
+    return d;
+  }
+
   var wrap = document.createElement('div');
   wrap.style.cssText = 'max-width:320px;width:100%';
 
-  wrap.innerHTML = [
-    '<div style="font-family:serif;font-style:italic;font-weight:200;font-size:22px;color:rgba(180,220,200,0.95);margin-bottom:3px">add food</div>',
-    '<div style="font-family:monospace;font-size:12px;color:rgba(100,200,160,0.6);margin-bottom:22px">' + name + '</div>',
+  // Title
+  var title = document.createElement('div');
+  title.style.cssText = 'font-size:22px;font-style:italic;color:rgba(180,220,200,0.95);margin-bottom:3px';
+  title.textContent = 'add food';
+  wrap.appendChild(title);
 
-    // Carbs per 100g
-    '<div style="margin-bottom:14px">',
-      '<div style="font-family:monospace;font-size:9px;letter-spacing:1px;text-transform:uppercase;color:rgba(255,255,255,0.55);margin-bottom:6px">',
-        'carbs per 100g <span style="opacity:0.6;font-size:8px">· enter 0 for meat, eggs, cheese</span>',
-      '</div>',
-      '<input id="new-food-c100" type="number" inputmode="decimal" placeholder="e.g. 28" min="0" max="100" step="0.1" oninput="updateAddFoodPreview()"',
-        ' style="width:100%;padding:11px 14px;border-radius:9px;border:1px solid rgba(62,180,120,0.4);background:rgba(62,180,120,0.08);font-family:monospace;font-size:15px;color:rgba(100,220,160,0.95);text-align:center;outline:none;box-sizing:border-box">',
-    '</div>',
+  var sub = document.createElement('div');
+  sub.style.cssText = 'font-family:monospace;font-size:12px;color:rgba(100,200,160,0.6);margin-bottom:22px';
+  sub.textContent = name;
+  wrap.appendChild(sub);
 
-    // GI
-    '<div style="margin-bottom:6px">',
-      '<div style="font-family:monospace;font-size:9px;letter-spacing:1px;text-transform:uppercase;color:rgba(255,255,255,0.55);margin-bottom:6px">',
-        'glycaemic index <span style="opacity:0.6;font-size:8px">· how fast it absorbs · low &lt;55 · medium 55–70 · high &gt;70</span>',
-      '</div>',
-      '<input id="new-food-gi" type="number" inputmode="decimal" placeholder="0–100" min="0" max="100" step="1" value="' + suggestGI + '" oninput="updateAddFoodPreview()"',
-        ' style="width:100%;padding:11px 14px;border-radius:9px;border:1px solid rgba(200,160,60,0.4);background:rgba(200,160,60,0.07);font-family:monospace;font-size:15px;color:rgba(220,180,80,0.95);text-align:center;outline:none;box-sizing:border-box">',
-      '<div id="new-food-gi-note" style="font-family:monospace;font-size:9px;margin-top:5px;text-align:center;color:rgba(200,160,60,0.8)">' + giNote + '</div>',
-    '</div>',
+  // Carbs per 100g
+  var carbRow = document.createElement('div');
+  carbRow.style.marginBottom = '14px';
+  carbRow.appendChild(lbl('carbs per 100g', '· enter 0 for meat, eggs, cheese'));
+  var carbInp = inp('new-food-c100', 'number', 'e.g. 28', 0, 100, '0.1', null, 'border-color:rgba(62,180,120,0.5);color:rgba(100,220,160,0.95);background:rgba(62,180,120,0.08)');
+  carbRow.appendChild(carbInp);
+  wrap.appendChild(carbRow);
 
-    // Serving sizes
-    '<div style="display:flex;gap:10px;margin-bottom:14px">',
-      '<div style="flex:1">',
-        '<div style="font-family:monospace;font-size:9px;letter-spacing:1px;text-transform:uppercase;color:rgba(255,255,255,0.55);margin-bottom:6px">typical serving (g)</div>',
-        '<input id="new-food-g_serv" type="number" inputmode="decimal" placeholder="e.g. 30" min="0" max="2000" step="1" oninput="updateAddFoodPreview()"',
-          ' style="width:100%;padding:10px;border-radius:9px;border:1px solid rgba(255,255,255,0.15);background:rgba(255,255,255,0.07);font-family:monospace;font-size:14px;color:rgba(255,255,255,0.85);text-align:center;outline:none;box-sizing:border-box">',
-      '</div>',
-      '<div style="flex:1">',
-        '<div style="font-family:monospace;font-size:9px;letter-spacing:1px;text-transform:uppercase;color:rgba(255,255,255,0.55);margin-bottom:6px">weight each (g)</div>',
-        '<input id="new-food-g_each" type="number" inputmode="decimal" placeholder="e.g. 2" min="0" max="1000" step="0.1" oninput="updateAddFoodPreview()"',
-          ' style="width:100%;padding:10px;border-radius:9px;border:1px solid rgba(255,255,255,0.15);background:rgba(255,255,255,0.07);font-family:monospace;font-size:14px;color:rgba(255,255,255,0.85);text-align:center;outline:none;box-sizing:border-box">',
-      '</div>',
-    '</div>',
+  // GI
+  var giRow = document.createElement('div');
+  giRow.style.marginBottom = '6px';
+  giRow.appendChild(lbl('glycaemic index', '· how fast it absorbs'));
+  var giInp = inp('new-food-gi', 'number', '0–100', 0, 100, '1', suggestGI, 'border-color:rgba(200,160,60,0.5);color:rgba(220,180,80,0.95);background:rgba(200,160,60,0.07)');
+  giRow.appendChild(giInp);
+  var giNote = document.createElement('div');
+  giNote.id = 'new-food-gi-note';
+  giNote.style.cssText = 'font-family:monospace;font-size:9px;margin-top:5px;text-align:center;color:rgba(200,160,60,0.8)';
+  giNote.textContent = suggestGI>=90?'⚡ almost pure sugar':suggestGI>=70?'↑ fast':suggestGI>=55?'→ medium':suggestGI>0?'↓ slow':'no significant carbs';
+  giRow.appendChild(giNote);
+  wrap.appendChild(giRow);
 
-    // Preview
-    '<div id="new-food-preview" style="font-family:monospace;font-size:10px;color:rgba(100,200,160,0.8);text-align:center;margin-bottom:16px;min-height:16px"></div>',
+  var giHint = document.createElement('div');
+  giHint.style.cssText = 'font-family:monospace;font-size:8px;color:rgba(255,255,255,0.3);margin-bottom:16px;line-height:1.7';
+  giHint.textContent = 'low <55 · medium 55–70 · high >70 · 95+ = pure sugar';
+  wrap.appendChild(giHint);
 
-    // Buttons
-    '<div style="display:flex;gap:8px">',
-      '<button onclick="saveCustomFood('' + encodeURIComponent(name) + '')"',
-        ' style="flex:1;padding:13px;border-radius:10px;border:1px solid rgba(62,180,120,0.4);background:rgba(62,180,120,0.12);font-family:serif;font-style:italic;font-size:17px;color:rgba(100,220,160,0.95);cursor:pointer">save + add</button>',
-      '<button onclick="document.getElementById('food-add-overlay').remove()"',
-        ' style="padding:13px 16px;border-radius:10px;border:1px solid rgba(255,255,255,0.15);background:transparent;font-family:monospace;font-size:10px;color:rgba(255,255,255,0.5);cursor:pointer">cancel</button>',
-    '</div>',
-  ].join('');
+  // Serving sizes row
+  var servRow = document.createElement('div');
+  servRow.style.cssText = 'display:flex;gap:10px;margin-bottom:14px';
+  var servDiv = document.createElement('div'); servDiv.style.flex = '1';
+  servDiv.appendChild(lbl('typical serving (g)'));
+  servDiv.appendChild(inp('new-food-g_serv', 'number', 'e.g. 30', 0, 2000, '1', null, ''));
+  var eachDiv = document.createElement('div'); eachDiv.style.flex = '1';
+  eachDiv.appendChild(lbl('weight each (g)'));
+  eachDiv.appendChild(inp('new-food-g_each', 'number', 'e.g. 2', 0, 1000, '0.1', null, ''));
+  servRow.appendChild(servDiv);
+  servRow.appendChild(eachDiv);
+  wrap.appendChild(servRow);
+
+  // Preview
+  var preview = document.createElement('div');
+  preview.id = 'new-food-preview';
+  preview.style.cssText = 'font-family:monospace;font-size:10px;color:rgba(100,200,160,0.8);text-align:center;margin-bottom:16px;min-height:16px';
+  wrap.appendChild(preview);
+
+  // Buttons
+  var btnRow = document.createElement('div');
+  btnRow.style.cssText = 'display:flex;gap:8px';
+
+  var saveBtn = document.createElement('button');
+  saveBtn.style.cssText = 'flex:1;padding:13px;border-radius:10px;border:1px solid rgba(62,180,120,0.4);background:rgba(62,180,120,0.12);font-size:17px;font-style:italic;color:rgba(100,220,160,0.95);cursor:pointer';
+  saveBtn.textContent = 'save + add';
+  saveBtn.onclick = function() { saveCustomFood(encodeURIComponent(name)); };
+
+  var cancelBtn = document.createElement('button');
+  cancelBtn.style.cssText = 'padding:13px 16px;border-radius:10px;border:1px solid rgba(255,255,255,0.15);background:transparent;font-family:monospace;font-size:10px;color:rgba(255,255,255,0.5);cursor:pointer';
+  cancelBtn.textContent = 'cancel';
+  cancelBtn.onclick = function() { el.remove(); };
+
+  btnRow.appendChild(saveBtn);
+  btnRow.appendChild(cancelBtn);
+  wrap.appendChild(btnRow);
 
   el.appendChild(wrap);
   el.addEventListener('click', function(e){ if(e.target===el) el.remove(); });
   el.addEventListener('keydown', function(e){ if(e.key==='Escape') el.remove(); });
   document.body.appendChild(el);
   requestAnimationFrame(function(){ el.style.opacity='1'; });
-  setTimeout(function(){ var inp=document.getElementById('new-food-c100'); if(inp) inp.focus(); }, 300);
+  setTimeout(function(){ carbInp.focus(); }, 300);
 }
 function updateAddFoodPreview() {
   var c100  = parseFloat((document.getElementById('new-food-c100')||{}).value)||0;
