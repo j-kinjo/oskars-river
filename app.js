@@ -2060,6 +2060,8 @@ const ALERTS = {
     try {
       if (!this._audioCtx) this._audioCtx = new (window.AudioContext || window.webkitAudioContext)();
       const ctx = this._audioCtx;
+      // Resume context if suspended (Chrome autoplay policy)
+      if (ctx.state === 'suspended') ctx.resume();
       const osc = ctx.createOscillator();
       const gain = ctx.createGain();
       osc.connect(gain); gain.connect(ctx.destination);
@@ -6345,6 +6347,16 @@ async function sendWhisper() {
 
 window.addEventListener('load', function() {
   setupOrbLongPress();
+  // Unlock AudioContext on first user gesture (Chrome autoplay policy)
+  function _unlockAudio() {
+    if (ALERTS._audioCtx && ALERTS._audioCtx.state === 'suspended') {
+      ALERTS._audioCtx.resume();
+    }
+    document.removeEventListener('touchstart', _unlockAudio);
+    document.removeEventListener('click', _unlockAudio);
+  }
+  document.addEventListener('touchstart', _unlockAudio, {once:true, passive:true});
+  document.addEventListener('click', _unlockAudio, {once:true});
 });
 
 
