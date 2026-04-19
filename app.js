@@ -2543,7 +2543,21 @@ function getEntryTime() {
   return Date.now();
 }
 
-function onTimeChange(val) { _entryTimeVal = val; renderSheet(); }
+function onTimeChange(val) {
+  _entryTimeVal = val;
+  // Update display without full re-render (which wipes input values)
+  var disp = document.getElementById('time-display');
+  if (disp) {
+    var d = new Date(val);
+    disp.textContent = d.toLocaleDateString('en-GB',{weekday:'short',day:'numeric',month:'short'}) +
+      ' · ' + d.toLocaleTimeString('en-GB',{hour:'2-digit',minute:'2-digit'});
+  }
+  // Update bolus suggestion only
+  var c = parseFloat((document.getElementById('in-c')||{}).value)||0;
+  var u = parseFloat((document.getElementById('in-i')||{}).value)||0;
+  var bg= parseFloat((document.getElementById('in-bg')||{}).value)||0;
+  if (c > 0 && bg > 0) onInp();
+}
 
 function setEntryTime(val) {
   _entryTimeVal = val;
@@ -2904,8 +2918,17 @@ function startPlateBuilder() {
 }
 
 function openKitchen() {
-  _sheetMode = 'kitchen';
-  startPlateBuilder();
+  // Kitchen mode = enhanced food sheet
+  // Merges into openSheet with kitchen context
+  _mealItems  = [];
+  _bolusGiven = false;
+  _sheetMode  = 'kitchen';
+  _plateItems = [];
+  _plateBolused = false;
+  renderSheet();
+  document.getElementById('sheet').classList.add('open');
+  document.getElementById('overlay').classList.add('open');
+  setTimeNow();
 }
 
 function totalPlateCarbs() {
@@ -3048,6 +3071,33 @@ function renderKitchen() {
           '<button onclick="bolusNow()" style="width:100%;padding:13px;border-radius:10px;border:1px solid rgba(60,130,220,0.3);background:rgba(60,130,220,0.1);font-family:\'Fraunces\',serif;font-style:italic;font-weight:200;font-size:17px;color:rgba(100,160,255,0.9);cursor:pointer">bolus now · keep cooking</button>' +
         '</div>';
     }
+  }
+
+  // Kitchen mode — dark bg so text is readable
+  if (_sheetMode === 'kitchen') {
+    sheet.style.background = 'rgba(8,12,28,0.98)';
+    sheet.style.color = 'rgba(255,255,255,0.85)';
+  } else {
+    sheet.style.background = '';
+    sheet.style.color = '';
+  }
+
+  var kitchenTopHTML = '';
+  if (_sheetMode === 'kitchen') {
+    var whisper = buildKitchenWhisper(avgGI, totalCarbs);
+    kitchenTopHTML =
+      '<div style="display:flex;align-items:center;gap:10px;padding:8px 14px;border-radius:10px;' +
+        'background:rgba(255,255,255,0.05);border:1px solid rgba(255,255,255,0.08);margin-bottom:14px">' +
+        '<div style="font-family:'Fraunces',serif;font-weight:200;font-size:24px;color:' +
+          (bg<3.9?'rgba(100,140,255,0.95)':bg>10?'rgba(255,120,40,0.95)':'rgba(62,200,140,0.95)') + '">' +
+          bg.toFixed(1) + '</div>' +
+        '<div style="font-family:'DM Mono',monospace;font-size:9px;color:rgba(255,255,255,0.3)">mmol · live</div>' +
+        '<div style="flex:1"></div>' +
+        '<button onclick="openRecipeManager()" style="padding:5px 10px;border-radius:7px;' +
+          'border:1px solid rgba(200,180,60,0.3);background:rgba(200,180,60,0.07);' +
+          'font-family:'DM Mono',monospace;font-size:9px;color:rgba(200,180,70,0.8);cursor:pointer">🍳 recipes</button>' +
+      '</div>' +
+      whisper;
   }
 
   sheet.innerHTML =
@@ -3806,7 +3856,7 @@ function renderSheet() {
         '<div style="font-family:\'DM Mono\',monospace;font-size:9px;color:rgba(40,55,50,0.3);' +
           'letter-spacing:1px;text-transform:uppercase;margin-bottom:8px">insulin given</div>' +
         '<div style="display:flex;align-items:center;gap:10px;margin-bottom:6px">' +
-          '<input id="in-bolus" type="number" inputmode="decimal" placeholder="—" ' +
+          '<input id="in-bolus" type="number" inputmode="decimal" placeholder="—" value="' + (_bolusVal||'') + '" ' +
             'min="0" max="20" step="0.5" ' +
             'style="flex:1;padding:10px 14px;border-radius:9px;' +
             'border:1px solid rgba(40,85,200,0.2);background:rgba(255,255,255,0.55);' +
@@ -3836,9 +3886,12 @@ function renderSheet() {
   sheet.innerHTML =
     '<div class="handle"></div>' +
     '<div style="display:flex;align-items:center;justify-content:space-between;padding:0 8px 0 0">' +
-    '<div class="sheet-title">add to the flow</div>' +
-    '<button onclick="closeSheet()" style="background:none;border:none;cursor:pointer;font-size:26px;color:rgba(40,55,50,0.3);padding:4px 8px;line-height:1;touch-action:manipulation">×</button>' +
+    '<div class="sheet-title" style="color:' + (_sheetMode==='kitchen'?'rgba(200,220,200,0.95)':'') + '">' +
+      (_sheetMode==='kitchen'?'building the plate':'add to the flow') + '</div>' +
+    '<button onclick="closeSheet()" style="background:none;border:none;cursor:pointer;font-size:26px;' +
+      'color:' + (_sheetMode==='kitchen'?'rgba(255,255,255,0.3)':'rgba(40,55,50,0.3)') + ';padding:4px 8px;line-height:1;touch-action:manipulation">×</button>' +
     '</div>' +
+    kitchenTopHTML +
 
     // Time row
     '<div style="display:flex;align-items:center;gap:8px;padding:0 18px;margin-bottom:14px">' +
@@ -3846,7 +3899,7 @@ function renderSheet() {
       '<span id="time-display" style="font-family:\'Fraunces\',serif;font-style:italic;font-weight:200;font-size:16px;color:rgba(40,55,50,0.75)">' + 
         (function(){ var d=_entryTimeVal?new Date(_entryTimeVal):new Date(); return d.toLocaleDateString('en-GB',{weekday:'short',day:'numeric',month:'short'}) + ' · ' + d.toLocaleTimeString('en-GB',{hour:'2-digit',minute:'2-digit'}); }()) +
       '</span></div>' +
-      '<span style="font-family:\'DM Mono\',monospace;font-size:9px;color:rgba(40,55,50,0.3);letter-spacing:1px;text-transform:uppercase">when</span>' +
+      '<span style="font-family:\'DM Mono\',monospace;font-size:9px;color:rgba(40,55,50,0.6);letter-spacing:1px;text-transform:uppercase">when</span>' +
       '<input id="in-time" type="datetime-local" style="flex:1;padding:8px 10px;border-radius:8px;border:1px solid rgba(40,55,50,0.12);background:rgba(255,255,255,0.55);font-family:\'DM Mono\',monospace;font-size:12px;color:rgba(40,55,50,0.7);outline:none" onchange="onTimeChange(this.value)">' +
       '<button onclick="setTimeNow()" style="padding:6px 10px;border-radius:7px;border:1px solid rgba(40,55,50,0.12);background:rgba(40,55,50,0.05);font-family:\'DM Mono\',monospace;font-size:9px;color:rgba(40,55,50,0.4);cursor:pointer">now</button>' +
     '</div>' +
@@ -3865,7 +3918,7 @@ function renderSheet() {
 
     // Meal items
     (itemsHTML ? '<div style="padding:0 18px;margin-bottom:10px">' +
-      '<div style="font-family:\'DM Mono\',monospace;font-size:9px;color:rgba(40,55,50,0.3);letter-spacing:1px;text-transform:uppercase;margin-bottom:6px">' +
+      '<div style="font-family:\'DM Mono\',monospace;font-size:9px;color:rgba(40,55,50,0.65);letter-spacing:1px;text-transform:uppercase;margin-bottom:6px">' +
         'meal · ' + totalCarbs.toFixed(0) + 'g carbs' +
         (avgGI && _mealItems.length > 0 ? ' · <span style="color:' + giCol + '">' + giLabel + ' (GI ' + avgGI.toFixed(0) + ')</span>' : '') +
       '</div>' +
@@ -3884,7 +3937,7 @@ function renderSheet() {
     // Manual insulin entry (if no meal)
     (totalCarbs === 0 ?
       '<div style="padding:0 18px;margin-bottom:12px">' +
-        '<div style="font-family:\'DM Mono\',monospace;font-size:9px;color:rgba(40,55,50,0.3);letter-spacing:1px;text-transform:uppercase;margin-bottom:8px">manual bolus / correction</div>' +
+        '<div style="font-family:\'DM Mono\',monospace;font-size:9px;color:rgba(40,55,50,0.65);letter-spacing:1px;text-transform:uppercase;margin-bottom:8px">manual bolus / correction</div>' +
         '<div style="display:flex;align-items:center;gap:10px">' +
           '<div style="width:8px;height:8px;border-radius:50%;background:rgba(40,85,200,0.8);flex-shrink:0"></div>' +
           '<input id="in-i" type="number" inputmode="decimal" placeholder="units" min="0" max="20" step="0.5"' +
@@ -3926,7 +3979,7 @@ function buildRecentMealsHTML() {
       m.name.slice(0,32) + ' · ' + m.totalCarbs + 'g</button>';
   }).join('');
   return '<div style="padding:0 18px;margin-bottom:12px">' +
-    '<div style="font-family:\'DM Mono\',monospace;font-size:9px;color:rgba(40,55,50,0.25);letter-spacing:1px;text-transform:uppercase;margin-bottom:6px">recent meals</div>' +
+    '<div style="font-family:\'DM Mono\',monospace;font-size:9px;color:rgba(40,55,50,0.6);letter-spacing:1px;text-transform:uppercase;margin-bottom:6px">recent meals</div>' +
     '<div style="display:flex;flex-wrap:wrap;gap:5px">' + chips + '</div>' +
   '</div>';
 }
@@ -3975,35 +4028,33 @@ function addFoodItem(name) {
 }
 
 function addCustomFood(name) {
-  // Remove any existing overlay
   var ex = document.getElementById('food-add-overlay');
   if (ex) ex.remove();
 
-  // GI lookup table for common food types
+  var lname = name.toLowerCase();
   var giHints = [
-    {words:['white','bread','baguette','roll'], gi:75},
-    {words:['brown','wholemeal','rye'], gi:55},
+    {words:['white','bread','baguette','roll','naan','pitta','wrap','toast'], gi:75},
+    {words:['brown','wholemeal','rye','sourdough'], gi:55},
     {words:['rice'], gi:64},
-    {words:['pasta','noodle','spaghetti'], gi:48},
-    {words:['potato','chips','fries'], gi:78},
+    {words:['pasta','noodle','spaghetti','macaroni'], gi:48},
+    {words:['potato','chips','fries','parsnip'], gi:78},
     {words:['sweet potato'], gi:44},
     {words:['oat','porridge'], gi:55},
     {words:['banana'], gi:52},
-    {words:['apple','pear'], gi:36},
+    {words:['apple','pear','berry'], gi:36},
     {words:['orange','mango','grape'], gi:52},
-    {words:['milk','yoghurt'], gi:36},
+    {words:['milk','yoghurt','yogurt'], gi:36},
     {words:['juice'], gi:65},
-    {words:['cola','fizzy','lucozade'], gi:63},
+    {words:['cola','fizzy','lucozade','sports'], gi:65},
     {words:['chocolate'], gi:40},
-    {words:['biscuit','cookie','cake'], gi:65},
+    {words:['biscuit','cookie','cake','donut'], gi:65},
     {words:['cereal','cornflake','weetabix'], gi:72},
     {words:['bean','lentil','chickpea'], gi:30},
-    {words:['carrot','pea'], gi:47},
-    {words:['glucose','dextrose','tab'], gi:100},
-    {words:['honey','jam'], gi:58},
+    {words:['glucose','dextrose','jelly','gummy','gummie','vitamin','supplement'], gi:95},
+    {words:['honey','jam','syrup'], gi:65},
+    {words:['meat','chicken','beef','fish','egg','cheese','butter','oil','cream','bacon'], gi:0},
   ];
-  var lname = name.toLowerCase();
-  var suggestGI = 55; // default medium
+  var suggestGI = 55;
   for (var i=0; i<giHints.length; i++) {
     if (giHints[i].words.some(function(w){return lname.indexOf(w)>=0;})) {
       suggestGI = giHints[i].gi; break;
@@ -4012,53 +4063,105 @@ function addCustomFood(name) {
 
   var el = document.createElement('div');
   el.id = 'food-add-overlay';
-  el.style.cssText = 'position:fixed;inset:0;z-index:80;background:rgba(3,5,20,0.9);backdrop-filter:blur(14px);display:flex;flex-direction:column;align-items:center;justify-content:center;padding:24px;transition:opacity .2s;opacity:0';
+  el.style.cssText = 'position:fixed;inset:0;z-index:80;background:rgba(3,5,20,0.95);backdrop-filter:blur(14px);display:flex;flex-direction:column;align-items:center;justify-content:center;padding:24px;transition:opacity .2s;opacity:0;overflow-y:auto;-webkit-overflow-scrolling:touch';
 
-  el.innerHTML = '<div style="max-width:320px;width:100%">' +
-    '<div style="font-family:\'Fraunces\',serif;font-style:italic;font-weight:200;font-size:20px;color:rgba(180,220,200,0.9);margin-bottom:4px">add food</div>' +
-    '<div style="font-family:\'DM Mono\',monospace;font-size:11px;color:rgba(100,160,140,0.5);margin-bottom:20px">' + name + '</div>' +
+  var inpStyle = 'width:100%;padding:11px 14px;border-radius:9px;border:1px solid rgba(255,255,255,0.15);background:rgba(255,255,255,0.08);font-family:\'DM Mono\',monospace;font-size:15px;color:rgba(255,255,255,0.9);text-align:center;outline:none;box-sizing:border-box';
+  var labelStyle = 'font-family:\'DM Mono\',monospace;font-size:9px;letter-spacing:1px;text-transform:uppercase;color:rgba(255,255,255,0.45);margin-bottom:6px;display:block';
+  var subStyle = 'font-family:\'DM Mono\',monospace;font-size:8px;color:rgba(255,255,255,0.3)';
 
-    '<div style="display:flex;gap:10px;margin-bottom:14px">' +
-      '<div style="flex:1">' +
-        '<div style="font-family:\'DM Mono\',monospace;font-size:8px;letter-spacing:1px;text-transform:uppercase;color:rgba(40,55,50,0.4);margin-bottom:5px">carbs per 100g</div>' +
-        '<input id="new-food-c100" type="number" inputmode="decimal" placeholder="e.g. 28" min="0" max="100" step="0.5" ' +
-          'style="width:100%;padding:10px;border-radius:8px;border:1px solid rgba(62,180,120,0.2);background:rgba(62,180,120,0.05);font-family:\'DM Mono\',monospace;font-size:16px;color:rgba(62,180,120,0.9);text-align:center;outline:none">' +
-      '</div>' +
-      '<div style="flex:1">' +
-        '<div style="font-family:\'DM Mono\',monospace;font-size:8px;letter-spacing:1px;text-transform:uppercase;color:rgba(40,55,50,0.4);margin-bottom:5px">GI <span style="opacity:0.5;font-size:7px">(suggested)</span></div>' +
-        '<input id="new-food-gi" type="number" inputmode="decimal" placeholder="' + suggestGI + '" min="0" max="100" step="1" value="' + suggestGI + '" ' +
-          'style="width:100%;padding:10px;border-radius:8px;border:1px solid rgba(200,140,60,0.2);background:rgba(200,140,60,0.05);font-family:\'DM Mono\',monospace;font-size:16px;color:rgba(200,140,60,0.8);text-align:center;outline:none">' +
+  el.innerHTML =
+    '<div style="max-width:320px;width:100%">' +
+    '<div style="font-family:\'Fraunces\',serif;font-style:italic;font-weight:200;font-size:22px;color:rgba(180,220,200,0.95);margin-bottom:3px">add food</div>' +
+    '<div style="font-family:\'DM Mono\',monospace;font-size:12px;color:rgba(100,200,160,0.6);margin-bottom:22px">' + name + '</div>' +
+
+    // Carbs per 100g
+    '<div style="margin-bottom:14px">' +
+      '<label style="'+labelStyle+'">carbs per 100g <span style="'+subStyle+'">· enter 0 for meat, eggs, cheese</span></label>' +
+      '<input id="new-food-c100" type="number" inputmode="decimal" placeholder="e.g. 28" min="0" max="100" step="0.1" oninput="updateAddFoodPreview()" style="'+inpStyle+';border-color:rgba(62,180,120,0.4);color:rgba(100,220,160,0.95)">' +
+    '</div>' +
+
+    // GI
+    '<div style="margin-bottom:6px">' +
+      '<label style="'+labelStyle+'">glycaemic index (GI) <span style="'+subStyle+'">· how fast it absorbs</span></label>' +
+      '<input id="new-food-gi" type="number" inputmode="decimal" placeholder="0–100" min="0" max="100" step="1" value="' + suggestGI + '" oninput="updateAddFoodPreview()" style="'+inpStyle+';border-color:rgba(200,160,60,0.4);color:rgba(220,180,80,0.95)">' +
+      '<div id="new-food-gi-note" style="font-family:\'DM Mono\',monospace;font-size:9px;margin-top:5px;text-align:center;color:rgba(200,160,60,0.7)">' +
+        (suggestGI>=90?'⚡ almost pure sugar':suggestGI>=70?'↑ fast':suggestGI>=55?'→ medium':suggestGI>0?'↓ slow':'no significant carbs') +
       '</div>' +
     '</div>' +
 
-    '<div style="font-family:\'DM Mono\',monospace;font-size:8px;color:rgba(40,55,50,0.25);margin-bottom:16px;line-height:1.6">GI: low&lt;55 · medium 55–70 · high&gt;70. Suggested based on food name — adjust if you know it.</div>' +
+    '<div style="font-family:\'DM Mono\',monospace;font-size:8px;color:rgba(255,255,255,0.25);margin-bottom:16px;line-height:1.7">low &lt;55 · medium 55–70 · high &gt;70 · 95+ = pure sugar</div>' +
+
+    // Serving sizes
+    '<div style="display:flex;gap:10px;margin-bottom:14px">' +
+      '<div style="flex:1">' +
+        '<label style="'+labelStyle+'">typical serving (g)</label>' +
+        '<input id="new-food-g_serv" type="number" inputmode="decimal" placeholder="e.g. 30" min="0" max="2000" step="1" oninput="updateAddFoodPreview()" style="'+inpStyle+'">' +
+      '</div>' +
+      '<div style="flex:1">' +
+        '<label style="'+labelStyle+'">weight each (g)</label>' +
+        '<input id="new-food-g_each" type="number" inputmode="decimal" placeholder="e.g. 2" min="0" max="1000" step="0.1" oninput="updateAddFoodPreview()" style="'+inpStyle+'">' +
+      '</div>' +
+    '</div>' +
+
+    // Live preview
+    '<div id="new-food-preview" style="font-family:\'DM Mono\',monospace;font-size:10px;color:rgba(100,200,160,0.7);text-align:center;margin-bottom:16px;min-height:16px"></div>' +
 
     '<div style="display:flex;gap:8px">' +
       '<button onclick="saveCustomFood(\'' + encodeURIComponent(name) + '\')" ' +
-        'style="flex:1;padding:12px;border-radius:9px;border:1px solid rgba(62,180,120,0.3);background:rgba(62,180,120,0.08);font-family:\'Fraunces\',serif;font-style:italic;font-weight:200;font-size:16px;color:rgba(62,180,120,0.9);cursor:pointer">save + add</button>' +
+        'style="flex:1;padding:13px;border-radius:10px;border:1px solid rgba(62,180,120,0.4);background:rgba(62,180,120,0.12);font-family:\'Fraunces\',serif;font-style:italic;font-weight:200;font-size:17px;color:rgba(100,220,160,0.95);cursor:pointer">save + add</button>' +
       '<button onclick="document.getElementById(\'food-add-overlay\').remove()" ' +
-        'style="padding:12px 16px;border-radius:9px;border:1px solid rgba(40,55,50,0.12);background:transparent;font-family:\'DM Mono\',monospace;font-size:10px;color:rgba(40,55,50,0.4);cursor:pointer">cancel</button>' +
+        'style="padding:13px 16px;border-radius:10px;border:1px solid rgba(255,255,255,0.12);background:transparent;font-family:\'DM Mono\',monospace;font-size:10px;color:rgba(255,255,255,0.4);cursor:pointer">cancel</button>' +
     '</div></div>';
 
-  el.addEventListener('click', function(e){ if(e.target===el){ el.remove(); } });
+  el.addEventListener('click', function(e){ if(e.target===el) el.remove(); });
   el.addEventListener('keydown', function(e){ if(e.key==='Escape') el.remove(); });
   document.body.appendChild(el);
-  requestAnimationFrame(function(){ el.style.opacity = '1'; });
+  requestAnimationFrame(function(){ el.style.opacity='1'; });
   setTimeout(function(){ var inp=document.getElementById('new-food-c100'); if(inp) inp.focus(); }, 300);
 }
 
-function saveCustomFood(encodedName) {
-  var name   = decodeURIComponent(encodedName);
-  var carbs  = parseFloat(document.getElementById('new-food-c100').value) || 0;
-  var gi     = parseInt(document.getElementById('new-food-gi').value) || 55;
-  var el     = document.getElementById('food-add-overlay');
-  if (el) el.remove();
-  if (carbs > 0) {
-    var f = {name: name, c100: carbs, gi: gi, cat: 'custom'};
-    FOOD_LIBRARY.push(f);
-    saveFoodLibrary();
-    addFoodItem(name);
+function updateAddFoodPreview() {
+  var c100  = parseFloat((document.getElementById('new-food-c100')||{}).value)||0;
+  var gi    = parseInt((document.getElementById('new-food-gi')||{}).value)||0;
+  var gServ = parseFloat((document.getElementById('new-food-g_serv')||{}).value)||0;
+  var gEach = parseFloat((document.getElementById('new-food-g_each')||{}).value)||0;
+  var noteEl = document.getElementById('new-food-gi-note');
+  var preEl  = document.getElementById('new-food-preview');
+  if (noteEl) {
+    var giNote, giCol;
+    if (c100 >= 80 && gi < 70) {
+      giNote = '⚡ high carb density — consider GI 80+';
+      giCol  = 'rgba(255,120,40,0.8)';
+    } else {
+      giNote = gi>=90?'⚡ almost pure sugar':gi>=70?'↑ fast absorbing':gi>=55?'→ medium speed':gi>0?'↓ slow absorbing':'no significant carbs';
+      giCol  = gi>=70?'rgba(210,80,40,0.8)':gi>=55?'rgba(200,140,30,0.8)':gi>0?'rgba(60,160,90,0.8)':'rgba(150,150,150,0.5)';
+    }
+    noteEl.textContent = giNote;
+    noteEl.style.color = giCol;
   }
+  if (preEl) {
+    var parts = [];
+    if (c100>0 && gServ>0) parts.push('serving: '+(c100*gServ/100).toFixed(1)+'g carbs');
+    if (c100>0 && gEach>0) parts.push('each: '+(c100*gEach/100).toFixed(1)+'g carbs');
+    preEl.textContent = parts.join(' · ');
+  }
+}
+
+function saveCustomFood(encodedName) {
+  var name  = decodeURIComponent(encodedName);
+  var carbs = parseFloat(document.getElementById('new-food-c100').value) || 0;
+  var gi    = parseInt(document.getElementById('new-food-gi').value) || 0;
+  var gServ = parseFloat((document.getElementById('new-food-g_serv')||{}).value) || null;
+  var gEach = parseFloat((document.getElementById('new-food-g_each')||{}).value) || null;
+  var el    = document.getElementById('food-add-overlay');
+  if (el) el.remove();
+  // Allow zero-carb foods (meat, cheese, eggs)
+  var f = {name:name, c100:carbs, gi:gi, cat:'custom'};
+  if (gServ) f.g_serv = gServ;
+  if (gEach) f.g_each = gEach;
+  FOOD_LIBRARY.push(f);
+  saveFoodLibrary();
+  addFoodItem(name);
 }
 
 function updateItemCarbs(idx, val) {
