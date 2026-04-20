@@ -3111,25 +3111,6 @@ function renderKitchen() {
     kitchenTopHTML = _kDiv.outerHTML + whisper;
   }
 
-  sheet.innerHTML =
-    '<div class="handle"></div>' +
-    '<div style="display:flex;align-items:center;justify-content:space-between;padding:0 8px 0 0;margin-bottom:4px">' +
-      '<div style="font-family:\'Fraunces\',serif;font-style:italic;font-weight:200;font-size:22px;color:rgba(180,220,200,0.9)">building Oskar\'s plate</div>' +
-      '<button onclick="closeKitchen()" style="background:none;border:none;cursor:pointer;font-size:26px;color:rgba(255,255,255,0.25);padding:4px;line-height:1">×</button>' +
-    '</div>' +
-    // BG live strip
-    '<div style="display:flex;align-items:center;gap:10px;padding:8px 12px;border-radius:10px;background:rgba(255,255,255,0.04);margin-bottom:14px">' +
-      '<div style="font-family:\'Fraunces\',serif;font-weight:200;font-size:22px;color:'+(bg<3.9?'rgba(100,140,255,0.9)':bg>10?'rgba(255,120,40,0.9)':'rgba(62,180,120,0.9)')+'">'+bg.toFixed(1)+'</div>' +
-      '<div style="font-family:\'DM Mono\',monospace;font-size:9px;color:rgba(255,255,255,0.3)">mmol · live</div>' +
-      '<div style="flex:1"></div>' +
-      '<button onclick="openRecipeManager()" style="padding:5px 10px;border-radius:7px;border:1px solid rgba(180,160,60,0.25);background:rgba(180,160,60,0.06);font-family:\'DM Mono\',monospace;font-size:9px;color:rgba(200,180,70,0.7);cursor:pointer">recipes</button>' +
-    '</div>' +
-    whisperHTML +
-    searchHTML +
-    recipeChips +
-    (itemsHTML ? '<div style="margin-bottom:12px">'+itemsHTML+'</div>' : '') +
-    bolusHTML +
-    '<div style="height:max(20px,env(safe-area-inset-bottom,20px))"></div>';
 }
 
 function searchPlateFood(q) {
