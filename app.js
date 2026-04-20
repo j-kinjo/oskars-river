@@ -6277,6 +6277,22 @@ async function sendWhisper() {
   if (!q) return;
   var resp = document.getElementById('whisper-response');
   if (!resp) return;
+
+  // Route fix: and add: prefixes to repair system instead of clinical whisper
+  var lq = q.toLowerCase();
+  if (lq.startsWith('fix:') || lq.startsWith('bug:')) {
+    resp.textContent = 'sending to repair system...';
+    await sendBugReport(q.slice(q.indexOf(':')+1).trim());
+    resp.textContent = (document.getElementById('repair-status')||{}).textContent || 'sent';
+    return;
+  }
+  if (lq.startsWith('add:') || lq.startsWith('feature:') || lq.startsWith('build:')) {
+    resp.textContent = 'sending feature request...';
+    await sendFeatureRequest(q.slice(q.indexOf(':')+1).trim());
+    resp.textContent = (document.getElementById('repair-status')||{}).textContent || 'queued';
+    return;
+  }
+
   resp.textContent = '…';
 
   // Build context
@@ -6424,65 +6440,252 @@ function openDebugPanel() {
   if (window.__updateDebugPanel) window.__updateDebugPanel();
 }
 
-// ── AUTO-DEPLOY — push app.js to GitHub via Cloudflare Worker ───────
-var _deployStatus = null;
+// ═══════════════════════════════════════════════════════════════════════
+//  RIVER REPAIR SYSTEM
+//  Bug reports, feature requests, and whisper-driven fixes
+//  Routes via Cloudflare Worker → Claude → GitHub commit → auto-deploy
+// ═══════════════════════════════════════════════════════════════════════
 
+var PROXY_BASE = 'https://orange-surf-6f98.john-king-uk.workers.dev';
+var _featureQueue = []; // pending feature requests
+
+// ── Build context snapshot for bug/feature reports ────────────────────
+function buildReportContext() {
+  var d = (typeof dataAt === 'function') ? dataAt(viewTime) : {};
+  return {
+    build:     '__BUILD_ID__',
+    bg:        d.bg ? d.bg.toFixed(1) : '?',
+    iob:       d.iob ? d.iob.toFixed(2) : '0',
+    cob:       d.cob ? d.cob.toFixed(1) : '0',
+    sheetMode: typeof _sheetMode !== 'undefined' ? _sheetMode : 'unknown',
+    errors:    (window.__debugLog || []).slice(0, 5).join(' | '),
+    userAgent: navigator.userAgent.slice(0, 80),
+    ts:        new Date().toISOString(),
+  };
+}
+
+// ── Build a function index of app.js for targeted patching ────────────
+// Returns array of {name, startLine, preview} — sent to Claude so it
+// can request just the relevant section rather than the whole file
+function buildFunctionIndex() {
+  // We can't read our own source at runtime, but we can expose key function names
+  // The Worker fetches app.js and does the sectioning server-side
+  var fns = [];
+  var knownFns = [
+    'renderSheet', 'renderKitchen', 'openSheet', 'closeSheet',
+    'logMealEntry', 'logCorrection', 'logHypoTreatment',
+    'addFoodItem', 'addCustomFood', 'saveCustomFood', 'searchFood',
+    'drawGasCloud', 'drawBGTrail', 'drawOrb', 'drawEquilibriumZone',
+    'buildSmartForecast', 'drawUnknownForce',
+    'syncNow', 'syncPushEvents', 'syncPullEvents',
+    'openRecipeManager', 'cookRecipe', 'saveCookInstance',
+    'openPeopleInFlow', 'openKitchen', 'openDebugPanel',
+    'sendWhisper', 'deployToGitHub',
+  ];
+  // Return names that actually exist in window scope
+  knownFns.forEach(function(fn) {
+    if (typeof window[fn] === 'function') fns.push(fn);
+  });
+  return fns;
+}
+
+// ── Send a bug report → Worker → Claude → GitHub ─────────────────────
+async function sendBugReport(description) {
+  var ctx = buildReportContext();
+  var fns = buildFunctionIndex();
+
+  var statusEl = document.getElementById('repair-status');
+  if (statusEl) { statusEl.textContent = 'sending to Claude...'; statusEl.style.color = 'rgba(200,200,100,0.8)'; }
+
+  try {
+    var resp = await fetch(PROXY_BASE + '/fix', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        error_msg:   description,
+        context:     JSON.stringify(ctx),
+        known_functions: fns,
+        type:        'bug',
+      })
+    });
+
+    var data = await resp.json();
+
+    if (statusEl) {
+      if (data.deployed) {
+        statusEl.textContent = '✓ fix deployed · building...';
+        statusEl.style.color = 'rgba(62,180,120,0.9)';
+        showToast('fix on the way · ' + (data.diagnosis || ''));
+      } else if (data.diagnosis) {
+        statusEl.textContent = 'diagnosed: ' + data.diagnosis.slice(0, 60);
+        statusEl.style.color = 'rgba(200,200,100,0.8)';
+        showToast('Claude: ' + data.diagnosis);
+      } else {
+        statusEl.textContent = data.error || 'no fix generated';
+        statusEl.style.color = 'rgba(220,80,60,0.8)';
+      }
+    }
+  } catch(err) {
+    console.warn('[repair] bug report failed:', err.message);
+    if (statusEl) { statusEl.textContent = 'failed · ' + err.message.slice(0, 40); statusEl.style.color = 'rgba(220,80,60,0.8)'; }
+  }
+}
+
+// ── Send a feature request → Worker → Claude → GitHub ────────────────
+async function sendFeatureRequest(description) {
+  var ctx = buildReportContext();
+  var fns = buildFunctionIndex();
+
+  var statusEl = document.getElementById('repair-status');
+  if (statusEl) { statusEl.textContent = 'asking Claude...'; statusEl.style.color = 'rgba(200,200,100,0.8)'; }
+
+  try {
+    var resp = await fetch(PROXY_BASE + '/fix', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        error_msg:   description,
+        context:     JSON.stringify(ctx),
+        known_functions: fns,
+        type:        'feature',
+      })
+    });
+
+    var data = await resp.json();
+
+    if (statusEl) {
+      if (data.deployed) {
+        statusEl.textContent = '✓ feature deployed · building...';
+        statusEl.style.color = 'rgba(62,180,120,0.9)';
+        showToast('feature added · ' + (data.fix_description || ''));
+      } else {
+        statusEl.textContent = data.note || data.error || 'queued';
+        statusEl.style.color = 'rgba(180,160,60,0.8)';
+        if (data.diagnosis) showToast('plan: ' + data.diagnosis);
+      }
+    }
+  } catch(err) {
+    console.warn('[repair] feature request failed:', err.message);
+    if (statusEl) { statusEl.textContent = 'failed · ' + err.message.slice(0, 40); statusEl.style.color = 'rgba(220,80,60,0.8)'; }
+  }
+}
+
+// ── Extended debug panel ──────────────────────────────────────────────
+function openDebugPanel() {
+  var p = document.getElementById('debug-panel');
+  if (p) { p.remove(); return; }
+
+  var d   = (typeof dataAt === 'function') ? dataAt(viewTime) : {};
+  var age = (typeof _lastReadingT !== 'undefined' && _lastReadingT > 0)
+    ? Math.round((Date.now() - _lastReadingT) / 60000) + ' min ago'
+    : 'unknown';
+  var src = (typeof _sourceId !== 'undefined') ? _sourceId : 'none';
+  var hist = (typeof HISTORY_RAW !== 'undefined') ? HISTORY_RAW.length : '?';
+
+  var el = document.createElement('div');
+  el.id  = 'debug-panel';
+  el.style.cssText = [
+    'position:fixed', 'bottom:80px', 'left:8px', 'right:8px', 'z-index:200',
+    'background:rgba(0,0,0,0.95)', 'border:1px solid rgba(255,255,255,0.1)',
+    'border-radius:12px', 'padding:12px', 'font-family:monospace', 'font-size:10px',
+    'color:rgba(200,220,200,0.85)', 'max-height:70vh', 'overflow-y:auto',
+    'touch-action:pan-y', 'pointer-events:auto',
+  ].join(';');
+
+  el.innerHTML =
+    // Header row
+    '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">' +
+      '<span style="color:rgba(62,207,160,0.9);font-weight:bold;font-size:11px">🌊 River Debug</span>' +
+      '<div style="display:flex;gap:6px">' +
+        '<button onclick="deployToGitHub()" style="padding:3px 8px;border-radius:6px;border:1px solid rgba(62,207,160,0.3);background:rgba(62,207,160,0.08);color:rgba(62,207,160,0.8);font-family:monospace;font-size:9px;cursor:pointer">⬆ deploy</button>' +
+        '<button onclick="document.getElementById(\'debug-panel\').remove()" style="background:none;border:none;color:rgba(255,255,255,0.4);cursor:pointer;font-size:18px;padding:0;line-height:1">×</button>' +
+      '</div>' +
+    '</div>' +
+
+    // Status strip
+    '<div style="color:rgba(150,200,150,0.6);margin-bottom:8px;line-height:1.7;font-size:9px">' +
+      '__BUILD_ID__ · ' + src + ' · last: ' + age + ' · ' + hist + ' readings<br>' +
+      'BG: ' + (d.bg ? d.bg.toFixed(1) : '?') +
+      ' IOB: ' + (d.iob ? d.iob.toFixed(2) : '?') +
+      ' COB: ' + (d.cob ? d.cob.toFixed(1) : '?') +
+    '</div>' +
+
+    // Error log
+    '<div id="debug-content" style="margin-bottom:10px;min-height:20px;font-size:9px;line-height:1.5"></div>' +
+
+    // Divider
+    '<div style="border-top:1px solid rgba(255,255,255,0.08);margin-bottom:10px"></div>' +
+
+    // Bug report
+    '<div style="margin-bottom:8px">' +
+      '<div style="font-size:8px;letter-spacing:1px;text-transform:uppercase;color:rgba(255,255,255,0.3);margin-bottom:5px">report a bug</div>' +
+      '<div style="display:flex;gap:6px">' +
+        '<input id="bug-input" type="text" placeholder="describe what broke..." ' +
+          'style="flex:1;padding:6px 8px;border-radius:7px;border:1px solid rgba(255,80,80,0.25);background:rgba(255,80,80,0.05);font-family:monospace;font-size:10px;color:rgba(255,200,200,0.85);outline:none" ' +
+          'onkeydown="if(event.key===\'Enter\'){sendBugReport(this.value);this.value=\'\'}">' +
+        '<button onclick="var i=document.getElementById(\'bug-input\');sendBugReport(i.value);i.value=\'\'" ' +
+          'style="padding:6px 10px;border-radius:7px;border:1px solid rgba(255,80,80,0.25);background:rgba(255,80,80,0.08);color:rgba(255,150,150,0.8);font-family:monospace;font-size:9px;cursor:pointer">fix it</button>' +
+      '</div>' +
+    '</div>' +
+
+    // Feature request
+    '<div style="margin-bottom:10px">' +
+      '<div style="font-size:8px;letter-spacing:1px;text-transform:uppercase;color:rgba(255,255,255,0.3);margin-bottom:5px">request a feature</div>' +
+      '<div style="display:flex;gap:6px">' +
+        '<input id="feature-input" type="text" placeholder="describe what you want..." ' +
+          'style="flex:1;padding:6px 8px;border-radius:7px;border:1px solid rgba(62,130,220,0.25);background:rgba(62,130,220,0.05);font-family:monospace;font-size:10px;color:rgba(150,180,255,0.85);outline:none" ' +
+          'onkeydown="if(event.key===\'Enter\'){sendFeatureRequest(this.value);this.value=\'\'}">' +
+        '<button onclick="var i=document.getElementById(\'feature-input\');sendFeatureRequest(i.value);i.value=\'\'" ' +
+          'style="padding:6px 10px;border-radius:7px;border:1px solid rgba(62,130,220,0.25);background:rgba(62,130,220,0.08);color:rgba(150,180,255,0.8);font-family:monospace;font-size:9px;cursor:pointer">build it</button>' +
+      '</div>' +
+    '</div>' +
+
+    // Status line
+    '<div id="repair-status" style="font-size:9px;color:rgba(255,255,255,0.3);min-height:14px;text-align:center"></div>';
+
+  document.body.appendChild(el);
+  if (window.__updateDebugPanel) window.__updateDebugPanel();
+}
+
+
+
+
+// ── DEPLOY — push current app.js to GitHub ───────────────────────────
 async function deployToGitHub() {
   var btn = document.querySelector('[onclick="deployToGitHub()"]');
   if (btn) { btn.textContent = '⬆ deploying...'; btn.disabled = true; }
+  var statusEl = document.getElementById('repair-status');
+  if (statusEl) { statusEl.textContent = 'fetching current build...'; statusEl.style.color = 'rgba(200,200,100,0.8)'; }
 
   try {
-    // Fetch current app.js from GitHub raw
     var rawResp = await fetch('https://raw.githubusercontent.com/j-kinjo/oskars-river/main/app.js?t=' + Date.now());
-    if (!rawResp.ok) throw new Error('Could not fetch current app.js');
+    if (!rawResp.ok) throw new Error('Could not fetch app.js (' + rawResp.status + ')');
     var currentCode = await rawResp.text();
 
-    // Send to worker /deploy endpoint
-    var proxyBase = 'https://orange-surf-6f98.john-king-uk.workers.dev';
-    var resp = await fetch(proxyBase + '/deploy', {
+    if (statusEl) statusEl.textContent = 'committing to GitHub...';
+
+    var resp = await fetch(PROXY_BASE + '/deploy', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         path: 'app.js',
         content: currentCode,
-        message: 'manual deploy from debug panel',
+        message: 'manual deploy from debug panel · build __BUILD_ID__',
       })
     });
 
     var data = await resp.json();
     if (data.ok) {
-      showToast('deployed ✓ · building...');
-      if (btn) { btn.textContent = '✓ deployed'; }
+      if (statusEl) { statusEl.textContent = '✓ committed · building ~30s'; statusEl.style.color = 'rgba(62,180,120,0.9)'; }
+      if (btn) { btn.textContent = '✓ done'; }
+      showToast('deployed · building...');
     } else {
-      throw new Error(data.error || 'Deploy failed');
+      throw new Error(data.error || 'deploy failed');
     }
   } catch(err) {
-    showToast('deploy failed · ' + err.message.slice(0,40));
-    console.error('[deploy]', err);
-    if (btn) { btn.textContent = '✗ failed'; btn.disabled = false; }
-  }
-}
-
-async function reportAndFix(errorMsg) {
-  var proxyBase = 'https://orange-surf-6f98.john-king-uk.workers.dev';
-  showToast('sending to Claude...');
-  try {
-    var resp = await fetch(proxyBase + '/fix', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        error_msg: errorMsg,
-        context: 'Oskar\'s River app.js build ' + ('__BUILD_ID__'),
-      })
-    });
-    var data = await resp.json();
-    if (data.deployed) {
-      showToast('fix deployed ✓ · ' + (data.diagnosis || ''));
-    } else {
-      showToast('diagnosis: ' + (data.diagnosis || data.error || 'unknown'));
-    }
-  } catch(err) {
-    showToast('fix failed · ' + err.message.slice(0,40));
+    console.warn('[deploy]', err.message);
+    if (statusEl) { statusEl.textContent = '✗ ' + err.message.slice(0, 50); statusEl.style.color = 'rgba(220,80,60,0.8)'; }
+    if (btn) { btn.textContent = '⬆ deploy'; btn.disabled = false; }
   }
 }
 
