@@ -4293,6 +4293,11 @@ function logMealEntry(carbsOnly) {
     u = inp ? (parseFloat(inp.value) || 0) : 0;
   }
 
+  // Calculate avgGI first — used by suggestEatWait below
+  var avgGI = _mealItems.length > 0
+    ? _mealItems.reduce(function(s,i){return s+(i.food.gi||55)*i.carbs;},0) / Math.max(totalCarbs,1)
+    : 55;
+
   // Insulin is given NOW (bolus time)
   // Carbs arrive LATER (after wait time)
   var eatWaitNow = _eatWaitOverride !== null ? _eatWaitOverride : suggestEatWait(dataAt(t).bg || 7, avgGI);
@@ -4306,9 +4311,6 @@ function logMealEntry(carbsOnly) {
   }
 
   // Log carbs at eat time — include per-food breakdown for GI-aware rendering
-  var avgGI = _mealItems.length > 0
-    ? _mealItems.reduce(function(s,i){return s+(i.food.gi||55)*i.carbs;},0) / Math.max(totalCarbs,1)
-    : 55;
   var foodItems = _mealItems.map(function(i){
     return {name:i.food.name, carbs:i.carbs, gi:i.food.gi||55, g:i.grams};
   });
@@ -5313,16 +5315,16 @@ function openCorrectionLog(){
   s+='<button onclick="closeCorrectionLog()" style="background:none;border:none;cursor:pointer;font-size:24px;color:rgba(255,255,255,0.2);padding:4px;touch-action:manipulation">×</button>';
   s+='</div>';
   s+=timePickerHTML('corr-time', _corrDefault, false);
-  s+='<div style="font-family:\'DM Mono\',monospace;font-size:9px;letter-spacing:1.5px;text-transform:uppercase;color:rgba(180,140,60,0.35);text-align:center;margin-bottom:20px">bg '+d.bg.toFixed(1)+' mmol &middot; isf 1:'+ISF.toFixed(0)+'</div>';
+  s+='<div style="font-family:\'DM Mono\',monospace;font-size:9px;letter-spacing:1.5px;text-transform:uppercase;color:rgba(180,140,60,0.7);text-align:center;margin-bottom:20px">bg '+d.bg.toFixed(1)+' mmol &middot; isf 1:'+ISF.toFixed(0)+'</div>';
   s+='<div style="text-align:center;margin-bottom:20px">';
   s+='<div style="font-family:\'Fraunces\',serif;font-weight:200;font-size:52px;color:rgba(220,170,80,0.95);letter-spacing:-2px">'+sug.toFixed(1)+'</div>';
-  s+='<div style="font-family:\'DM Mono\',monospace;font-size:10px;color:rgba(180,140,60,0.4)">suggested units</div></div>';
+  s+='<div style="font-family:\'DM Mono\',monospace;font-size:10px;color:rgba(180,140,60,0.7)">suggested units</div></div>';
   s+='<div style="display:flex;align-items:center;gap:10px;margin-bottom:20px">';
-  s+='<span style="font-family:\'DM Mono\',monospace;font-size:9px;letter-spacing:1px;text-transform:uppercase;color:rgba(180,140,60,0.4)">actual</span>';
+  s+='<span style="font-family:\'DM Mono\',monospace;font-size:9px;letter-spacing:1px;text-transform:uppercase;color:rgba(180,140,60,0.75)">actual</span>';
   s+='<input id="corr-units" type="number" step="0.5" min="0" max="10" value="'+sug.toFixed(1)+'" style="flex:1;padding:10px;border-radius:8px;border:1px solid rgba(180,140,60,0.2);background:rgba(40,30,10,0.4);font-family:\'DM Mono\',monospace;font-size:18px;color:rgba(220,180,80,0.9);text-align:center;outline:none">';
-  s+='<span style="font-family:\'DM Mono\',monospace;font-size:13px;color:rgba(180,140,60,0.5)">U</span></div>';
+  s+='<span style="font-family:\'DM Mono\',monospace;font-size:13px;color:rgba(180,140,60,0.75)">U</span></div>';
   s+='<button onclick="logCorrection()" style="width:100%;padding:14px;border-radius:10px;border:1px solid rgba(180,140,60,0.25);background:rgba(40,30,10,0.5);font-family:\'Fraunces\',serif;font-style:italic;font-weight:200;font-size:17px;color:rgba(220,170,80,0.85);cursor:pointer;margin-bottom:12px">log correction</button>';
-  s+='<div style="text-align:center"><button onclick="closeCorrectionLog()" style="background:none;border:none;cursor:pointer;font-family:\'DM Mono\',monospace;font-size:9px;letter-spacing:1px;text-transform:uppercase;color:rgba(180,140,60,0.25);padding:4px">cancel</button></div></div>';
+  s+='<div style="text-align:center"><button onclick="closeCorrectionLog()" style="background:none;border:none;cursor:pointer;font-family:\'DM Mono\',monospace;font-size:9px;letter-spacing:1px;text-transform:uppercase;color:rgba(180,140,60,0.55);padding:4px">cancel</button></div></div>';
   el.innerHTML=s; document.body.appendChild(el);
   requestAnimationFrame(function(){el.style.opacity='1';});
 }
