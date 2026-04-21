@@ -1735,9 +1735,10 @@ function drawBolusMarkers(pal) {
     if (b.c > 1) {
       // Hypo treatment events get the blue hypo colour, not the carb orange
       var _isHypo = b.note && typeof b.note === 'string' && b.note.indexOf('hypo') === 0;
-      const r = _isHypo ? 100 : pal.cobR[0],
-            g = _isHypo ? 150 : pal.cobR[1],
-            bv= _isHypo ? 255 : pal.cobR[2];
+      // Hypo chips use the same golden yellow as the dock button (COL_HYPO)
+      const r = _isHypo ? 255 : pal.cobR[0],
+            g = _isHypo ? 210 : pal.cobR[1],
+            bv= _isHypo ?  40 : pal.cobR[2];
       const cardY = bgY - 30 - Math.min(b.c * 0.4, 36);
       // Stem
       CX.globalAlpha = 0.35;
@@ -3063,7 +3064,7 @@ function renderKitchen() {
           // Carb total prominent
           '<div style="text-align:center;margin-bottom:12px">' +
             '<div style="font-family:\'Fraunces\',serif;font-weight:200;font-size:48px;color:rgba(255,160,60,0.95);letter-spacing:-2px;line-height:1">' + total.toFixed(0) + '</div>' +
-            '<div style="font-family:\'DM Mono\',monospace;font-size:8px;letter-spacing:1.5px;text-transform:uppercase;color:rgba(255,140,50,0.4)">grams carbs · GI ' + avgGI.toFixed(0) + '</div>' +
+            '<div style="font-family:\'DM Mono\',monospace;font-size:8px;letter-spacing:1.5px;text-transform:uppercase;color:rgba(255,160,70,0.7)">grams carbs · GI ' + avgGI.toFixed(0) + '</div>' +
           '</div>' +
           // Wait time
           '<div style="display:flex;align-items:center;gap:8px;margin-bottom:12px;padding:8px 10px;border-radius:8px;background:rgba(255,255,255,0.04)">' +
@@ -3778,24 +3779,24 @@ function renderSheet() {
   var itemsHTML = _mealItems.map(function(item, idx) {
     var gi_i = item.food.gi || 0;
     var giC  = gi_i>=70?'rgba(210,80,40,0.55)':gi_i>=55?'rgba(200,140,30,0.55)':'rgba(60,160,90,0.55)';
-    return '<div style="padding:6px 0;border-bottom:1px solid rgba(40,55,50,0.06)">' +
+    return '<div style="padding:6px 0;border-bottom:1px solid rgba(255,255,255,0.06)">' +
       '<div style="display:flex;align-items:center;gap:6px;margin-bottom:2px">' +
-      '<div style="flex:1;font-family:\'DM Mono\',monospace;font-size:11px;color:rgba(40,55,50,0.8)">' + item.food.name + '</div>' +
+      '<div style="flex:1;font-family:\'DM Mono\',monospace;font-size:11px;color:rgba(220,235,250,0.9)">' + item.food.name + '</div>' +
       (gi_i ? '<span style="font-family:\'DM Mono\',monospace;font-size:8px;color:'+giC+'">GI '+gi_i+'</span>' : '') +
       '</div>' +
       '<div style="display:flex;align-items:center;gap:4px">' +
-      '<span style="font-family:\'DM Mono\',monospace;font-size:8px;color:rgba(40,55,50,0.35)">g</span>' +
+      '<span style="font-family:\'DM Mono\',monospace;font-size:8px;color:rgba(180,200,220,0.5)">g</span>' +
       '<input type="number" value="' + item.grams + '" min="1" max="1000" step="1" ' +
-        'style="width:54px;padding:4px 6px;border-radius:6px;border:1px solid rgba(40,55,50,0.12);' +
-        'background:rgba(255,255,255,0.6);font-family:\'DM Mono\',monospace;font-size:11px;text-align:right" ' +
+        'style="width:54px;padding:4px 6px;border-radius:6px;border:1px solid rgba(255,255,255,0.14);' +
+        'background:rgba(255,255,255,0.07);font-family:\'DM Mono\',monospace;font-size:11px;color:rgba(220,235,250,0.9);text-align:right" ' +
         'onchange="updateItemGrams(' + idx + ',\'g\',this.value)">' +
-      '<span style="font-family:\'DM Mono\',monospace;font-size:8px;color:rgba(62,180,120,0.5)">carbs</span>' +
+      '<span style="font-family:\'DM Mono\',monospace;font-size:8px;color:rgba(62,200,140,0.7)">carbs</span>' +
       '<input type="number" value="' + item.carbs.toFixed(1) + '" min="0" max="200" step="0.5" ' +
         'style="width:50px;padding:4px 6px;border-radius:6px;border:1px solid rgba(62,180,120,0.2);' +
         'background:rgba(62,180,120,0.05);font-family:\'DM Mono\',monospace;font-size:11px;color:rgba(62,180,120,0.9);text-align:right" ' +
         'onchange="updateItemGrams(' + idx + ',\'c\',this.value)">' +
       '<button onclick="removeMealItem(' + idx + ')" style="background:none;border:none;cursor:pointer;' +
-        'color:rgba(40,55,50,0.25);font-size:14px;padding:0 4px">×</button>' +
+        'color:rgba(255,255,255,0.3);font-size:14px;padding:0 4px">×</button>' +
       '</div></div>';
   }).join('');
 
@@ -3819,7 +3820,8 @@ function renderSheet() {
     var peakCol = peakBG > BG_HIGH ? 'rgba(210,100,40,0.8)' : peakBG < BG_LOW ? 'rgba(80,120,200,0.8)' : 'rgba(60,180,120,0.8)';
 
     forecastHTML = '<div style="padding:0 18px;margin-bottom:12px">' +
-      '<div style="font-family:\'DM Mono\',monospace;font-size:9px;color:rgba(40,55,50,0.6);' +
+      '<div style="background:rgba(255,255,255,0.04);border-radius:10px;padding:10px 12px;border:1px solid rgba(255,255,255,0.07)">' +
+      '<div style="font-family:\'DM Mono\',monospace;font-size:9px;color:rgba(180,200,220,0.55);' +
         'letter-spacing:1px;text-transform:uppercase;margin-bottom:6px">forecast · 3h</div>' +
       '<svg width="' + W + '" height="' + H + '" style="overflow:visible">' +
         // BG range bands
@@ -3837,9 +3839,10 @@ function renderSheet() {
         // Now dot
         '<circle cx="0" cy="' + (H - ((bg-minBG)/range)*(H-6) - 3).toFixed(0) + '" r="3" fill="rgba(62,180,120,0.9)"/>' +
       '</svg>' +
-      '<div style="display:flex;justify-content:space-between;font-family:\'DM Mono\',monospace;font-size:8px;color:rgba(40,55,50,0.25);margin-top:2px">' +
+      '<div style="display:flex;justify-content:space-between;font-family:\'DM Mono\',monospace;font-size:8px;color:rgba(180,200,220,0.35);margin-top:2px">' +
         '<span>now</span><span>+1h</span><span>+2h</span><span>+3h</span>' +
       '</div>' +
+    '</div>' +
     '</div>';
   }
 
@@ -3858,8 +3861,8 @@ function renderSheet() {
     var eatStr  = eatTime.toLocaleTimeString('en-GB',{hour:'2-digit',minute:'2-digit'});
 
     bolusHTML =
-      '<div style="margin:0 18px 14px;padding:14px;background:rgba(40,85,200,0.05);' +
-        'border-radius:12px;border:1px solid rgba(40,85,200,0.12)">' +
+      '<div style="margin:0 18px 14px;padding:14px;background:rgba(30,50,120,0.25);' +
+        'border-radius:12px;border:1px solid rgba(80,120,255,0.2)">' +
 
         // Total carbs — prominent
         '<div style="text-align:center;margin-bottom:12px">' +
@@ -3873,40 +3876,40 @@ function renderSheet() {
 
         // Wait time — editable
         '<div style="display:flex;align-items:center;gap:8px;margin-bottom:12px;' +
-          'padding:8px 10px;border-radius:8px;background:rgba(40,55,50,0.04);' +
-          'border:1px solid rgba(40,55,50,0.08)">' +
+          'padding:8px 10px;border-radius:8px;background:rgba(255,255,255,0.04);' +
+          'border:1px solid rgba(255,255,255,0.08)">' +
           '<div style="flex:1">' +
             '<div style="font-family:\'DM Mono\',monospace;font-size:8px;letter-spacing:1px;' +
-              'text-transform:uppercase;color:rgba(40,55,50,0.6);margin-bottom:2px">bolus wait</div>' +
+              'text-transform:uppercase;color:rgba(180,200,220,0.6);margin-bottom:2px">bolus wait</div>' +
             '<div style="font-family:\'Fraunces\',serif;font-style:italic;font-weight:200;' +
-              'font-size:14px;color:rgba(40,55,50,0.6)">eat ~' + eatStr + ' (+' + eatWait + 'min)</div>' +
+              'font-size:14px;color:rgba(200,220,240,0.8)">eat ~' + eatStr + ' (+' + eatWait + 'min)</div>' +
           '</div>' +
           '<div style="display:flex;align-items:center;gap:4px">' +
             '<button onclick="setWait(-5)" style="width:28px;height:28px;border-radius:8px;' +
-              'border:1px solid rgba(40,55,50,0.12);background:rgba(255,255,255,0.5);' +
-              'font-size:16px;cursor:pointer;touch-action:manipulation">−</button>' +
+              'border:1px solid rgba(255,255,255,0.15);background:rgba(255,255,255,0.08);' +
+              'font-size:16px;color:rgba(220,235,250,0.8);cursor:pointer;touch-action:manipulation">−</button>' +
             '<input id="wait-mins" type="number" value="' + eatWait + '" min="0" max="60" step="5" ' +
               'onchange="setWaitDirect(this.value)" ' +
               'style="width:42px;text-align:center;padding:4px;border-radius:6px;' +
-                'border:1px solid rgba(40,55,50,0.12);background:rgba(255,255,255,0.5);' +
-                'font-family:\'DM Mono\',monospace;font-size:12px">' +
+                'border:1px solid rgba(255,255,255,0.15);background:rgba(255,255,255,0.08);' +
+                'font-family:\'DM Mono\',monospace;font-size:12px;color:rgba(220,235,250,0.9)">' +
             '<button onclick="setWait(5)" style="width:28px;height:28px;border-radius:8px;' +
-              'border:1px solid rgba(40,55,50,0.12);background:rgba(255,255,255,0.5);' +
-              'font-size:16px;cursor:pointer;touch-action:manipulation">+</button>' +
+              'border:1px solid rgba(255,255,255,0.15);background:rgba(255,255,255,0.08);' +
+              'font-size:16px;color:rgba(220,235,250,0.8);cursor:pointer;touch-action:manipulation">+</button>' +
           '</div>' +
         '</div>' +
 
         // Bolus input
-        '<div style="font-family:\'DM Mono\',monospace;font-size:9px;color:rgba(40,55,50,0.6);' +
+        '<div style="font-family:\'DM Mono\',monospace;font-size:9px;color:rgba(180,200,220,0.6);' +
           'letter-spacing:1px;text-transform:uppercase;margin-bottom:8px">insulin given</div>' +
         '<div style="display:flex;align-items:center;gap:10px;margin-bottom:6px">' +
           '<input id="in-bolus" type="number" inputmode="decimal" placeholder="—" value="' + (_bolusVal||'') + '" ' +
             'min="0" max="20" step="0.5" ' +
             'style="flex:1;padding:10px 14px;border-radius:9px;' +
-            'border:1px solid rgba(40,85,200,0.2);background:rgba(255,255,255,0.55);' +
-            'font-family:\'Fraunces\',serif;font-size:22px;color:rgba(40,55,50,0.8);' +
+            'border:1px solid rgba(80,140,255,0.3);background:rgba(255,255,255,0.07);' +
+            'font-family:\'Fraunces\',serif;font-size:22px;color:rgba(220,235,255,0.9);' +
             'outline:none;text-align:center">' +
-          '<span style="font-family:\'DM Mono\',monospace;font-size:13px;color:rgba(40,55,50,0.4)">U</span>' +
+          '<span style="font-family:\'DM Mono\',monospace;font-size:13px;color:rgba(180,200,220,0.5)">U</span>' +
         '</div>' +
 
         // Action buttons — above context so they're immediately visible
@@ -3920,47 +3923,47 @@ function renderSheet() {
           // Log carbs only (skip bolus)
           '<button onclick="logMealEntry(true)" ' +
             'style="padding:11px 14px;border-radius:9px;' +
-            'border:1px solid rgba(40,55,50,0.12);background:transparent;' +
+            'border:1px solid rgba(255,255,255,0.12);background:transparent;' +
             'font-family:\'DM Mono\',monospace;font-size:9px;letter-spacing:.5px;' +
-            'text-transform:uppercase;color:rgba(40,55,50,0.35);cursor:pointer">no insulin</button>' +
+            'text-transform:uppercase;color:rgba(180,200,220,0.45);cursor:pointer">no insulin</button>' +
         '</div>' +
       '</div>';
   }
 
   sheet.innerHTML =
-    '<div class="handle"></div>' +
+    '<div style="position:relative;padding:28px 18px 0">' +
     '<div style="display:flex;align-items:center;justify-content:space-between;padding:0 8px 0 0">' +
-    '<div class="sheet-title">add to the flow</div>' +
+    '<div style="font-family:\'Fraunces\',serif;font-style:italic;font-weight:200;font-size:22px;color:rgba(200,220,240,0.85);padding:18px 18px 0">add to the flow</div>' +
     '<button onclick="closeSheet()" style="background:none;border:none;cursor:pointer;font-size:26px;' +
-      'color:rgba(40,55,50,0.3);padding:4px 8px;line-height:1;touch-action:manipulation">×</button>' +
+      'color:rgba(255,255,255,0.3);padding:4px 8px;line-height:1;touch-action:manipulation">×</button>' +
     '</div>' +
 
     // Time row
     '<div style="display:flex;align-items:center;gap:8px;padding:0 18px;margin-bottom:14px">' +
       '<div style="margin-bottom:4px">' +
-      '<span id="time-display" style="font-family:\'Fraunces\',serif;font-style:italic;font-weight:200;font-size:16px;color:rgba(40,55,50,0.75)">' + 
+      '<span id="time-display" style="font-family:\'Fraunces\',serif;font-style:italic;font-weight:200;font-size:16px;color:rgba(200,220,240,0.85)">' + 
         (function(){ var d=_entryTimeVal?new Date(_entryTimeVal):new Date(); return d.toLocaleDateString('en-GB',{weekday:'short',day:'numeric',month:'short'}) + ' · ' + d.toLocaleTimeString('en-GB',{hour:'2-digit',minute:'2-digit'}); }()) +
       '</span></div>' +
-      '<span style="font-family:\'DM Mono\',monospace;font-size:9px;color:rgba(40,55,50,0.6);letter-spacing:1px;text-transform:uppercase">when</span>' +
-      '<input id="in-time" type="datetime-local" style="flex:1;padding:8px 10px;border-radius:8px;border:1px solid rgba(40,55,50,0.12);background:rgba(255,255,255,0.55);font-family:\'DM Mono\',monospace;font-size:12px;color:rgba(40,55,50,0.7);outline:none" onchange="onTimeChange(this.value)">' +
-      '<button onclick="setTimeNow()" style="padding:6px 10px;border-radius:7px;border:1px solid rgba(40,55,50,0.12);background:rgba(40,55,50,0.05);font-family:\'DM Mono\',monospace;font-size:9px;color:rgba(40,55,50,0.4);cursor:pointer">now</button>' +
+      '<span style="font-family:\'DM Mono\',monospace;font-size:9px;color:rgba(180,200,220,0.5);letter-spacing:1px;text-transform:uppercase">when</span>' +
+      '<input id="in-time" type="datetime-local" style="flex:1;padding:8px 10px;border-radius:8px;border:1px solid rgba(255,255,255,0.15);background:rgba(255,255,255,0.07);font-family:\'DM Mono\',monospace;font-size:12px;color:rgba(200,220,240,0.8);outline:none" onchange="onTimeChange(this.value)">' +
+      '<button onclick="setTimeNow()" style="padding:6px 10px;border-radius:7px;border:1px solid rgba(255,255,255,0.12);background:rgba(255,255,255,0.05);font-family:\'DM Mono\',monospace;font-size:9px;color:rgba(180,200,220,0.6);cursor:pointer">now</button>' +
     '</div>' +
 
     // Food search
     '<div style="padding:0 18px;margin-bottom:10px">' +
       '<div style="position:relative">' +
         '<input id="food-search" type="text" placeholder="search food..." autocomplete="off" autocorrect="off" spellcheck="false"' +
-          ' style="width:100%;padding:10px 12px;border-radius:10px;border:1px solid rgba(40,55,50,0.15);background:rgba(255,255,255,0.6);font-family:\'DM Mono\',monospace;font-size:13px;color:rgba(40,55,50,0.8);outline:none;box-sizing:border-box"' +
+          ' style="width:100%;padding:10px 12px;border-radius:10px;border:1px solid rgba(255,255,255,0.15);background:rgba(255,255,255,0.08);font-family:\'DM Mono\',monospace;font-size:13px;color:rgba(220,235,250,0.9);outline:none;box-sizing:border-box"' +
           ' oninput="searchFood(this.value)">' +
         '<div id="food-results" style="display:none;position:absolute;top:100%;left:0;right:0;z-index:50;' +
-          'background:rgba(240,238,228,0.99);border:1px solid rgba(40,55,50,0.12);border-radius:10px;' +
+          'background:rgba(18,24,42,0.99);border:1px solid rgba(255,255,255,0.12);border-radius:10px;' +
           'box-shadow:0 4px 20px rgba(0,0,0,0.08);max-height:180px;overflow-y:auto;margin-top:4px"></div>' +
       '</div>' +
     '</div>' +
 
     // Meal items
     (itemsHTML ? '<div style="padding:0 18px;margin-bottom:10px">' +
-      '<div style="font-family:\'DM Mono\',monospace;font-size:9px;color:rgba(40,55,50,0.65);letter-spacing:1px;text-transform:uppercase;margin-bottom:6px">' +
+      '<div style="font-family:\'DM Mono\',monospace;font-size:9px;color:rgba(180,200,220,0.6);letter-spacing:1px;text-transform:uppercase;margin-bottom:6px">' +
         'meal · ' + totalCarbs.toFixed(0) + 'g carbs' +
         (avgGI && _mealItems.length > 0 ? ' · <span style="color:' + giCol + '">' + giLabel + ' (GI ' + avgGI.toFixed(0) + ')</span>' : '') +
       '</div>' +
@@ -3979,12 +3982,12 @@ function renderSheet() {
     // Manual insulin entry (if no meal)
     (totalCarbs === 0 ?
       '<div style="padding:0 18px;margin-bottom:12px">' +
-        '<div style="font-family:\'DM Mono\',monospace;font-size:9px;color:rgba(40,55,50,0.65);letter-spacing:1px;text-transform:uppercase;margin-bottom:8px">manual bolus / correction</div>' +
+        '<div style="font-family:\'DM Mono\',monospace;font-size:9px;color:rgba(180,200,220,0.6);letter-spacing:1px;text-transform:uppercase;margin-bottom:8px">manual bolus / correction</div>' +
         '<div style="display:flex;align-items:center;gap:10px">' +
           '<div style="width:8px;height:8px;border-radius:50%;background:rgba(40,85,200,0.8);flex-shrink:0"></div>' +
           '<input id="in-i" type="number" inputmode="decimal" placeholder="units" min="0" max="20" step="0.5"' +
-            ' style="flex:1;background:rgba(255,255,255,0.6);border:1px solid rgba(40,55,50,0.12);border-radius:8px;padding:10px 12px;font-family:\'Fraunces\',serif;font-size:18px;color:rgba(40,55,50,0.8);outline:none">' +
-          '<span style="font-family:\'DM Mono\',monospace;font-size:11px;color:rgba(40,55,50,0.4)">U</span>' +
+            ' style="flex:1;background:rgba(255,255,255,0.07);border:1px solid rgba(255,255,255,0.15);border-radius:8px;padding:10px 12px;font-family:\'Fraunces\',serif;font-size:18px;color:rgba(220,235,250,0.9);outline:none">' +
+          '<span style="font-family:\'DM Mono\',monospace;font-size:11px;color:rgba(180,200,220,0.5)">U</span>' +
           '<button onclick="commitManualBolus()" style="padding:10px 14px;border-radius:9px;border:1px solid rgba(40,85,200,0.3);background:rgba(40,85,200,0.08);font-family:\'DM Mono\',monospace;font-size:10px;color:rgba(40,85,200,0.8);cursor:pointer">log</button>' +
         '</div>' +
       '</div>'
@@ -4015,13 +4018,13 @@ function buildRecentMealsHTML() {
   var chips = unique.map(function(entry) {
     var m = entry.m; var i = entry.i;
     return '<button onclick="loadMealHistory(' + i + ')" style="padding:6px 12px;border-radius:10px;' +
-      'border:1px solid rgba(40,55,50,0.15);background:rgba(255,255,255,0.7);' +
-      'font-family:\'DM Mono\',monospace;font-size:10px;color:rgba(40,55,50,0.75);' +
+      'border:1px solid rgba(255,255,255,0.11);background:rgba(255,255,255,0.06);' +
+      'font-family:\'DM Mono\',monospace;font-size:10px;color:rgba(200,220,240,0.75);' +
       'cursor:pointer;white-space:nowrap;touch-action:manipulation">' +
       m.name.slice(0,32) + ' · ' + m.totalCarbs + 'g</button>';
   }).join('');
   return '<div style="padding:0 18px;margin-bottom:12px">' +
-    '<div style="font-family:\'DM Mono\',monospace;font-size:9px;color:rgba(40,55,50,0.6);letter-spacing:1px;text-transform:uppercase;margin-bottom:6px">recent meals</div>' +
+    '<div style="font-family:\'DM Mono\',monospace;font-size:9px;color:rgba(180,200,220,0.55);letter-spacing:1px;text-transform:uppercase;margin-bottom:6px">recent meals</div>' +
     '<div style="display:flex;flex-wrap:wrap;gap:5px">' + chips + '</div>' +
   '</div>';
 }
@@ -4037,7 +4040,7 @@ function searchFood(q) {
 
   if (matches.length === 0) {
     results.style.display='block';
-    results.innerHTML = '<div style="padding:10px 14px;font-family:\'DM Mono\',monospace;font-size:11px;color:rgba(40,55,50,0.35)">' +
+    results.innerHTML = '<div style="padding:10px 14px;font-family:\'DM Mono\',monospace;font-size:11px;color:rgba(180,200,220,0.5)">' +
       'not found — <button onclick="addCustomFood(\'' + q.replace(/'/g,"\\'") + '\')" style="background:none;border:none;cursor:pointer;color:rgba(40,85,200,0.7);font-family:\'DM Mono\',monospace;font-size:11px;text-decoration:underline">add custom</button></div>';
     return;
   }
@@ -4046,10 +4049,10 @@ function searchFood(q) {
   results.innerHTML = matches.map(function(f) {
     var giCol2 = f.gi>=70?'rgba(200,80,40,0.6)':f.gi>=55?'rgba(190,130,30,0.6)':'rgba(50,150,80,0.6)';
     return '<div onclick="addFoodItem(\'' + f.name.replace(/'/g,"\\'") + '\')" style="padding:10px 14px;cursor:pointer;' +
-      'border-bottom:1px solid rgba(40,55,50,0.05);display:flex;justify-content:space-between;align-items:center">' +
+      'border-bottom:1px solid rgba(255,255,255,0.07);display:flex;justify-content:space-between;align-items:center">' +
       '<div>' +
-        '<div style="font-family:\'DM Mono\',monospace;font-size:12px;color:rgba(40,55,50,0.8)">' + f.name + '</div>' +
-        '<div style="font-family:\'DM Mono\',monospace;font-size:9px;color:rgba(40,55,50,0.35);">' + f.c100 + 'g carbs/100g</div>' +
+        '<div style="font-family:\'DM Mono\',monospace;font-size:12px;color:rgba(220,235,250,0.9)">' + f.name + '</div>' +
+        '<div style="font-family:\'DM Mono\',monospace;font-size:9px;color:rgba(62,200,140,0.65);">' + f.c100 + 'g carbs/100g</div>' +
       '</div>' +
       '<div style="font-size:10px;color:' + giCol2 + ';font-family:\'DM Mono\',monospace">GI ' + (f.gi||'—') + '</div>' +
     '</div>';
@@ -5307,29 +5310,29 @@ function openHypoLog() {
   var _hypoDefault = new Date();
   var s='<div style="max-width:360px;width:100%">';
   s+='<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:4px">';
-  s+='<div style="font-family:\'Fraunces\',serif;font-style:italic;font-weight:200;font-size:22px;color:rgba(100,150,255,0.9)">hypo treatment</div>';
+  s+='<div style="font-family:\'Fraunces\',serif;font-style:italic;font-weight:200;font-size:22px;color:rgba(255,210,40,0.9)">hypo treatment</div>';
   s+='<button onclick="closeHypoLog()" style="background:none;border:none;cursor:pointer;font-size:24px;color:rgba(255,255,255,0.2);padding:4px;touch-action:manipulation">×</button>';
   s+='</div>';
-  s+='<div style="font-family:\'DM Mono\',monospace;font-size:9px;letter-spacing:1px;text-transform:uppercase;color:rgba(100,130,200,0.4);margin-bottom:14px">also for course correction &middot; hypo prevention</div>';
+  s+='<div style="font-family:\'DM Mono\',monospace;font-size:9px;letter-spacing:1px;text-transform:uppercase;color:rgba(255,210,40,0.45);margin-bottom:14px">also for course correction &middot; hypo prevention</div>';
   s+=timePickerHTML('hypo-time', _hypoDefault, false);
   s+='<div style="display:flex;flex-direction:column;gap:8px">';
   HYPO_TREATMENTS.forEach(function(t){
-    s+='<div style="display:flex;align-items:center;gap:10px;padding:12px 14px;border-radius:10px;background:rgba(40,60,140,0.25);border:1px solid rgba(80,120,220,0.2)">';
+    s+='<div style="display:flex;align-items:center;gap:10px;padding:12px 14px;border-radius:10px;background:rgba(60,45,10,0.4);border:1px solid rgba(255,210,40,0.2)">';
     s+='<div style="flex:1">';
-    s+='<div style="font-family:\'Fraunces\',serif;font-weight:200;font-size:16px;color:rgba(160,190,255,0.9)">'+t.name+'</div>';
-    s+='<div style="font-family:\'DM Mono\',monospace;font-size:10px;color:rgba(100,130,200,0.45);margin-top:2px">'+t.desc+'</div>';
+    s+='<div style="font-family:\'Fraunces\',serif;font-weight:200;font-size:16px;color:rgba(255,230,120,0.95)">'+t.name+'</div>';
+    s+='<div style="font-family:\'DM Mono\',monospace;font-size:10px;color:rgba(255,210,40,0.4);margin-top:2px">'+t.desc+'</div>';
     s+='</div>';
     s+='<input id="hypo-g-'+t.id+'" type="number" value="'+t.carbs+'" min="1" max="100" step="1" ';
-    s+='style="width:50px;padding:6px;border-radius:7px;border:1px solid rgba(80,120,220,0.25);background:rgba(20,30,80,0.5);';
-    s+='font-family:\'DM Mono\',monospace;font-size:14px;color:rgba(160,190,255,0.9);text-align:center;outline:none;touch-action:manipulation">';
-    s+='<span style="font-family:\'DM Mono\',monospace;font-size:10px;color:rgba(100,130,200,0.5)">g</span>';
+    s+='style="width:50px;padding:6px;border-radius:7px;border:1px solid rgba(255,210,40,0.3);background:rgba(50,40,5,0.5);';
+    s+='font-family:\'DM Mono\',monospace;font-size:14px;color:rgba(255,230,120,0.95);text-align:center;outline:none;touch-action:manipulation">';
+    s+='<span style="font-family:\'DM Mono\',monospace;font-size:10px;color:rgba(255,210,40,0.5)">g</span>';
     s+='<button onclick="logHypoTreatment(\''+t.id+'\')" style="padding:8px 14px;border-radius:8px;cursor:pointer;';
-    s+='background:rgba(60,100,220,0.2);border:1px solid rgba(80,120,220,0.35);';
-    s+='font-family:\'DM Mono\',monospace;font-size:10px;letter-spacing:.5px;text-transform:uppercase;color:rgba(120,160,255,0.8);touch-action:manipulation">log</button>';
+    s+='background:rgba(255,210,40,0.12);border:1px solid rgba(255,210,40,0.4);';
+    s+='font-family:\'DM Mono\',monospace;font-size:10px;letter-spacing:.5px;text-transform:uppercase;color:rgba(255,225,80,0.9);touch-action:manipulation">log</button>';
     s+='</div>';
   });
   s+='</div><div style="text-align:center;margin-top:16px">';
-  s+='<button onclick="closeHypoLog()" style="background:none;border:none;cursor:pointer;font-family:\'DM Mono\',monospace;font-size:9px;letter-spacing:1px;text-transform:uppercase;color:rgba(100,130,200,0.25);padding:8px">cancel</button></div></div>';
+  s+='<button onclick="closeHypoLog()" style="background:none;border:none;cursor:pointer;font-family:\'DM Mono\',monospace;font-size:9px;letter-spacing:1px;text-transform:uppercase;color:rgba(255,210,40,0.3);padding:8px">cancel</button></div></div>';
   el.innerHTML=s; document.body.appendChild(el);
   requestAnimationFrame(function(){el.style.opacity='1';});
 }
