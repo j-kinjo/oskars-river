@@ -203,91 +203,11 @@
   </div>
 
 </div>
-  <div class="sheet-title">add to the flow</div>
-  <div class="sheet-sub">carbs · bolus · or both</div>
-
-  <!-- Type selector -->
-  <div class="type-row">
-    <button class="tbtn" id="tb-c" onclick="selType('c')"><span class="ico">🌾</span>carbs</button>
-    <button class="tbtn" id="tb-b" onclick="selType('b')"><span class="ico">🍃</span>meal</button>
-    <button class="tbtn" id="tb-i" onclick="selType('i')"><span class="ico">💧</span>bolus</button>
-  </div>
-
-  <!-- Time — always visible, defaults to now -->
-  <div style="display:flex;align-items:center;gap:8px;padding:0 18px;margin-bottom:12px">
-    <span style="font-family:'DM Mono',monospace;font-size:9px;color:rgba(40,55,50,0.35);
-      letter-spacing:1px;text-transform:uppercase;white-space:nowrap">when</span>
-    <input id="in-time" type="datetime-local"
-      style="flex:1;padding:8px 10px;border-radius:8px;
-      border:1px solid rgba(40,55,50,0.12);background:rgba(255,255,255,0.55);
-      font-family:'DM Mono',monospace;font-size:12px;color:rgba(40,55,50,0.7);outline:none">
-    <button onclick="setTimeNow()" style="padding:6px 10px;border-radius:7px;
-      border:1px solid rgba(40,55,50,0.12);background:rgba(40,55,50,0.05);
-      font-family:'DM Mono',monospace;font-size:9px;color:rgba(40,55,50,0.4);
-      cursor:pointer;letter-spacing:.5px">now</button>
-  </div>
-
-  <!-- Carbs -->
-  <div class="isec" id="sec-c">
-    <div class="irow">
-      <div class="idot" style="background:rgba(62,207,160,0.8)"></div>
-      <input class="ifield" id="in-c" type="number" inputmode="decimal"
-        placeholder="grams" min="0" max="200" step="1" oninput="onInp()">
-      <span class="iunit">g</span>
-    </div>
-  </div>
-
-  <!-- Insulin -->
-  <div class="isec" id="sec-i">
-    <div class="irow">
-      <div class="idot" style="background:rgba(40,85,200,0.8)"></div>
-      <input class="ifield" id="in-i" type="number" inputmode="decimal"
-        placeholder="units" min="0" max="20" step="0.5" oninput="onInp()">
-      <span class="iunit">U</span>
-    </div>
-  </div>
-
-  <!-- BG -->
-  <div class="isec" id="sec-bg">
-    <div class="irow">
-      <div class="idot" style="background:rgba(40,55,50,0.3)"></div>
-      <input class="ifield" id="in-bg" type="number" inputmode="decimal"
-        placeholder="BG now" min="2" max="25" step="0.1" oninput="onInp()">
-      <span class="iunit">mmol</span>
-    </div>
-    <div class="bgchips">
-      <div class="bgchip" onclick="setBG(4)">4.0</div>
-      <div class="bgchip" onclick="setBG(5.5)">5.5</div>
-      <div class="bgchip" onclick="setBG(7)">7.0</div>
-      <div class="bgchip" onclick="setBG(9)">9.0</div>
-      <div class="bgchip" onclick="setBG(12)">12.0</div>
-    </div>
-  </div>
-
-  <!-- Saved meals -->
-  <div id="saved-meals-row" style="display:none;padding:0 18px;margin-bottom:10px">
-    <div style="font-family:'DM Mono',monospace;font-size:9px;color:rgba(40,55,50,0.3);
-      letter-spacing:1px;text-transform:uppercase;margin-bottom:6px">recent meals</div>
-    <div id="saved-meals-chips" style="display:flex;flex-wrap:wrap;gap:5px"></div>
-  </div>
-
-  <!-- Bolus suggestion -->
-  <div class="sugbox" id="sugbox">
-    <div class="sugval" id="sugval">—</div>
-    <div class="sugnote" id="sugnote"></div>
-  </div>
-
-  <button id="dropbtn" onclick="commitDrop()" disabled>flow it in</button>
-
-<div id="toast"></div>
-
 
 <div id="overlay" onclick="closeSheet()"></div>
 
 <div id="sheet">
   <div class="handle"></div>
-  <div class="sheet-title">add to the flow</div>
-  <div class="sheet-sub">carbs · bolus · or both</div>
 </div>
 
 <div id="toast"></div>
