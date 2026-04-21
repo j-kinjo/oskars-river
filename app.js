@@ -975,8 +975,10 @@ function _drawCOBReservoir() {
       // Deeper into the flow — reservoir peaks closer to BG line
       var lineY      = dataAt ? bgToY(dataAt(viewTime).bg) : H * 0.5;
       var availableH = H - lineY - 8;  // space from bottom to just below BG line
-      var maxD  = Math.min(availableH * 0.85, 90 * (food.carbs / 20) * remaining);
-      maxD = Math.max(0, maxD);
+      var maxD  = Math.min(availableH * 0.92, 90 * (food.carbs / 20) * remaining);
+      // Minimum visible height — even 1g carb should be perceptible on the canvas
+      var minD  = Math.min(availableH * 0.12, 18);
+      maxD = Math.max(minD * remaining, maxD);
 
       CX.beginPath();
       CX.moveTo(0, H);
@@ -1032,8 +1034,9 @@ function _drawIOBReservoir() {
     var sigma  = _bellSigma(1.1);  // slightly wider than medium GI
     var lineY      = dataAt ? bgToY(dataAt(viewTime).bg) : H * 0.5;
     var availableH = lineY - 8;    // space from top to just above BG line
-    var maxD   = Math.min(availableH * 0.82, 110 * (bolus.u/3) * remaining);
-    maxD = Math.max(0, maxD);
+    var maxD   = Math.min(availableH * 0.90, 110 * (bolus.u/3) * remaining);
+    var minD   = Math.min(availableH * 0.12, 18);
+    maxD = Math.max(minD * remaining, maxD);
 
     var rv=COL_IOB[0], gv=COL_IOB[1], bv=COL_IOB[2];
 
@@ -1734,22 +1737,36 @@ function drawEquilibriumZone(pal) {
   CX.fillStyle   = grad;
   CX.fillRect(0, loY, W, zH);
 
-  // Gossamer edge lines — multiple overlapping dashes, different speeds
-  for (var li = 0; li < 3; li++) {
-    var lAlpha = [0.22, 0.10, 0.06][li];
-    var lWidth = [0.9,  0.5,  0.3][li];
-    var lSpeed = [12,    7,   19][li];
-    var lDash  = [[6,18],[3,28],[9,40]][li];
-    CX.globalAlpha = lAlpha;
-    CX.strokeStyle = li === 1 ? `rgba(${r2},${g2},${b2},1)` : `rgba(${r},${g},${b},1)`;
-    CX.lineWidth   = lWidth;
-    CX.setLineDash(lDash);
-    CX.lineDashOffset = -(phi * lSpeed) % (lDash[0] + lDash[1]);
-    CX.beginPath(); CX.moveTo(0, loY); CX.lineTo(W, loY); CX.stroke();
-    CX.lineDashOffset = -(phi * lSpeed * 0.7 + 12) % (lDash[0] + lDash[1]);
-    CX.beginPath(); CX.moveTo(0, hiY); CX.lineTo(W, hiY); CX.stroke();
-  }
-  CX.setLineDash([]); CX.lineDashOffset = 0;
+  // Flowing edge lines — gentle sine-wave wobble, no dashes, ethereal
+  // Three overlapping layers per edge, different frequencies and phases
+  var flowLayers = [
+    { alpha: 0.22, width: 0.9, freq: 0.008, amp: 1.8, speed: 0.012, phase: 0     },
+    { alpha: 0.10, width: 0.5, freq: 0.013, amp: 1.1, speed: 0.019, phase: 2.1   },
+    { alpha: 0.06, width: 0.3, freq: 0.005, amp: 2.4, speed: 0.007, phase: 4.7   },
+  ];
+  CX.setLineDash([]);
+  flowLayers.forEach(function(fl, li) {
+    var col = li === 1 ? `rgba(${r2},${g2},${b2},1)` : `rgba(${r},${g},${b},1)`;
+    CX.globalAlpha = fl.alpha;
+    CX.strokeStyle = col;
+    CX.lineWidth   = fl.width;
+    // Top edge (loY = high BG line)
+    CX.beginPath();
+    for (var xi = 0; xi <= W; xi += 2) {
+      var wy = loY + Math.sin(xi * fl.freq + phi * fl.speed + fl.phase) * fl.amp
+                   + Math.sin(xi * fl.freq * 0.47 + phi * fl.speed * 1.3) * fl.amp * 0.4;
+      xi === 0 ? CX.moveTo(xi, wy) : CX.lineTo(xi, wy);
+    }
+    CX.stroke();
+    // Bottom edge (hiY = low BG / hypo line)
+    CX.beginPath();
+    for (var xi = 0; xi <= W; xi += 2) {
+      var wy = hiY + Math.sin(xi * fl.freq + phi * fl.speed + fl.phase + 1.3) * fl.amp
+                   + Math.sin(xi * fl.freq * 0.53 + phi * fl.speed * 0.9 + 0.8) * fl.amp * 0.4;
+      xi === 0 ? CX.moveTo(xi, wy) : CX.lineTo(xi, wy);
+    }
+    CX.stroke();
+  });
 
   // Shimmer particles — spawn along edges, drift across tunnel
   _eqShimmerFrame++;
