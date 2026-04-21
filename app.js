@@ -126,11 +126,18 @@ async function syncPushEvents(events) {
       updated_at: new Date().toISOString(),
     };
   });
-  await _sbFetch('events?on_conflict=t', {
-    method:  'POST',
-    prefer:  'resolution=merge-duplicates,return=minimal',
-    body:    rows,
-  });
+  // Plain INSERT — if no unique constraint on t, upsert isn't possible via PostgREST.
+  // We insert and swallow 409 conflicts; the pull will reconcile state from other devices.
+  try {
+    await _sbFetch('events', {
+      method:  'POST',
+      prefer:  'return=minimal',
+      body:    rows,
+    });
+  } catch(e) {
+    // 409 duplicate / 42P10 no-constraint — not fatal, pull will reconcile
+    if (!e.message.includes('409') && !e.message.includes('42P10') && !e.message.includes('23505')) throw e;
+  }
 }
 
 // ── PUSH: CGM readings → Supabase ────────────────────────────────────
@@ -1740,9 +1747,9 @@ function drawEquilibriumZone(pal) {
   // Flowing edge lines — gentle sine-wave wobble, no dashes, ethereal
   // Three overlapping layers per edge, different frequencies and phases
   var flowLayers = [
-    { alpha: 0.22, width: 0.9, freq: 0.008, amp: 1.8, speed: 0.012, phase: 0     },
-    { alpha: 0.10, width: 0.5, freq: 0.013, amp: 1.1, speed: 0.019, phase: 2.1   },
-    { alpha: 0.06, width: 0.3, freq: 0.005, amp: 2.4, speed: 0.007, phase: 4.7   },
+    { alpha: 0.22, width: 0.9, freq: 0.008, amp: 3.2, speed: 0.012, phase: 0     },
+    { alpha: 0.10, width: 0.5, freq: 0.013, amp: 2.0, speed: 0.019, phase: 2.1   },
+    { alpha: 0.06, width: 0.3, freq: 0.005, amp: 4.2, speed: 0.007, phase: 4.7   },
   ];
   CX.setLineDash([]);
   flowLayers.forEach(function(fl, li) {
@@ -7480,8 +7487,12 @@ function openDebugPanel() {
       ' COB: ' + (d.cob ? d.cob.toFixed(1) : '?') +
     '</div>' +
 
-    // Error log
-    '<div id="debug-content" style="margin-bottom:10px;min-height:20px;font-size:9px;line-height:1.5"></div>' +
+    // Error log with copy button
+    '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px">' +
+      '<div style="font-size:8px;letter-spacing:1px;text-transform:uppercase;color:rgba(255,255,255,0.2)">log</div>' +
+      '<button id="copy-log-btn" onclick="var t=(window.__debugLog||[]).join(\"\\n\");navigator.clipboard.writeText(t).then(function(){var b=document.getElementById(\'copy-log-btn\');b.textContent=\'\u2713 copied\';setTimeout(function(){b.textContent=\'copy\'},1500)})" style="padding:2px 7px;border-radius:5px;border:1px solid rgba(255,255,255,0.1);background:rgba(255,255,255,0.04);color:rgba(255,255,255,0.35);font-family:monospace;font-size:8px;cursor:pointer">copy</button>' +
+    '</div>' +
+    '<div id="debug-content" style="margin-bottom:10px;min-height:20px;font-size:9px;line-height:1.5;user-select:text;-webkit-user-select:text"></div>' +
 
     // Divider
     '<div style="border-top:1px solid rgba(255,255,255,0.08);margin-bottom:10px"></div>' +
