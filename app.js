@@ -281,7 +281,7 @@ function buildSupabaseSettingsHTML() {
     : 'not yet synced';
 
   return '<div style="margin-top:24px;padding-top:20px;border-top:1px solid rgba(40,55,50,0.08)">' +
-    '<div style="font-family:\'DM Mono\',monospace;font-size:9px;letter-spacing:1.5px;text-transform:uppercase;color:rgba(40,55,50,0.3);margin-bottom:12px">multi-device sync</div>' +
+    '<div style="font-family:\'DM Mono\',monospace;font-size:9px;letter-spacing:1.5px;text-transform:uppercase;color:rgba(40,55,50,0.6);margin-bottom:12px">multi-device sync</div>' +
     (configured
       ? '<div style="font-family:\'DM Mono\',monospace;font-size:11px;color:rgba(62,180,120,0.8);margin-bottom:8px">✓ connected · ' + lastSync + '</div>'
       : '<div style="font-family:\'DM Mono\',monospace;font-size:11px;color:rgba(200,140,60,0.7);margin-bottom:8px">not configured — add URL + key to app.js</div>'
@@ -3111,6 +3111,19 @@ function renderKitchen() {
     kitchenTopHTML = _kDiv.outerHTML + whisper;
   }
 
+  // Assemble close button
+  var closeBtn = '<button onclick="closeSheet()" style="position:absolute;top:14px;right:16px;' +
+    'background:none;border:none;cursor:pointer;font-size:20px;' +
+    'color:rgba(255,255,255,0.3);padding:4px 8px;line-height:1;touch-action:manipulation">×</button>';
+
+  sheet.innerHTML =
+    '<div style="position:relative;padding:20px 18px 24px;">' +
+      closeBtn +
+      kitchenTopHTML +
+      itemsHTML +
+      '<div style="margin-top:10px">' + searchHTML + recipeChips + '</div>' +
+      bolusHTML +
+    '</div>';
 }
 
 function searchPlateFood(q) {
@@ -3767,7 +3780,7 @@ function renderSheet() {
     var peakCol = peakBG > BG_HIGH ? 'rgba(210,100,40,0.8)' : peakBG < BG_LOW ? 'rgba(80,120,200,0.8)' : 'rgba(60,180,120,0.8)';
 
     forecastHTML = '<div style="padding:0 18px;margin-bottom:12px">' +
-      '<div style="font-family:\'DM Mono\',monospace;font-size:9px;color:rgba(40,55,50,0.3);' +
+      '<div style="font-family:\'DM Mono\',monospace;font-size:9px;color:rgba(40,55,50,0.6);' +
         'letter-spacing:1px;text-transform:uppercase;margin-bottom:6px">forecast · 3h</div>' +
       '<svg width="' + W + '" height="' + H + '" style="overflow:visible">' +
         // BG range bands
@@ -3825,7 +3838,7 @@ function renderSheet() {
           'border:1px solid rgba(40,55,50,0.08)">' +
           '<div style="flex:1">' +
             '<div style="font-family:\'DM Mono\',monospace;font-size:8px;letter-spacing:1px;' +
-              'text-transform:uppercase;color:rgba(40,55,50,0.3);margin-bottom:2px">bolus wait</div>' +
+              'text-transform:uppercase;color:rgba(40,55,50,0.6);margin-bottom:2px">bolus wait</div>' +
             '<div style="font-family:\'Fraunces\',serif;font-style:italic;font-weight:200;' +
               'font-size:14px;color:rgba(40,55,50,0.6)">eat ~' + eatStr + ' (+' + eatWait + 'min)</div>' +
           '</div>' +
@@ -3845,7 +3858,7 @@ function renderSheet() {
         '</div>' +
 
         // Bolus input
-        '<div style="font-family:\'DM Mono\',monospace;font-size:9px;color:rgba(40,55,50,0.3);' +
+        '<div style="font-family:\'DM Mono\',monospace;font-size:9px;color:rgba(40,55,50,0.6);' +
           'letter-spacing:1px;text-transform:uppercase;margin-bottom:8px">insulin given</div>' +
         '<div style="display:flex;align-items:center;gap:10px;margin-bottom:6px">' +
           '<input id="in-bolus" type="number" inputmode="decimal" placeholder="—" value="' + (_bolusVal||'') + '" ' +
@@ -4014,6 +4027,7 @@ function addFoodItem(name) {
   var defaultG = food.g_each || food.g_serv || 100;
   var carbs    = Math.round((food.c100 * defaultG / 100) * 10) / 10;
   _mealItems.push({food: food, grams: defaultG, carbs: carbs});
+  var _b = document.getElementById('in-bolus'); if (_b && _b.value !== '') _bolusVal = _b.value;
   document.getElementById('food-search').value = '';
   document.getElementById('food-results').style.display = 'none';
   renderSheet();
@@ -4245,6 +4259,7 @@ function updateItemGrams(idx, field, val) {
 }
 
 function removeMealItem(idx) {
+  var _b = document.getElementById('in-bolus'); if (_b && _b.value !== '') _bolusVal = _b.value;
   _mealItems.splice(idx, 1);
   renderSheet();
 }
