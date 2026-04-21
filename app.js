@@ -582,19 +582,23 @@ function drawBGTrail(pal) {
         CX.strokeStyle = segCol; CX.shadowColor = segCol; CX.shadowBlur = 3;
         _drawSmoothLine(seg); CX.stroke(); CX.shadowBlur = 0;
       }
-      // Draw dotted gap line
+      // Only draw dotted gap bridge for historical gaps (not active/current gap)
       if (i > 0 && !pts[i-1].gap) {
-        CX.save();
-        CX.globalAlpha = 0.15;
-        CX.strokeStyle = 'rgba(180,200,220,1)';
-        CX.lineWidth = 1;
-        CX.setLineDash([3, 8]);
-        CX.beginPath();
-        CX.moveTo(pts[i-1].x, pts[i-1].y);
-        CX.lineTo(pts[i].x, pts[i].y);
-        CX.stroke();
-        CX.setLineDash([]);
-        CX.restore();
+        // Check if this gap extends to the present (active gap)
+        var gapIsActive = pts[i].t >= (HISTORY_RAW.length > 0 ? HISTORY_RAW[HISTORY_RAW.length-1].t : 0) - 30000;
+        if (!gapIsActive) {
+          CX.save();
+          CX.globalAlpha = 0.15;
+          CX.strokeStyle = 'rgba(180,200,220,1)';
+          CX.lineWidth = 1;
+          CX.setLineDash([3, 8]);
+          CX.beginPath();
+          CX.moveTo(pts[i-1].x, pts[i-1].y);
+          CX.lineTo(pts[i].x, pts[i].y);
+          CX.stroke();
+          CX.setLineDash([]);
+          CX.restore();
+        }
       }
       seg = []; segCol = null;
       continue;
@@ -966,7 +970,11 @@ function _drawCOBReservoir() {
       // Zoom-aware bell width — faster GI = narrower bell
       var sigmaFactor = gi >= 70 ? 0.6 : gi >= 55 ? 1.0 : 1.5;
       var sigma = _bellSigma(sigmaFactor);
-      var maxD  = Math.min(90, 70 * (food.carbs / 20) * remaining);
+      // Deeper into the flow — reservoir peaks closer to BG line
+      var lineY      = dataAt ? bgToY(dataAt(viewTime).bg) : H * 0.5;
+      var availableH = H - lineY - 8;  // space from bottom to just below BG line
+      var maxD  = Math.min(availableH * 0.85, 90 * (food.carbs / 20) * remaining);
+      maxD = Math.max(0, maxD);
 
       CX.beginPath();
       CX.moveTo(0, H);
@@ -1017,7 +1025,10 @@ function _drawIOBReservoir() {
     var peakT  = bolus.t + 75 * 60000;
     var peakX  = tX(peakT);
     var sigma  = _bellSigma(1.1);  // slightly wider than medium GI
-    var maxD   = Math.min(88, 80 * (bolus.u/3) * remaining);
+    var lineY      = dataAt ? bgToY(dataAt(viewTime).bg) : H * 0.5;
+    var availableH = lineY - 8;    // space from top to just above BG line
+    var maxD   = Math.min(availableH * 0.82, 110 * (bolus.u/3) * remaining);
+    maxD = Math.max(0, maxD);
 
     var rv=COL_IOB[0], gv=COL_IOB[1], bv=COL_IOB[2];
 
@@ -1384,6 +1395,55 @@ function drawUnknownForce(pal) {
 
   if (residuals.length === 0) return;
 
+  // ── RIBBON LAYER — stacked grey ribbons from edge toward BG line ──
+  // Positive residual (BG higher than expected) → ribbons from above (like phantom IOB failing)
+  // Negative residual (BG lower than expected)  → ribbons from below (like phantom COB absorbed)
+  var totalResidue = 0;
+  var recentResiduals = residuals.slice(-8); // last 40 min
+  recentResiduals.forEach(function(r){ totalResidue += r.residual; });
+  var avgResidue = recentResiduals.length > 0 ? totalResidue / recentResiduals.length : 0;
+  var ribbonStrength = Math.min(1, Math.abs(avgResidue) / 2.5);
+
+  if (ribbonStrength > 0.08) {
+    CX.save();
+    var isDown   = avgResidue < 0; // unknown force pulling BG down
+    var nowX2    = NOW_X * W;
+    var lineY2   = dataAt ? bgToY(dataAt(viewTime).bg) : H * 0.5;
+    var numRibs  = 3 + Math.floor(ribbonStrength * 4);
+    var edgeY    = isDown ? H : 0;  // ribbons from bottom (down) or top (up)
+
+    for (var ri = 0; ri < numRibs; ri++) {
+      var rFrac    = (ri + 1) / (numRibs + 1);
+      // Each ribbon anchored at a different x spanning past 40min to now
+      var rx       = nowX2 * (0.3 + rFrac * 0.6);
+      var ribLen   = 40 + rFrac * 60;  // width in px
+      var ribAlpha = ribbonStrength * (0.06 + rFrac * 0.08) * (0.5 + 0.5 * Math.sin(phi * 0.4 + ri));
+      var midY     = edgeY + (lineY2 - edgeY) * (0.3 + rFrac * 0.55);
+
+      var gr2 = CX.createLinearGradient(rx - ribLen/2, 0, rx + ribLen/2, 0);
+      gr2.addColorStop(0,   'rgba(180,195,220,0)');
+      gr2.addColorStop(0.2, 'rgba(180,195,220,' + ribAlpha + ')');
+      gr2.addColorStop(0.8, 'rgba(180,195,220,' + ribAlpha + ')');
+      gr2.addColorStop(1,   'rgba(180,195,220,0)');
+
+      // Thin horizontal ribbon
+      CX.globalAlpha = 1;
+      CX.fillStyle   = gr2;
+      CX.beginPath();
+      CX.roundRect(rx - ribLen/2, midY - 1.5, ribLen, 3, 1.5);
+      CX.fill();
+
+      // Vertical tendril from edge to ribbon
+      var tGr = CX.createLinearGradient(0, edgeY, 0, midY);
+      tGr.addColorStop(0,   'rgba(160,180,210,0)');
+      tGr.addColorStop(0.6, 'rgba(160,180,210,' + (ribAlpha * 0.5) + ')');
+      tGr.addColorStop(1,   'rgba(160,180,210,' + (ribAlpha * 0.9) + ')');
+      CX.fillStyle = tGr;
+      CX.fillRect(rx - 1, Math.min(edgeY, midY), 2, Math.abs(midY - edgeY));
+    }
+    CX.restore();
+  }
+
   CX.save();
 
   // Draw the residual gap as a shaded region between actual and predicted
@@ -1717,6 +1777,77 @@ function drawNowPulse(pal, d) {
 
 // ── BOLUS MARKERS ────────────────────────────────────────────────────
 // ── BOLUS / EVENT MARKERS — anchored context cards ────────────────
+// ── BASAL RESERVOIR — Degludec: flat peakless, always dripping ──────────
+// Shown as a slim static bar along the top edge with a continuous gentle drip
+// Unlike bolus (which spikes and fades), basal is the constant background hum.
+var _basalDrops = [];
+var _basalFrame = 0;
+
+function drawBasalReservoir(pal) {
+  _basalFrame++;
+  var lineY = dataAt ? bgToY(dataAt(viewTime).bg) : H * 0.5;
+  var barH   = 3;       // slim top bar height
+  var barY   = 0;       // anchored to very top edge
+  var alpha  = 0.22;    // subtle — background presence, not foreground action
+  var [r,g,b]= COL_IOB; // same colour family as bolus but differentiated
+
+  CX.save();
+
+  // Static bar — full width, very slim, anchored top
+  var barGr = CX.createLinearGradient(0, barY, W, barY);
+  barGr.addColorStop(0,   'rgba('+r+','+g+','+b+',0)');
+  barGr.addColorStop(0.1, 'rgba('+r+','+g+','+b+','+(alpha*0.9)+')');
+  barGr.addColorStop(0.5, 'rgba('+r+','+g+','+b+','+alpha+')');
+  barGr.addColorStop(0.9, 'rgba('+r+','+g+','+b+','+(alpha*0.9)+')');
+  barGr.addColorStop(1,   'rgba('+r+','+g+','+b+',0)');
+  CX.fillStyle = barGr;
+  CX.fillRect(0, barY, W, barH);
+
+  // Label on left
+  CX.globalAlpha = 0.28;
+  CX.fillStyle   = 'rgba('+r+','+g+','+b+',1)';
+  CX.font        = "300 8px 'DM Mono',monospace";
+  CX.textAlign   = 'left';
+  CX.fillText('basal  6U', 10, barY + 12);
+  CX.globalAlpha = 1;
+
+  // Spawn drops periodically — slow drip from bar down toward BG line
+  if (_basalFrame % 18 === 0 && Math.random() < 0.65) {
+    var dx = 60 + Math.random() * (W - 120);
+    _basalDrops.push({
+      x:      dx,
+      y:      barH + 2,
+      targetY: lineY - 8,
+      alpha:  0,
+      size:   1.2 + Math.random() * 1.0,
+      speed:  0.28 + Math.random() * 0.18,
+      life:   0,
+      maxLife: 160 + Math.random() * 80,
+    });
+  }
+  if (_basalDrops.length > 60) _basalDrops.splice(0, _basalDrops.length - 60);
+
+  // Update + draw drops
+  for (var di = _basalDrops.length - 1; di >= 0; di--) {
+    var drop = _basalDrops[di];
+    drop.life++;
+    drop.y  += drop.speed;
+    var t    = drop.life / drop.maxLife;
+    drop.alpha = t < 0.15 ? (t/0.15) * 0.35 : t < 0.7 ? 0.35 : 0.35 * (1 - (t-0.7)/0.3);
+    if (drop.life >= drop.maxLife || drop.y > drop.targetY) {
+      _basalDrops.splice(di, 1); continue;
+    }
+    CX.globalAlpha = drop.alpha;
+    CX.fillStyle   = 'rgba('+r+','+g+','+b+',1)';
+    CX.beginPath();
+    CX.arc(drop.x, drop.y, drop.size, 0, Math.PI*2);
+    CX.fill();
+  }
+
+  CX.globalAlpha = 1;
+  CX.restore();
+}
+
 function drawBolusMarkers(pal) {
   if (!window._eventCards) window._eventCards = [];
   window._eventCards = [];
@@ -1753,22 +1884,24 @@ function drawBolusMarkers(pal) {
       // Pill label
       const lbl = b.c + 'g';
       const who = b.logged_by ? getPersonInitial(b.logged_by) : '';
-      CX.font = "300 9px 'DM Mono',monospace";
-      const lw = CX.measureText(lbl).width + 12;
-      CX.globalAlpha = 0.92;
-      CX.fillStyle   = 'rgba(' + r + ',' + g + ',' + bv + ',0.4)';
-      CX.strokeStyle = 'rgba(' + r + ',' + g + ',' + bv + ',0.8)';
-      CX.lineWidth   = 1.0;
-      CX.beginPath(); CX.roundRect(x - lw/2, cardY, lw, 15, 4); CX.fill(); CX.stroke();
-      CX.globalAlpha = 1.0; CX.fillStyle = 'rgba(240,248,255,0.95)';
+      CX.font = "500 11px 'DM Mono',monospace";
+      const lw = CX.measureText(lbl).width + 16;
+      CX.globalAlpha = 1.0;
+      CX.fillStyle   = 'rgba(' + r + ',' + g + ',' + bv + ',0.55)';
+      CX.strokeStyle = 'rgba(' + r + ',' + g + ',' + bv + ',1.0)';
+      CX.lineWidth   = 1.2;
+      CX.shadowColor = 'rgba(' + r + ',' + g + ',' + bv + ',0.5)'; CX.shadowBlur = 6;
+      CX.beginPath(); CX.roundRect(x - lw/2, cardY, lw, 17, 5); CX.fill(); CX.stroke();
+      CX.shadowBlur = 0;
+      CX.fillStyle = 'rgba(255,255,255,1.0)';
       CX.textAlign   = 'center';
-      CX.fillText(lbl, x, cardY + 10.5);
+      CX.fillText(lbl, x, cardY + 12);
       if (who) {
-        CX.globalAlpha = 0.5; CX.font = "300 7px 'DM Mono',monospace";
+        CX.globalAlpha = 0.7; CX.font = "400 8px 'DM Mono',monospace";
         CX.fillText(who, x + lw/2 - 5, cardY + 1);
         CX.globalAlpha = 1;
       }
-      window._eventCards.push({x:x, y:cardY+8, w:lw+4, h:16, data:b, idx:_bIdx, type:'carb'});
+      window._eventCards.push({x:x, y:cardY+8, w:lw+4, h:17, data:b, idx:_bIdx, type:'carb'});
     }
 
     if (b.u > 0.1) {
@@ -1783,17 +1916,19 @@ function drawBolusMarkers(pal) {
       CX.shadowColor = 'rgba(' + r + ',' + g + ',' + bv + ',0.8)'; CX.shadowBlur = 5;
       CX.beginPath(); CX.arc(x, bgY, 3.2, 0, Math.PI*2); CX.fill(); CX.shadowBlur = 0;
       const lbl = b.u.toFixed(1) + 'U';
-      CX.font = "300 9px 'DM Mono',monospace";
-      const lw = CX.measureText(lbl).width + 12;
-      CX.globalAlpha = 0.92;
-      CX.fillStyle   = 'rgba(' + r + ',' + g + ',' + bv + ',0.35)';
-      CX.strokeStyle = 'rgba(' + r + ',' + g + ',' + bv + ',0.75)';
-      CX.lineWidth   = 1.0;
-      CX.beginPath(); CX.roundRect(x - lw/2, cardY - 1, lw, 15, 4); CX.fill(); CX.stroke();
-      CX.globalAlpha = 1.0; CX.fillStyle = 'rgba(240,248,255,0.95)';
+      CX.font = "500 11px 'DM Mono',monospace";
+      const lw = CX.measureText(lbl).width + 16;
+      CX.globalAlpha = 1.0;
+      CX.fillStyle   = 'rgba(' + r + ',' + g + ',' + bv + ',0.50)';
+      CX.strokeStyle = 'rgba(' + r + ',' + g + ',' + bv + ',1.0)';
+      CX.lineWidth   = 1.2;
+      CX.shadowColor = 'rgba(' + r + ',' + g + ',' + bv + ',0.5)'; CX.shadowBlur = 6;
+      CX.beginPath(); CX.roundRect(x - lw/2, cardY - 1, lw, 17, 5); CX.fill(); CX.stroke();
+      CX.shadowBlur = 0;
+      CX.fillStyle = 'rgba(255,255,255,1.0)';
       CX.textAlign   = 'center';
-      CX.fillText(lbl, x, cardY + 10);
-      window._eventCards.push({x:x, y:cardY+7, w:lw+4, h:16, data:b, idx:_bIdx, type:'insulin'});
+      CX.fillText(lbl, x, cardY + 11);
+      window._eventCards.push({x:x, y:cardY+7, w:lw+4, h:17, data:b, idx:_bIdx, type:'insulin'});
     }
   }
   CX.globalAlpha = 1; CX.restore();
@@ -1925,9 +2060,24 @@ function drawTimeLabels(pal) {
 
   const nd = new Date(viewTime);
   const el = document.getElementById('timelabel');
-  if (el) el.textContent = DNAMES[nd.getDay()] + ' ' +
-    nd.getHours().toString().padStart(2,'0') + ':' +
-    nd.getMinutes().toString().padStart(2,'0');
+  if (el) {
+    // When scrolled away from now, show the view time with day context
+    var awayMs = HISTORY_RAW.length > 0 ? (HISTORY_RAW[HISTORY_RAW.length-1].t - viewTime) : 0;
+    if (awayMs > 5 * 60000) {
+      // Scrolled: show day + time of the view position
+      el.textContent = DNAMES[nd.getDay()] + ' ' +
+        nd.getHours().toString().padStart(2,'0') + ':' +
+        nd.getMinutes().toString().padStart(2,'0');
+      el.style.opacity = '0.75';
+      el.style.color   = 'rgba(180,210,240,0.7)';
+    } else {
+      // At now: subtle, just show time
+      var nowD = new Date();
+      el.textContent = nowD.toLocaleTimeString('en-GB',{hour:'2-digit',minute:'2-digit'});
+      el.style.opacity = '0.45';
+      el.style.color   = 'rgba(180,210,240,0.45)';
+    }
+  }
 
   const nowX   = NOW_X*W;
   const startT = xT(0), endT = xT(W);
@@ -1978,10 +2128,12 @@ function drawTimeLabels(pal) {
 }
 
 // ── RIVER PEBBLE — disturbance in the flow ─────────────────────────────
-var _riverPebble = null;
+var _riverPebble    = null;
+var _lastPebbleMsg  = null;  // remember last nudge for ghost display
 
 function showRiverPebble(msg, type) {
-  _riverPebble = { msg, type, alpha: 1.0, t: Date.now() };
+  _riverPebble   = { msg, type, alpha: 1.0, t: Date.now() };
+  _lastPebbleMsg = { msg, type, t: Date.now() };  // store for ghost
   var chip = document.getElementById('pebble-chip');
   if (!chip) {
     chip = document.createElement('div');
@@ -2003,7 +2155,8 @@ function showRiverPebble(msg, type) {
       'backdrop-filter:blur(10px)',
       'border:1px solid rgba(100,150,200,0.2)',
       'transition:opacity .4s',
-      'white-space:nowrap'
+      'white-space:nowrap',
+      'pointer-events:auto',
     ].join(';');
     chip.onclick = function() {
       chip.style.opacity = '0';
@@ -2013,11 +2166,58 @@ function showRiverPebble(msg, type) {
     document.body.appendChild(chip);
   }
   chip.textContent = msg;
-  chip.style.opacity = '1';
+
+  // Only show chip when viewing "now" — hide when scrolled
+  var atNow = _isAtNow || (HISTORY_RAW.length > 0 &&
+    Math.abs(viewTime - HISTORY_RAW[HISTORY_RAW.length-1].t) < 8 * 60000);
+  chip.style.opacity = atNow ? '1' : '0';
+  chip.style.pointerEvents = atNow ? 'auto' : 'none';
+
   if (window._pebbleTimeout) clearTimeout(window._pebbleTimeout);
   window._pebbleTimeout = setTimeout(function() {
     if (chip) chip.style.opacity = '0';
   }, 10000);
+}
+
+// Called from frame to keep nudge chip visibility in sync with scroll state
+function updateNudgeChipVisibility() {
+  var chip = document.getElementById('pebble-chip');
+  if (!chip || chip.style.opacity === '0') return;
+  var atNow = _isAtNow || (HISTORY_RAW.length > 0 &&
+    Math.abs(viewTime - HISTORY_RAW[HISTORY_RAW.length-1].t) < 8 * 60000);
+  chip.style.opacity      = atNow ? '1' : '0';
+  chip.style.pointerEvents = atNow ? 'auto' : 'none';
+
+  // Ghost chip: when scrolled away from now and a recent nudge exists
+  var ghost = document.getElementById('pebble-ghost');
+  if (!atNow && _lastPebbleMsg && (Date.now() - _lastPebbleMsg.t) < 20 * 60000) {
+    if (!ghost) {
+      ghost = document.createElement('div');
+      ghost.id = 'pebble-ghost';
+      ghost.style.cssText = [
+        'position:fixed',
+        'bottom:calc(max(80px,env(safe-area-inset-bottom,80px)) + 12px)',
+        'left:50%',
+        'transform:translateX(-50%)',
+        'z-index:24',
+        'padding:5px 14px',
+        'border-radius:20px',
+        "font-family:'DM Mono',monospace",
+        'font-size:9px',
+        'letter-spacing:.4px',
+        'color:rgba(140,170,200,0.4)',
+        'background:rgba(20,30,55,0.4)',
+        'border:1px solid rgba(80,110,160,0.15)',
+        'white-space:nowrap',
+        'pointer-events:none',
+      ].join(';');
+      document.body.appendChild(ghost);
+    }
+    ghost.textContent = '⟳ ' + _lastPebbleMsg.msg;
+    ghost.style.display = 'block';
+  } else if (ghost) {
+    ghost.style.display = 'none';
+  }
 }
 
 function drawRiverPebble(pal) {
@@ -2043,6 +2243,73 @@ function drawRiverPebble(pal) {
 
 
 // ── MAIN FRAME ───────────────────────────────────────────────
+
+// ── NO-DATA ORB — pulsing grey when sensor gap is active ──────────────
+function drawNoDataOrb(pal) {
+  if (HISTORY_RAW.length === 0) return;
+  var lastT  = HISTORY_RAW[HISTORY_RAW.length-1].t;
+  var gapMs  = Date.now() - lastT;
+  var isLive = _isAtNow || Math.abs(viewTime - lastT) < 5*60000;
+  if (!isLive) return;                        // only show when viewing 'now'
+  if (gapMs < 10 * 60000) return;            // only trigger after 10 min gap
+  var gapMins = Math.floor(gapMs / 60000);
+
+  // Position orb at the last known reading's x position, at its y
+  var lastReading = HISTORY_RAW[HISTORY_RAW.length-1];
+  var ox = tX(lastReading.t);
+  var oy = bgToY(lastReading.bg);
+
+  // Constrain to canvas — if scrolled, use NOW_X
+  if (ox < 20 || ox > W - 20) ox = NOW_X * W;
+
+  var pulse = 0.5 + 0.5 * Math.sin(phi * 2.5);
+
+  CX.save();
+
+  // Outer pulsing rings — muted grey-blue
+  for (var ring = 0; ring < 3; ring++) {
+    var rAge    = (phi * 0.8 + ring * 1.1) % 3;
+    var rRadius = 10 + rAge * 22;
+    var rAlpha  = (1 - rAge / 3) * 0.3;
+    CX.globalAlpha = rAlpha;
+    CX.strokeStyle = 'rgba(160,180,200,1)';
+    CX.lineWidth   = 0.8;
+    CX.beginPath(); CX.arc(ox, oy, Math.max(1, rRadius), 0, Math.PI*2); CX.stroke();
+  }
+
+  // Core grey orb
+  var orbR = 7 + pulse * 3;
+  var grad = CX.createRadialGradient(ox, oy, 0, ox, oy, orbR * 2);
+  grad.addColorStop(0,   'rgba(180,200,220,' + (0.6 + pulse * 0.2) + ')');
+  grad.addColorStop(0.5, 'rgba(120,140,170,' + (0.3 + pulse * 0.1) + ')');
+  grad.addColorStop(1,   'rgba(80,100,140,0)');
+  CX.globalAlpha = 0.85;
+  CX.fillStyle   = grad;
+  CX.beginPath(); CX.arc(ox, oy, orbR * 2, 0, Math.PI*2); CX.fill();
+
+  // Inner dot
+  CX.globalAlpha = 0.7 + pulse * 0.3;
+  CX.fillStyle   = 'rgba(180,200,230,1)';
+  CX.shadowColor = 'rgba(150,180,220,0.8)'; CX.shadowBlur = 8;
+  CX.beginPath(); CX.arc(ox, oy, orbR * 0.5, 0, Math.PI*2); CX.fill();
+  CX.shadowBlur  = 0;
+
+  // Label: "no data Xm" just above the orb
+  CX.globalAlpha = 0.65 + pulse * 0.2;
+  CX.font        = "400 9px 'DM Mono',monospace";
+  CX.fillStyle   = 'rgba(160,185,210,1)';
+  CX.textAlign   = 'center';
+  CX.fillText('no data ' + gapMins + 'm', ox, oy - orbR * 2 - 6);
+
+  CX.globalAlpha = 1; CX.restore();
+
+  // Also drive the stale-warn HTML element
+  var sw = document.getElementById('stale-warn');
+  if (sw) {
+    sw.style.display = 'block';
+    sw.textContent   = 'no reading for ' + gapMins + 'm';
+  }
+}
 
 // ── SMART ALERT SYSTEM ──────────────────────────────────────────────
 // Hypo: act NOW — urgent, escalating
@@ -2196,38 +2463,46 @@ function showAlertBanner(msg, bgCol, urgent) {
   if (!banner) {
     banner = document.createElement('div');
     banner.id = 'alert-banner';
-    banner.style.position = 'fixed';
-    banner.style.top = 'max(60px,env(safe-area-inset-top,60px))';
-    banner.style.left = '50%';
-    banner.style.transform = 'translateX(-50%)';
-    banner.style.zIndex = '50';
-    banner.style.padding = '12px 20px';
-    banner.style.borderRadius = '14px';
+    banner.style.position   = 'fixed';
+    // Position in the flow — below the HUD readout, in the canvas area
+    banner.style.top        = 'max(90px, calc(env(safe-area-inset-top, 0px) + 90px))';
+    banner.style.left       = '50%';
+    banner.style.transform  = 'translateX(-50%)';
+    banner.style.zIndex     = '30';  // below HUD (z:40+) but visible on canvas
+    banner.style.padding    = '8px 18px';
+    banner.style.borderRadius = '20px';
     banner.style.fontFamily = "'DM Mono',monospace";
-    banner.style.fontSize = '12px';
-    banner.style.letterSpacing = '.3px';
-    banner.style.color = 'rgba(255,255,255,0.95)';
-    banner.style.textAlign = 'center';
-    banner.style.backdropFilter = 'blur(12px)';
-    banner.style.border = '1px solid rgba(255,255,255,0.15)';
-    banner.style.cursor = 'pointer';
-    banner.style.maxWidth = '280px';
+    banner.style.fontSize   = '11px';
+    banner.style.letterSpacing = '.5px';
+    banner.style.textTransform = 'uppercase';
+    banner.style.color      = 'rgba(255,255,255,0.92)';
+    banner.style.textAlign  = 'center';
+    banner.style.backdropFilter = 'blur(8px)';
+    banner.style.border     = '1px solid rgba(255,255,255,0.12)';
+    banner.style.cursor     = 'pointer';
+    banner.style.maxWidth   = '240px';
     banner.style.lineHeight = '1.4';
-    banner.style.transition = 'opacity .3s';
+    banner.style.transition = 'opacity .3s, transform .3s';
+    banner.style.pointerEvents = 'auto';
     banner.onclick = function() {
-      banner.style.opacity = '0';
+      banner.style.opacity   = '0';
+      banner.style.transform = 'translateX(-50%) translateY(-6px)';
       ALERTS.snooze('corr_nudge', 20*60000);
       ALERTS.snooze('corr_high',  20*60000);
     };
     document.body.appendChild(banner);
   }
   banner.textContent = msg;
-  banner.style.background = bgCol;
-  banner.style.opacity = '1';
-  banner.style.boxShadow = urgent ? '0 0 30px rgba(60,100,255,0.4)' : 'none';
+  banner.style.background  = bgCol;
+  banner.style.opacity     = '1';
+  banner.style.transform   = 'translateX(-50%) translateY(0)';
+  banner.style.boxShadow   = urgent ? '0 4px 24px rgba(60,100,255,0.35)' : '0 2px 12px rgba(0,0,0,0.3)';
   if (_bannerTimeout) clearTimeout(_bannerTimeout);
   _bannerTimeout = setTimeout(function() {
-    if (banner) banner.style.opacity = '0';
+    if (banner) {
+      banner.style.opacity   = '0';
+      banner.style.transform = 'translateX(-50%) translateY(-6px)';
+    }
   }, urgent ? 20000 : 8000);
 }
 
@@ -2318,13 +2593,32 @@ function updateHUD(d, pal) {
     if (isStale) staleWarn.textContent = 'no reading for ' + minsStale + 'm';
   }
 
-  // BG number + trend arrow
+  // BG number + trend arrow — prefer CGM trend field from latest reading
+  var latestRaw = HISTORY_RAW.length > 0 ? HISTORY_RAW[HISTORY_RAW.length-1] : null;
+  var cgmTrend  = latestRaw && latestRaw.trend ? latestRaw.trend : null;
+  var cgmStale  = latestRaw ? (Date.now() - latestRaw.t) > 8 * 60000 : true;
   var prev15 = dataAt(viewTime - 15*60000);
   var delta  = d.bg - prev15.bg;
-  var arr    = delta > 0.75  ? '↑↑' :
-               delta > 0.25  ? '↑'  :
-               delta < -0.75 ? '↓↓' :
-               delta < -0.25 ? '↓'  : '→';
+  // Only use computed delta if we have ≥12 min of real span and we're near "now"
+  var haveSpan = latestRaw && (latestRaw.t - HISTORY_RAW[0].t) > 12*60000;
+  var nearNow  = Math.abs(viewTime - (latestRaw ? latestRaw.t : 0)) < 10*60000;
+  var arr;
+  if (cgmTrend && !cgmStale && nearNow) {
+    arr = cgmTrend === 'DoubleUp'       ? '↑↑' :
+          cgmTrend === 'SingleUp'       ? '↑'  :
+          cgmTrend === 'FortyFiveUp'    ? '↗'  :
+          cgmTrend === 'Flat'           ? '→'  :
+          cgmTrend === 'FortyFiveDown'  ? '↘'  :
+          cgmTrend === 'SingleDown'     ? '↓'  :
+          cgmTrend === 'DoubleDown'     ? '↓↓' : '→';
+  } else if (haveSpan) {
+    arr = delta > 0.75  ? '↑↑' :
+          delta > 0.25  ? '↑'  :
+          delta < -0.75 ? '↓↓' :
+          delta < -0.25 ? '↓'  : '→';
+  } else {
+    arr = '·';
+  }
 
   var bgEl  = document.getElementById('bg-num');
   var color = d.bg < BG_LOW  ? 'rgba(100,150,255,0.9)'  :
@@ -2406,6 +2700,7 @@ function frame(ts) {
 
   // ── EVENT MARKERS — ripples where forces entered ───────────────
   drawBolusMarkers(pal);
+  drawBasalReservoir(pal);  // subtle always-present basal drip
 
   // ── CONTEXT ─────────────────────────────────────────────────────
   drawTransition(pal);
@@ -2419,6 +2714,7 @@ function frame(ts) {
   drawNowPulse(pal, d);
   drawRiverPebble(pal);
   drawHoverTooltip(pal);
+  drawNoDataOrb(pal);  // pulsing grey orb during active sensor gap
 
   // Live reading pulse — flashes when new data arrives
   if (_pulseAlpha > 0.01) {
@@ -2443,6 +2739,7 @@ function frame(ts) {
   checkAlerts(d);
   drawHypoPulse(pal);
   updateHUD(d, pal);
+  updateNudgeChipVisibility();
 
   requestAnimationFrame(frame);
   } catch(e) {
@@ -5545,8 +5842,8 @@ function ingestReadings(readings) {
   for (const r of readings) {
     if (!r.t || !r.bg || r.bg < 1 || r.bg > 30) continue;
     const existing = HISTORY_RAW.findIndex(h => Math.abs(h.t - r.t) < 90000);
-    const entry = { t: r.t, bg: r.bg, iob: 0, cob: 0, pen: 1 };
-    if (existing >= 0) HISTORY_RAW[existing] = { ...HISTORY_RAW[existing], bg: r.bg };
+    const entry = { t: r.t, bg: r.bg, iob: 0, cob: 0, pen: 1, trend: r.trend || null };
+    if (existing >= 0) HISTORY_RAW[existing] = { ...HISTORY_RAW[existing], bg: r.bg, trend: r.trend || HISTORY_RAW[existing].trend || null };
     else { HISTORY_RAW.push(entry); changed = true; }
     if (r.t > _lastReadingT) _lastReadingT = r.t;
   }
@@ -6319,13 +6616,139 @@ function setupOrbLongPress() {
     if (dist < 44) {
       _orbLongPressHint = 1.0;
       _orbPressTimer = setTimeout(function() {
-        openWhisper();
-      }, 700);
+        if (navigator.vibrate) navigator.vibrate(30);
+        openOrbRadialMenu();
+      }, 500);
     }
   }, {passive:true});
   cv.addEventListener('touchend', function() {
     if (_orbPressTimer) { clearTimeout(_orbPressTimer); _orbPressTimer = null; }
   }, {passive:true});
+  cv.addEventListener('mousedown', function(e) {
+    const orbX = NOW_X * W;
+    const d    = dataAt ? dataAt(viewTime) : null;
+    const orbY = d ? bgToY(d.bg) : H * 0.6;
+    const dist = Math.hypot(e.clientX - orbX, e.clientY - orbY);
+    if (dist < 44) {
+      _orbLongPressHint = 1.0;
+      _orbPressTimer = setTimeout(function() {
+        openOrbRadialMenu();
+      }, 500);
+    }
+  });
+  cv.addEventListener('mouseup', function() {
+    if (_orbPressTimer) { clearTimeout(_orbPressTimer); _orbPressTimer = null; }
+  });
+}
+
+function openOrbRadialMenu() {
+  var ex = document.getElementById('orb-radial-menu');
+  if (ex) { ex.remove(); return; }
+
+  var d     = dataAt ? dataAt(viewTime) : null;
+  var orbX  = NOW_X * W;
+  var orbY  = d ? bgToY(d.bg) : window.innerHeight * 0.5;
+
+  // Items: label, icon, action, colour
+  var items = [
+    { label: 'log food',   icon: '◉', fn: 'openSheet()',          col: 'rgba(255,150,50,0.9)'  },
+    { label: 'correct',    icon: '◎', fn: 'openCorrectionLog()',  col: 'rgba(80,130,220,0.9)'  },
+    { label: 'hypo',       icon: '⬡', fn: 'openHypoLog()',        col: 'rgba(255,210,40,0.9)'  },
+    { label: 'whisper',    icon: '◌', fn: 'openWhisper()',        col: 'rgba(140,200,180,0.9)' },
+    { label: 'kitchen',    icon: '◈', fn: 'openKitchen()',        col: 'rgba(200,120,80,0.9)'  },
+  ];
+
+  var el = document.createElement('div');
+  el.id  = 'orb-radial-menu';
+  el.style.cssText = 'position:fixed;inset:0;z-index:60;pointer-events:auto;touch-action:none';
+
+  // Background dim
+  var bg = document.createElement('div');
+  bg.style.cssText = 'position:absolute;inset:0;background:rgba(3,5,18,0.55);backdrop-filter:blur(3px);transition:opacity .2s;opacity:0';
+  el.appendChild(bg);
+  setTimeout(function(){ bg.style.opacity = '1'; }, 10);
+
+  // Close on backdrop tap
+  bg.addEventListener('click', function() { closeOrbRadialMenu(); });
+
+  // Radial buttons
+  var numItems = items.length;
+  var radius   = Math.min(window.innerWidth, window.innerHeight) * 0.22;
+  radius       = Math.max(90, Math.min(radius, 130));
+
+  // Clamp orb position to safe zone
+  var cx = Math.max(radius + 20, Math.min(window.innerWidth  - radius - 20, orbX));
+  var cy = Math.max(radius + 60, Math.min(window.innerHeight - radius - 20, orbY));
+
+  items.forEach(function(item, i) {
+    var angle  = (i / numItems) * Math.PI * 2 - Math.PI / 2;
+    var tx     = cx + Math.cos(angle) * radius;
+    var ty     = cy + Math.sin(angle) * radius;
+
+    var btn = document.createElement('button');
+    btn.style.cssText = [
+      'position:absolute',
+      'left:' + (tx - 34) + 'px',
+      'top:'  + (ty - 34) + 'px',
+      'width:68px',
+      'height:68px',
+      'border-radius:50%',
+      'border:1px solid ' + item.col.replace('0.9','0.4'),
+      'background:rgba(5,8,22,0.88)',
+      'backdrop-filter:blur(12px)',
+      'cursor:pointer',
+      'display:flex',
+      'flex-direction:column',
+      'align-items:center',
+      'justify-content:center',
+      'gap:3px',
+      'opacity:0',
+      'transform:scale(0.5)',
+      'transition:opacity .25s ' + (i*0.04) + 's, transform .25s ' + (i*0.04) + 's',
+      'pointer-events:auto',
+      '-webkit-tap-highlight-color:transparent',
+    ].join(';');
+    btn.innerHTML =
+      '<span style="font-size:18px;line-height:1;color:' + item.col + '">' + item.icon + '</span>' +
+      '<span style="font-family:\'DM Mono\',monospace;font-size:8px;letter-spacing:0.5px;color:rgba(200,220,240,0.7);text-transform:uppercase;line-height:1">' + item.label + '</span>';
+
+    btn.addEventListener('click', function(e) {
+      e.stopPropagation();
+      closeOrbRadialMenu();
+      // small delay so menu closes first
+      setTimeout(function(){ try { eval(item.fn); } catch(err){} }, 80);
+    });
+    el.appendChild(btn);
+    setTimeout(function(){ btn.style.opacity = '1'; btn.style.transform = 'scale(1)'; }, 10);
+  });
+
+  // Centre label
+  var lbl = document.createElement('div');
+  lbl.style.cssText = [
+    'position:absolute',
+    'left:' + (cx - 30) + 'px',
+    'top:'  + (cy - 10) + 'px',
+    'width:60px',
+    'text-align:center',
+    "font-family:'DM Mono',monospace",
+    'font-size:9px',
+    'letter-spacing:1px',
+    'text-transform:uppercase',
+    'color:rgba(180,200,220,0.4)',
+    'pointer-events:none',
+  ].join(';');
+  lbl.textContent = 'hold';
+  el.appendChild(lbl);
+
+  document.body.appendChild(el);
+}
+
+function closeOrbRadialMenu() {
+  var el = document.getElementById('orb-radial-menu');
+  if (!el) return;
+  el.style.opacity = '0';
+  el.style.transition = 'opacity .15s';
+  setTimeout(function(){ if(el.parentNode) el.remove(); }, 160);
 }
 
 function openWhisper() {
@@ -6950,20 +7373,198 @@ function deleteEvent(idx) {
 }
 
 function openSettings() {
-  // Re-render setup screen on top
+  // If tray already open, close it
+  var ex = document.getElementById('settings-tray');
+  if (ex) { closeSettingsTray(); return; }
+  openSettingsTray();
+}
+
+function openSettingsTray() {
+  var ex = document.getElementById('settings-tray');
+  if (ex) { ex.remove(); }
+
+  var tray = document.createElement('div');
+  tray.id  = 'settings-tray';
+
+  var safeBottom = 'max(72px, calc(env(safe-area-inset-bottom, 0px) + 72px))';
+  tray.style.cssText = [
+    'position:fixed',
+    'bottom:' + safeBottom,
+    'left:8px',
+    'z-index:55',
+    'display:flex',
+    'flex-direction:column',
+    'gap:5px',
+    'pointer-events:auto',
+    'opacity:0',
+    'transform:translateY(12px)',
+    'transition:opacity .2s, transform .2s',
+  ].join(';');
+
+  var items = [
+    { label: 'debug',        icon: '⬡', fn: function(){ closeSettingsTray(); openDebugPanel(); },       col: 'rgba(120,180,120,0.8)' },
+    { label: 'team',         icon: '◉', fn: function(){ closeSettingsTray(); openPeopleInFlow(); },     col: 'rgba(100,160,220,0.8)' },
+    { label: 'cgm',          icon: '◎', fn: function(){ closeSettingsTray(); openCGMSettings(); },      col: 'rgba(80,200,180,0.8)'  },
+    { label: 'food library', icon: '◌', fn: function(){ closeSettingsTray(); openFoodManager(); },      col: 'rgba(220,150,60,0.8)'  },
+    { label: 'treatment',    icon: '◈', fn: function(){ closeSettingsTray(); openTreatmentPanel(); },   col: 'rgba(180,100,220,0.8)' },
+  ];
+
+  // Build items in reverse so they stack upward
+  items.slice().reverse().forEach(function(item, ri) {
+    var i = items.length - 1 - ri;
+    var btn = document.createElement('button');
+    btn.style.cssText = [
+      'display:flex',
+      'align-items:center',
+      'gap:10px',
+      'padding:9px 14px 9px 10px',
+      'border-radius:20px',
+      'border:1px solid ' + item.col.replace('0.8','0.25'),
+      'background:rgba(4,6,18,0.92)',
+      'backdrop-filter:blur(14px)',
+      'cursor:pointer',
+      "font-family:'DM Mono',monospace",
+      'font-size:10px',
+      'letter-spacing:0.5px',
+      'text-transform:uppercase',
+      'color:rgba(200,220,240,0.75)',
+      'white-space:nowrap',
+      'opacity:0',
+      'transform:translateX(-8px)',
+      'transition:opacity .18s ' + (ri * 0.04) + 's, transform .18s ' + (ri * 0.04) + 's',
+      '-webkit-tap-highlight-color:transparent',
+    ].join(';');
+    btn.innerHTML =
+      '<span style="font-size:14px;color:' + item.col + '">' + item.icon + '</span>' +
+      '<span>' + item.label + '</span>';
+    btn.addEventListener('click', item.fn);
+    tray.appendChild(btn);
+    setTimeout(function(){ btn.style.opacity='1'; btn.style.transform='translateX(0)'; }, 20);
+  });
+
+  // Backdrop to close
+  var backdrop = document.createElement('div');
+  backdrop.id = 'settings-tray-backdrop';
+  backdrop.style.cssText = 'position:fixed;inset:0;z-index:54;pointer-events:auto';
+  backdrop.addEventListener('click', closeSettingsTray);
+  document.body.appendChild(backdrop);
+
+  document.body.appendChild(tray);
+  setTimeout(function(){ tray.style.opacity='1'; tray.style.transform='translateY(0)'; }, 10);
+}
+
+function closeSettingsTray() {
+  var tray     = document.getElementById('settings-tray');
+  var backdrop = document.getElementById('settings-tray-backdrop');
+  if (tray) {
+    tray.style.opacity   = '0';
+    tray.style.transform = 'translateY(12px)';
+    setTimeout(function(){ if(tray.parentNode) tray.remove(); }, 220);
+  }
+  if (backdrop) backdrop.remove();
+}
+
+function openCGMSettings() {
   const existing = document.getElementById('setup-screen');
   if (existing) existing.remove();
   document.body.insertAdjacentHTML('beforeend', buildSetupScreen());
   _selectedSource = loadCGMConfig()?.sourceId || 'nightscout';
   renderSourceFields(_selectedSource);
-  // Add close button
   const sc = document.getElementById('setup-screen');
   if (sc) {
     sc.querySelector('div').insertAdjacentHTML('afterbegin',
-      `<button onclick="dismissSetup()" style="position:absolute;top:16px;right:16px;
-        background:none;border:none;cursor:pointer;font-size:22px;
-        color:rgba(40,55,50,0.3)">×</button>`);
+      '<button onclick="dismissSetup()" style="position:absolute;top:16px;right:16px;' +
+      'background:none;border:none;cursor:pointer;font-size:22px;' +
+      'color:rgba(40,55,50,0.3)">×</button>');
   }
+}
+
+function openTreatmentPanel() {
+  var ex = document.getElementById('treatment-overlay');
+  if (ex) { ex.remove(); return; }
+
+  var el = document.createElement('div');
+  el.id  = 'treatment-overlay';
+  el.style.cssText = 'position:fixed;inset:0;z-index:70;background:rgba(3,5,18,0.96);' +
+    'backdrop-filter:blur(16px);overflow-y:auto;-webkit-overflow-scrolling:touch;' +
+    'display:flex;flex-direction:column;align-items:center;padding:48px 20px 40px;' +
+    'opacity:0;transition:opacity .2s;pointer-events:auto';
+  el.addEventListener('touchstart',function(e){e.stopPropagation();},{passive:true});
+
+  function rowStyle(col) {
+    return 'display:flex;align-items:center;justify-content:space-between;' +
+      'padding:10px 14px;border-radius:10px;background:rgba(255,255,255,0.03);' +
+      'border:1px solid rgba(255,255,255,0.06);margin-bottom:8px;' +
+      "font-family:'DM Mono',monospace;font-size:11px;color:" + col;
+  }
+
+  var ratioRows = [
+    { period:'Breakfast',  isf:'1:6.5', ic:'1:8.5'  },
+    { period:'Lunch',      isf:'1:7.0', ic:'1:12'   },
+    { period:'Afternoon',  isf:'1:7.0', ic:'1:15'   },
+    { period:'Evening',    isf:'1:7.0', ic:'1:10'   },
+    { period:'Overnight',  isf:'1:6.5', ic:'—'      },
+  ];
+
+  var ratioHTML = ratioRows.map(function(row) {
+    return '<div style="' + rowStyle('rgba(200,220,240,0.7)') + '">' +
+      '<span style="color:rgba(140,180,220,0.6);text-transform:uppercase;font-size:9px;letter-spacing:1px;width:90px">' + row.period + '</span>' +
+      '<span style="color:rgba(255,150,50,0.8)">I:C ' + row.ic + '</span>' +
+      '<span style="color:rgba(80,140,220,0.8)">ISF ' + row.isf + '</span>' +
+    '</div>';
+  }).join('');
+
+  el.innerHTML =
+    '<div style="max-width:340px;width:100%">' +
+    '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:24px">' +
+      '<div style="font-family:\'Fraunces\',serif;font-style:italic;font-weight:200;font-size:22px;color:rgba(180,220,200,0.8)">treatment</div>' +
+      '<button onclick="document.getElementById(\'treatment-overlay\').remove()" ' +
+        'style="background:none;border:none;cursor:pointer;font-size:22px;color:rgba(255,255,255,0.25);padding:4px">×</button>' +
+    '</div>' +
+
+    // Basal
+    '<div style="font-family:\'DM Mono\',monospace;font-size:8px;letter-spacing:1.5px;text-transform:uppercase;' +
+      'color:rgba(80,140,220,0.5);margin-bottom:10px">basal</div>' +
+    '<div style="' + rowStyle('rgba(200,220,240,0.7)') + '">' +
+      '<span style="color:rgba(140,180,220,0.6)">Degludec</span>' +
+      '<span style="color:rgba(80,140,220,0.9);font-size:16px">6 U</span>' +
+      '<span style="color:rgba(100,140,200,0.4);font-size:9px">peakless</span>' +
+    '</div>' +
+
+    // Hypo defaults
+    '<div style="font-family:\'DM Mono\',monospace;font-size:8px;letter-spacing:1.5px;text-transform:uppercase;' +
+      'color:rgba(255,210,40,0.5);margin-bottom:10px;margin-top:20px">hypo defaults</div>' +
+    '<div style="' + rowStyle('rgba(255,210,40,0.8)') + '">' +
+      '<span style="color:rgba(200,180,80,0.6)">threshold</span>' +
+      '<span>3.9 mmol/L</span>' +
+    '</div>' +
+    '<div style="' + rowStyle('rgba(255,210,40,0.8)') + '">' +
+      '<span style="color:rgba(200,180,80,0.6)">treatment</span>' +
+      '<span>15g fast carbs</span>' +
+    '</div>' +
+
+    // Ratios
+    '<div style="font-family:\'DM Mono\',monospace;font-size:8px;letter-spacing:1.5px;text-transform:uppercase;' +
+      'color:rgba(255,150,50,0.5);margin-bottom:10px;margin-top:20px">ratios</div>' +
+    ratioHTML +
+
+    // Bolus model
+    '<div style="font-family:\'DM Mono\',monospace;font-size:8px;letter-spacing:1.5px;text-transform:uppercase;' +
+      'color:rgba(100,180,140,0.5);margin-bottom:10px;margin-top:20px">bolus model</div>' +
+    '<div style="' + rowStyle('rgba(200,220,240,0.6)') + '">' +
+      '<span style="color:rgba(140,180,160,0.6)">Novorapid</span>' +
+      '<span>peak ~75 min</span>' +
+      '<span style="color:rgba(100,140,120,0.5)">4hr tail</span>' +
+    '</div>' +
+
+    '<div style="font-family:\'DM Mono\',monospace;font-size:8px;color:rgba(120,140,160,0.35);' +
+      'text-align:center;margin-top:28px;line-height:1.6">' +
+      'ratios & settings are reference only<br>always confirm with your clinical team' +
+    '</div>' +
+    '</div>';
+
+  document.body.appendChild(el);
+  setTimeout(function(){ el.style.opacity = '1'; }, 10);
 }
 
 
