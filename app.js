@@ -3933,7 +3933,7 @@ function renderSheet() {
   sheet.innerHTML =
     '<div style="position:relative;padding:28px 18px 0">' +
     '<div style="display:flex;align-items:center;justify-content:space-between;padding:0 8px 0 0">' +
-    '<div style="font-family:\'Fraunces\',serif;font-style:italic;font-weight:200;font-size:22px;color:rgba(200,220,240,0.85);padding:18px 18px 0">add to the flow</div>' +
+    '<div style="font-family:\'Fraunces\',serif;font-style:italic;font-weight:200;font-size:22px;color:rgba(255,140,50,0.9);padding:18px 18px 0">add to the flow</div>' +
     '<button onclick="closeSheet()" style="background:none;border:none;cursor:pointer;font-size:26px;' +
       'color:rgba(255,255,255,0.3);padding:4px 8px;line-height:1;touch-action:manipulation">×</button>' +
     '</div>' +
@@ -5232,11 +5232,11 @@ const CGM_SOURCES = {
 
 // ── HYPO TREATMENT QUICK-LOG ──────────────────────────────────────
 var HYPO_TREATMENTS = [
-  {id:'glucose_tabs', name:'Glucose tabs', carbs:12, gi:100, desc:'4 tabs = 12g'},
-  {id:'jelly_babies', name:'Jelly babies', carbs:11, gi:80,  desc:'4 babies = 11g'},
-  {id:'apple_juice',  name:'Apple juice',  carbs:13, gi:85,  desc:'125ml carton'},
-  {id:'lucozade',     name:'Lucozade',     carbs:15, gi:95,  desc:'half bottle'},
-  {id:'dextro',       name:'Dextro tabs',  carbs:9,  gi:100, desc:'3 tabs = 9g'},
+  {id:'glucose_tabs', name:'Glucose tabs', carbs:12, gi:100, desc:'4 tabs = 12g', carbs_each:3,   unit:'tab',   default_qty:4},
+  {id:'jelly_babies', name:'Jelly babies', carbs:11, gi:80,  desc:'4 babies = 11g',carbs_each:2.75,unit:'baby',  default_qty:4},
+  {id:'apple_juice',  name:'Apple juice',  carbs:13, gi:85,  desc:'125ml carton',  carbs_each:13,  unit:'carton',default_qty:1},
+  {id:'lucozade',     name:'Lucozade',     carbs:15, gi:95,  desc:'half bottle',   carbs_each:15,  unit:'half',  default_qty:1},
+  {id:'dextro',       name:'Dextro tabs',  carbs:9,  gi:100, desc:'3 tabs = 9g',   carbs_each:3,   unit:'tab',   default_qty:3},
 ];
 
 
@@ -5317,15 +5317,26 @@ function openHypoLog() {
   s+=timePickerHTML('hypo-time', _hypoDefault, false);
   s+='<div style="display:flex;flex-direction:column;gap:8px">';
   HYPO_TREATMENTS.forEach(function(t){
+    var dqty = t.default_qty || 1;
+    var carbs_each = t.carbs_each || t.carbs;
+    var totalCarbs = Math.round(dqty * carbs_each * 10) / 10;
     s+='<div style="display:flex;align-items:center;gap:10px;padding:12px 14px;border-radius:10px;background:rgba(60,45,10,0.4);border:1px solid rgba(255,210,40,0.2)">';
     s+='<div style="flex:1">';
     s+='<div style="font-family:\'Fraunces\',serif;font-weight:200;font-size:16px;color:rgba(255,230,120,0.95)">'+t.name+'</div>';
-    s+='<div style="font-family:\'DM Mono\',monospace;font-size:10px;color:rgba(255,210,40,0.4);margin-top:2px">'+t.desc+'</div>';
+    s+='<div id="hypo-carbs-label-'+t.id+'" style="font-family:\'DM Mono\',monospace;font-size:10px;color:rgba(255,210,40,0.45);margin-top:2px">'+totalCarbs+'g carbs</div>';
     s+='</div>';
-    s+='<input id="hypo-g-'+t.id+'" type="number" value="'+t.carbs+'" min="1" max="100" step="1" ';
-    s+='style="width:50px;padding:6px;border-radius:7px;border:1px solid rgba(255,210,40,0.3);background:rgba(50,40,5,0.5);';
-    s+='font-family:\'DM Mono\',monospace;font-size:14px;color:rgba(255,230,120,0.95);text-align:center;outline:none;touch-action:manipulation">';
-    s+='<span style="font-family:\'DM Mono\',monospace;font-size:10px;color:rgba(255,210,40,0.5)">g</span>';
+    // Quantity stepper
+    s+='<div style="display:flex;align-items:center;gap:4px">';
+    s+='<button onclick="hypoQtyStep(\''+t.id+'\','+carbs_each+',-1)" style="width:28px;height:28px;border-radius:7px;border:1px solid rgba(255,210,40,0.3);background:rgba(50,40,5,0.5);font-size:16px;color:rgba(255,225,80,0.9);cursor:pointer;touch-action:manipulation;display:flex;align-items:center;justify-content:center;line-height:1">−</button>';
+    s+='<div style="display:flex;flex-direction:column;align-items:center;gap:1px">';
+    s+='<input id="hypo-qty-'+t.id+'" type="number" value="'+dqty+'" min="1" max="20" step="1" ';
+    s+='style="width:36px;padding:4px;border-radius:6px;border:1px solid rgba(255,210,40,0.3);background:rgba(50,40,5,0.5);';
+    s+='font-family:\'DM Mono\',monospace;font-size:14px;color:rgba(255,230,120,0.95);text-align:center;outline:none;touch-action:manipulation" ';
+    s+='onchange="hypoQtyChanged(\''+t.id+'\','+carbs_each+',this.value)">';
+    s+='<span style="font-family:\'DM Mono\',monospace;font-size:8px;color:rgba(255,210,40,0.4);letter-spacing:.5px">'+t.unit+'s</span>';
+    s+='</div>';
+    s+='<button onclick="hypoQtyStep(\''+t.id+'\','+carbs_each+',1)" style="width:28px;height:28px;border-radius:7px;border:1px solid rgba(255,210,40,0.3);background:rgba(50,40,5,0.5);font-size:16px;color:rgba(255,225,80,0.9);cursor:pointer;touch-action:manipulation;display:flex;align-items:center;justify-content:center;line-height:1">+</button>';
+    s+='</div>';
     s+='<button onclick="logHypoTreatment(\''+t.id+'\')" style="padding:8px 14px;border-radius:8px;cursor:pointer;';
     s+='background:rgba(255,210,40,0.12);border:1px solid rgba(255,210,40,0.4);';
     s+='font-family:\'DM Mono\',monospace;font-size:10px;letter-spacing:.5px;text-transform:uppercase;color:rgba(255,225,80,0.9);touch-action:manipulation">log</button>';
@@ -5337,12 +5348,27 @@ function openHypoLog() {
   requestAnimationFrame(function(){el.style.opacity='1';});
 }
 function closeHypoLog(){var el=document.getElementById('hypo-overlay');if(el){el.style.opacity='0';setTimeout(function(){el.remove();},250);}}
+function hypoQtyStep(id, carbs_each, delta){
+  var inp=document.getElementById('hypo-qty-'+id);
+  if(!inp) return;
+  var v=Math.max(1,Math.min(20,(parseInt(inp.value)||1)+delta));
+  inp.value=v;
+  hypoQtyChanged(id, carbs_each, v);
+}
+function hypoQtyChanged(id, carbs_each, qty){
+  var v=Math.max(1,parseFloat(qty)||1);
+  var totalCarbs=Math.round(v*carbs_each*10)/10;
+  var lbl=document.getElementById('hypo-carbs-label-'+id);
+  if(lbl) lbl.textContent=totalCarbs+'g carbs';
+}
 function logHypoTreatment(id){
   var t=HYPO_TREATMENTS.find(function(x){return x.id===id;});
   if(!t) return;
-  // Use edited carb value from input if present
-  var inp=document.getElementById('hypo-g-'+id);
-  var carbs=inp?Math.max(1,parseFloat(inp.value)||t.carbs):t.carbs;
+  // Read quantity and compute carbs
+  var qtyInp=document.getElementById('hypo-qty-'+id);
+  var qty=qtyInp?Math.max(1,parseFloat(qtyInp.value)||t.default_qty||1):(t.default_qty||1);
+  var carbs_each=t.carbs_each||t.carbs;
+  var carbs=Math.round(qty*carbs_each*10)/10;
   var now=getTimeVal('hypo-time');
   SESSION.push({t:now,c:carbs,u:0,note:'hypo:'+id});
   try{localStorage.setItem('river_session',JSON.stringify(SESSION));}catch(e){}
@@ -5352,7 +5378,7 @@ function logHypoTreatment(id){
   syncAfterLog();
   closeHypoLog();
   var timeStr=document.getElementById('hypo-time-display')?.textContent||'';
-  showToast(t.name+'\n'+carbs+'g logged'+(timeStr?'\n'+timeStr:''));
+  showToast(t.name+'\n'+qty+' '+t.unit+'s · '+carbs+'g logged'+(timeStr?'\n'+timeStr:''));
 }
 
 // ── CORRECTION QUICK-LOG ──────────────────────────────────────────
@@ -5366,20 +5392,20 @@ function openCorrectionLog(){
   var _corrDefault = new Date();
   var s='<div style="max-width:320px;width:100%">';
   s+='<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:4px">';
-  s+='<div style="font-family:\'Fraunces\',serif;font-style:italic;font-weight:200;font-size:22px;color:rgba(220,160,60,0.9)">correction</div>';
+  s+='<div style="font-family:\'Fraunces\',serif;font-style:italic;font-weight:200;font-size:22px;color:rgba(100,160,255,0.9)">correction</div>';
   s+='<button onclick="closeCorrectionLog()" style="background:none;border:none;cursor:pointer;font-size:24px;color:rgba(255,255,255,0.2);padding:4px;touch-action:manipulation">×</button>';
   s+='</div>';
   s+=timePickerHTML('corr-time', _corrDefault, false);
-  s+='<div style="font-family:\'DM Mono\',monospace;font-size:9px;letter-spacing:1.5px;text-transform:uppercase;color:rgba(180,140,60,0.7);text-align:center;margin-bottom:20px">bg '+d.bg.toFixed(1)+' mmol &middot; isf 1:'+ISF.toFixed(0)+'</div>';
+  s+='<div style="font-family:\'DM Mono\',monospace;font-size:9px;letter-spacing:1.5px;text-transform:uppercase;color:rgba(100,150,255,0.6);text-align:center;margin-bottom:20px">bg '+d.bg.toFixed(1)+' mmol &middot; isf 1:'+ISF.toFixed(0)+'</div>';
   s+='<div style="text-align:center;margin-bottom:20px">';
-  s+='<div style="font-family:\'Fraunces\',serif;font-weight:200;font-size:52px;color:rgba(220,170,80,0.95);letter-spacing:-2px">'+sug.toFixed(1)+'</div>';
-  s+='<div style="font-family:\'DM Mono\',monospace;font-size:10px;color:rgba(180,140,60,0.7)">suggested units</div></div>';
+  s+='<div style="font-family:\'Fraunces\',serif;font-weight:200;font-size:52px;color:rgba(120,170,255,0.95);letter-spacing:-2px">'+sug.toFixed(1)+'</div>';
+  s+='<div style="font-family:\'DM Mono\',monospace;font-size:10px;color:rgba(100,150,255,0.6)">suggested units</div></div>';
   s+='<div style="display:flex;align-items:center;gap:10px;margin-bottom:20px">';
-  s+='<span style="font-family:\'DM Mono\',monospace;font-size:9px;letter-spacing:1px;text-transform:uppercase;color:rgba(180,140,60,0.75)">actual</span>';
-  s+='<input id="corr-units" type="number" step="0.5" min="0" max="10" value="'+sug.toFixed(1)+'" style="flex:1;padding:10px;border-radius:8px;border:1px solid rgba(180,140,60,0.2);background:rgba(40,30,10,0.4);font-family:\'DM Mono\',monospace;font-size:18px;color:rgba(220,180,80,0.9);text-align:center;outline:none">';
-  s+='<span style="font-family:\'DM Mono\',monospace;font-size:13px;color:rgba(180,140,60,0.75)">U</span></div>';
-  s+='<button onclick="logCorrection()" style="width:100%;padding:14px;border-radius:10px;border:1px solid rgba(180,140,60,0.25);background:rgba(40,30,10,0.5);font-family:\'Fraunces\',serif;font-style:italic;font-weight:200;font-size:17px;color:rgba(220,170,80,0.85);cursor:pointer;margin-bottom:12px">log correction</button>';
-  s+='<div style="text-align:center"><button onclick="closeCorrectionLog()" style="background:none;border:none;cursor:pointer;font-family:\'DM Mono\',monospace;font-size:9px;letter-spacing:1px;text-transform:uppercase;color:rgba(180,140,60,0.55);padding:4px">cancel</button></div></div>';
+  s+='<span style="font-family:\'DM Mono\',monospace;font-size:9px;letter-spacing:1px;text-transform:uppercase;color:rgba(100,150,255,0.75)">actual</span>';
+  s+='<input id="corr-units" type="number" step="0.5" min="0" max="10" value="'+sug.toFixed(1)+'" style="flex:1;padding:10px;border-radius:8px;border:1px solid rgba(80,130,255,0.3);background:rgba(10,20,60,0.4);font-family:\'DM Mono\',monospace;font-size:18px;color:rgba(160,200,255,0.9);text-align:center;outline:none">';
+  s+='<span style="font-family:\'DM Mono\',monospace;font-size:13px;color:rgba(100,150,255,0.75)">U</span></div>';
+  s+='<button onclick="logCorrection()" style="width:100%;padding:14px;border-radius:10px;border:1px solid rgba(80,130,255,0.3);background:rgba(20,40,120,0.3);font-family:\'Fraunces\',serif;font-style:italic;font-weight:200;font-size:17px;color:rgba(140,190,255,0.9);cursor:pointer;margin-bottom:12px">log correction</button>';
+  s+='<div style="text-align:center"><button onclick="closeCorrectionLog()" style="background:none;border:none;cursor:pointer;font-family:\'DM Mono\',monospace;font-size:9px;letter-spacing:1px;text-transform:uppercase;color:rgba(100,150,255,0.4);padding:4px">cancel</button></div></div>';
   el.innerHTML=s; document.body.appendChild(el);
   requestAnimationFrame(function(){el.style.opacity='1';});
 }
