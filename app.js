@@ -886,6 +886,8 @@ function drawForceRibbon(pts, colorR, direction) {
 // Smart forecast factors per-food curves + IOB decay.
 
 var _cobReservoir   = 0;
+var _lastCOBPeakY   = -1;   // canvas Y of tallest active COB bell peak (for pill tracking)
+var _lastIOBPeakY   = -1;   // canvas Y of tallest active IOB bell peak
 var _iobReservoir   = 0;
 var _forceParticles = [];
 var _forceMists     = [];
@@ -1009,6 +1011,9 @@ function _drawCOBReservoir() {
         CX.fillText(food.name.slice(0,14)+' '+food.carbs.toFixed(0)+'g', peakX, H-maxD-6);
         CX.globalAlpha = 1;
       }
+      // Track peak Y for pill positioning (highest bell = closest to BG line)
+      var thisPeakY = H - maxD;
+      if (_lastCOBPeakY < 0 || thisPeakY < _lastCOBPeakY) _lastCOBPeakY = thisPeakY;
     });
   });
 }
@@ -1063,6 +1068,8 @@ function _drawIOBReservoir() {
       CX.fillText(bolus.u.toFixed(1)+'U', peakX, maxD+10);
       CX.globalAlpha = 1;
     }
+    // Track peak Y for pill positioning (deepest bell = closest to BG line)
+    if (_lastIOBPeakY < 0 || maxD > _lastIOBPeakY) _lastIOBPeakY = maxD;
   });
 }
 
@@ -1292,6 +1299,8 @@ function drawGasCloud(cobPts, col, direction, d) {
 
   if(isCob) {
     _forceFrame++;
+    _lastCOBPeakY = -1;  // reset each frame so we pick fresh peak
+    _lastIOBPeakY = -1;
     if(d) {
       _cobReservoir += (Math.min(1,(d.cob||0)/80) - _cobReservoir)*0.005;
       _iobReservoir += (Math.min(1,(d.iob||0)/6)  - _iobReservoir)*0.005;
@@ -1673,12 +1682,34 @@ function drawOrb(pal, d) {
     _orbLongPressHint *= 0.96;
   }
 
+  // Tap hint — "Hold to see actions" text above orb, fades in/out
+  if (_orbTapHint > 0.01) {
+    var hintAlpha = _orbTapHint;
+    var hintY = y - orbR * 5 - 8;
+    // Keep hint on screen
+    if (hintY < 32) hintY = y + orbR * 5 + 20;
+    CX.globalAlpha = hintAlpha * 0.75;
+    CX.font = "300 10px 'DM Mono',monospace";
+    CX.textAlign = 'center';
+    CX.letterSpacing = '1px';
+    CX.fillStyle = `rgba(${r},${g},${b},1)`;
+    CX.fillText('hold to see actions', x, hintY);
+    CX.letterSpacing = '0px';
+    _orbTapHint *= 0.975; // slow fade
+  }
+
   CX.globalAlpha = 1;
   CX.restore();
 }
 
 let _orbLongPressHint = 0;
+let _orbTapHint = 0;       // fades in on single tap, prompts hold
+let _orbTapHintT = 0;      // timestamp of last tap hint trigger
 
+
+// Shimmer particles drifting along equilibrium tunnel edges
+var _eqShimmers = [];
+var _eqShimmerFrame = 0;
 
 function drawEquilibriumZone(pal) {
   const loY = bgToY(BG_HIGH);
@@ -1687,48 +1718,98 @@ function drawEquilibriumZone(pal) {
   const [r, g, b] = pal.bgLine;
   CX.save();
 
-  // Zen tunnel — glowing corridor, brightest at edges
+  // Iridescent inner fill — shifts hue with time
+  const hueShift = Math.sin(phi * 0.15) * 0.5 + 0.5; // 0-1 slow oscillation
+  const r2 = Math.round(r * 0.7 + 80 * hueShift);
+  const g2 = Math.round(g * 0.8 + 60 * (1 - hueShift));
+  const b2 = Math.round(b * 0.9 + 40 * hueShift);
+
   const grad = CX.createLinearGradient(0, loY, 0, hiY);
-  grad.addColorStop(0,    `rgba(${r},${g},${b},0.10)`);
-  grad.addColorStop(0.15, `rgba(${r},${g},${b},0.04)`);
-  grad.addColorStop(0.5,  `rgba(${r},${g},${b},0.02)`);
-  grad.addColorStop(0.85, `rgba(${r},${g},${b},0.04)`);
-  grad.addColorStop(1,    `rgba(${r},${g},${b},0.10)`);
+  grad.addColorStop(0,    `rgba(${r2},${g2},${b2},0.13)`);
+  grad.addColorStop(0.12, `rgba(${r},${g},${b},0.04)`);
+  grad.addColorStop(0.5,  `rgba(${r2},${g2},${b2},0.015)`);
+  grad.addColorStop(0.88, `rgba(${r},${g},${b},0.04)`);
+  grad.addColorStop(1,    `rgba(${r2},${g2},${b2},0.13)`);
   CX.globalAlpha = 1;
   CX.fillStyle   = grad;
   CX.fillRect(0, loY, W, zH);
 
-  // Animated flowing edge lines — breeze through the tunnel
-  CX.globalAlpha = 0.18;
-  CX.strokeStyle = `rgba(${r},${g},${b},1)`;
-  CX.lineWidth   = 0.8;
-  CX.setLineDash([6, 18]);
-  CX.lineDashOffset = -(phi * 12) % 24;
-  CX.beginPath(); CX.moveTo(0, loY); CX.lineTo(W, loY); CX.stroke();
-  CX.lineDashOffset = -(phi * 8 + 12) % 24;
-  CX.beginPath(); CX.moveTo(0, hiY); CX.lineTo(W, hiY); CX.stroke();
+  // Gossamer edge lines — multiple overlapping dashes, different speeds
+  for (var li = 0; li < 3; li++) {
+    var lAlpha = [0.22, 0.10, 0.06][li];
+    var lWidth = [0.9,  0.5,  0.3][li];
+    var lSpeed = [12,    7,   19][li];
+    var lDash  = [[6,18],[3,28],[9,40]][li];
+    CX.globalAlpha = lAlpha;
+    CX.strokeStyle = li === 1 ? `rgba(${r2},${g2},${b2},1)` : `rgba(${r},${g},${b},1)`;
+    CX.lineWidth   = lWidth;
+    CX.setLineDash(lDash);
+    CX.lineDashOffset = -(phi * lSpeed) % (lDash[0] + lDash[1]);
+    CX.beginPath(); CX.moveTo(0, loY); CX.lineTo(W, loY); CX.stroke();
+    CX.lineDashOffset = -(phi * lSpeed * 0.7 + 12) % (lDash[0] + lDash[1]);
+    CX.beginPath(); CX.moveTo(0, hiY); CX.lineTo(W, hiY); CX.stroke();
+  }
   CX.setLineDash([]); CX.lineDashOffset = 0;
+
+  // Shimmer particles — spawn along edges, drift across tunnel
+  _eqShimmerFrame++;
+  if (_eqShimmerFrame % 8 === 0 && _eqShimmers.length < 40) {
+    var onTop = Math.random() < 0.5;
+    _eqShimmers.push({
+      x: Math.random() * W,
+      y: onTop ? loY + Math.random() * 4 : hiY - Math.random() * 4,
+      vy: onTop ? (0.3 + Math.random() * 0.5) : -(0.3 + Math.random() * 0.5),
+      vx: (Math.random() - 0.5) * 0.4,
+      life: 0,
+      maxLife: 60 + Math.floor(Math.random() * 80),
+      r: Math.random() < 0.4 ? r2 : r,
+      g: Math.random() < 0.4 ? g2 : g,
+      b: Math.random() < 0.4 ? b2 : b,
+      size: 0.6 + Math.random() * 1.2,
+    });
+  }
+  _eqShimmers.forEach(function(s) {
+    s.life++;
+    s.x += s.vx;
+    s.y += s.vy;
+    var frac = s.life / s.maxLife;
+    var a = frac < 0.2 ? frac / 0.2 : frac > 0.8 ? (1 - frac) / 0.2 : 1;
+    CX.globalAlpha = a * 0.55;
+    CX.fillStyle = `rgba(${s.r},${s.g},${s.b},1)`;
+    CX.shadowColor = `rgba(${s.r},${s.g},${s.b},0.8)`;
+    CX.shadowBlur  = 3;
+    CX.beginPath();
+    CX.arc(s.x, s.y, Math.max(0.3, s.size), 0, Math.PI * 2);
+    CX.fill();
+    CX.shadowBlur = 0;
+  });
+  _eqShimmers = _eqShimmers.filter(function(s) { return s.life < s.maxLife; });
+
+  CX.globalAlpha = 1;
 
   // Danger glow above (high) and below (hypo)
   const dangerTop = CX.createLinearGradient(0, loY - zH*0.4, 0, loY);
   dangerTop.addColorStop(0, 'rgba(230,140,40,0)');
-  dangerTop.addColorStop(1, 'rgba(230,140,40,0.06)');
+  dangerTop.addColorStop(1, 'rgba(230,140,40,0.07)');
   CX.globalAlpha = 1; CX.fillStyle = dangerTop;
   CX.fillRect(0, loY - zH*0.4, W, zH*0.4);
 
   const dangerBot = CX.createLinearGradient(0, hiY, 0, hiY + zH*0.4);
-  dangerBot.addColorStop(0, 'rgba(80,130,220,0.06)');
+  dangerBot.addColorStop(0, 'rgba(80,130,220,0.07)');
   dangerBot.addColorStop(1, 'rgba(80,130,220,0)');
   CX.fillStyle = dangerBot;
   CX.fillRect(0, hiY, W, zH*0.4);
 
-  // Edge mmol labels
-  CX.globalAlpha = 0.22;
+  // Edge mmol labels — softly glowing
+  CX.globalAlpha = 0.28;
   CX.fillStyle   = `rgba(${r},${g},${b},1)`;
+  CX.shadowColor = `rgba(${r},${g},${b},0.6)`;
+  CX.shadowBlur  = 4;
   CX.font        = "200 9px 'DM Mono',monospace";
   CX.textAlign   = 'right';
   CX.fillText('10.0', NOW_X * W - 12, loY - 4);
   CX.fillText('3.9',  NOW_X * W - 12, hiY + 11);
+  CX.shadowBlur = 0;
 
   CX.globalAlpha = 1;
   CX.restore();
@@ -1786,10 +1867,10 @@ var _basalFrame = 0;
 function drawBasalReservoir(pal) {
   _basalFrame++;
   var lineY = dataAt ? bgToY(dataAt(viewTime).bg) : H * 0.5;
-  var barH   = 3;       // slim top bar height
+  var barH   = 5;       // slightly thicker than before — more presence
   var barY   = 0;       // anchored to very top edge
-  var alpha  = 0.22;    // subtle — background presence, not foreground action
-  var [r,g,b]= COL_IOB; // same colour family as bolus but differentiated
+  var alpha  = 0.45;    // more prominent — basal is always-on, not subtle
+  var [r,g,b]= [40, 200, 160]; // teal — distinct from bolus blue and carb orange
 
   CX.save();
 
@@ -1804,11 +1885,11 @@ function drawBasalReservoir(pal) {
   CX.fillRect(0, barY, W, barH);
 
   // Label on left
-  CX.globalAlpha = 0.28;
+  CX.globalAlpha = 0.55;
   CX.fillStyle   = 'rgba('+r+','+g+','+b+',1)';
-  CX.font        = "300 8px 'DM Mono',monospace";
+  CX.font        = "400 9px 'DM Mono',monospace";
   CX.textAlign   = 'left';
-  CX.fillText('basal  6U', 10, barY + 12);
+  CX.fillText('basal  6U', 10, barY + 14);
   CX.globalAlpha = 1;
 
   // Spawn drops periodically — slow drip from bar down toward BG line
@@ -2650,14 +2731,34 @@ function updateHUD(d, pal) {
     if (miLb) miLb.style.color = 'rgba(' + pal.iobR[0] + ',' + pal.iobR[1] + ',' + pal.iobR[2] + ',' + (0.3 + iobFrac*0.3) + ')';
   }
 
-  // Timebar scrubber
-  var timeRange = CGM_END - CGM_START;
-  var prog = timeRange > 0 ? (viewTime - CGM_START) / timeRange : 1;
-  var tnEl = document.getElementById('timenow');
-  var tkEl = document.getElementById('timetrack');
-  var pct  = (Math.max(0, Math.min(1, prog)) * 100).toFixed(1) + '%';
-  if (tnEl) tnEl.style.left = pct;
-  if (tkEl) tkEl.style.setProperty('--prog', pct);
+  // Mana pill — position between COB and IOB reservoir peaks, living in the flow
+  var pill = document.getElementById('mana-pill');
+  if (pill) {
+    var H_px = window.innerHeight;
+    var hasCOB = d.cob > 0.5 && _lastCOBPeakY > 0;
+    var hasIOB = d.iob > 0.1 && _lastIOBPeakY > 0;
+    if (hasCOB && hasIOB) {
+      // Float midway between the two reservoir peaks
+      var cobY = _lastCOBPeakY;         // px from top, COB peak (near BG line from below)
+      var iobY = _lastIOBPeakY;         // px from top, IOB peak (near BG line from above)
+      var midY = (cobY + iobY) / 2;
+      // Convert to bottom offset (for CSS bottom property)
+      var bottomPx = Math.max(60, H_px - midY - 20);
+      pill.style.bottom = bottomPx + 'px';
+      pill.style.opacity = '1';
+    } else if (hasCOB) {
+      var bottomPx = Math.max(60, H_px - _lastCOBPeakY + 16);
+      pill.style.bottom = bottomPx + 'px';
+      pill.style.opacity = '1';
+    } else if (hasIOB) {
+      var bottomPx = Math.max(60, H_px - _lastIOBPeakY - 36);
+      pill.style.bottom = bottomPx + 'px';
+      pill.style.opacity = '1';
+    } else {
+      // Nothing active — hide gently
+      pill.style.opacity = '0';
+    }
+  }
 }
 
 function returnToNow() {
@@ -4370,41 +4471,93 @@ function addFoodItem(name) {
   renderSheet();
 }
 
+// ── ADD FOOD MODAL ────────────────────────────────────────────────────────────
+// GI hints keyed on food name (shared between addCustomFood and calcGIFromCarbs)
+var _giHints = [
+  {words:['white','bread','baguette','roll','naan','pitta','wrap','toast'], gi:75},
+  {words:['brown','wholemeal','rye','sourdough'], gi:55},
+  {words:['rice'], gi:64},
+  {words:['pasta','noodle','spaghetti','macaroni'], gi:48},
+  {words:['potato','chips','fries','parsnip'], gi:78},
+  {words:['sweet potato'], gi:44},
+  {words:['oat','porridge'], gi:55},
+  {words:['banana'], gi:52},
+  {words:['apple','pear','berry'], gi:36},
+  {words:['orange','mango','grape'], gi:52},
+  {words:['milk','yoghurt','yogurt'], gi:36},
+  {words:['juice'], gi:65},
+  {words:['cola','fizzy','lucozade','sports'], gi:65},
+  {words:['chocolate'], gi:40},
+  {words:['biscuit','cookie','cake','donut'], gi:65},
+  {words:['cereal','cornflake','weetabix'], gi:72},
+  {words:['bean','lentil','chickpea'], gi:30},
+  {words:['glucose','dextrose','jelly','gummy','gummie','vitamin','supplement'], gi:95},
+  {words:['honey','jam','syrup'], gi:65},
+  {words:['meat','chicken','beef','fish','egg','cheese','butter','oil','cream','bacon'], gi:0},
+];
+
+// Auto-estimate GI from carb density + serving size ratio.
+// Rationale: pure sugar = 100g carbs per 100g = GI ~95. Starchy carbs = 60-80g/100g = GI ~55-75.
+// Low density (20-40g/100g) with fibre-rich foods = GI ~30-50.
+// Serving size helps refine: very small servings of dense carbs (jelly babies) = fast.
+function calcGIFromCarbs(c100, gServ, nameLower) {
+  // 1. Name-based hint (most reliable if matched)
+  for (var i = 0; i < _giHints.length; i++) {
+    if (_giHints[i].words.some(function(w){ return nameLower.indexOf(w) >= 0; })) {
+      return _giHints[i].gi;
+    }
+  }
+  // 2. Density-based estimate
+  if (c100 <= 0) return 0;
+  if (c100 >= 90) return 95;    // almost pure sugar / glucose
+  if (c100 >= 70) return 78;    // very high density — refined starches, sweets
+  if (c100 >= 50) return 65;    // moderate-high — white bread territory
+  if (c100 >= 30) return 52;    // moderate — mixed carbs
+  if (c100 >= 15) return 40;    // lower density — legumes, dairy, chocolate territory
+  return 30;                    // low density — mostly protein/fat with some carbs
+}
+
+// Narrative descriptions for GI — explains the curve shape in plain language
+function giNarrative(gi, c100) {
+  if (c100 <= 0) return { text: 'no carbs — will not affect the flow', col: 'rgba(120,140,160,0.5)', peak: null };
+  if (gi >= 90) return {
+    text: '⚡ almost pure sugar — peak in ~15 min, sharp spike then rapid fall. Ideal for hypo treatment.',
+    col: 'rgba(255,80,40,0.85)',
+    peak: 15
+  };
+  if (gi >= 70) return {
+    text: '↑ fast carbs — peak around 20–30 min. Bolus at the same time or slightly after eating.',
+    col: 'rgba(220,120,40,0.85)',
+    peak: 25
+  };
+  if (gi >= 55) return {
+    text: '→ medium speed — peak around 35–50 min. Bolus 10–15 min before eating.',
+    col: 'rgba(200,160,40,0.8)',
+    peak: 45
+  };
+  if (gi >= 30) return {
+    text: '↓ slow release — peak around 50–70 min. Bolus 20–30 min before, watch for late rise.',
+    col: 'rgba(80,180,120,0.8)',
+    peak: 60
+  };
+  return {
+    text: '↓↓ very slow — minimal glucose impact. May need less insulin than carb count suggests.',
+    col: 'rgba(60,160,100,0.7)',
+    peak: 75
+  };
+}
+
+// Track which input mode is active: 'per100' or 'perServing'
+var _addFoodMode = 'per100';
+
 function addCustomFood(name) {
   var ex = document.getElementById('food-add-overlay');
   if (ex) ex.remove();
+  _addFoodMode = 'per100';
 
   var lname = name.toLowerCase();
-  var giHints = [
-    {words:['white','bread','baguette','roll','naan','pitta','wrap','toast'], gi:75},
-    {words:['brown','wholemeal','rye','sourdough'], gi:55},
-    {words:['rice'], gi:64},
-    {words:['pasta','noodle','spaghetti','macaroni'], gi:48},
-    {words:['potato','chips','fries','parsnip'], gi:78},
-    {words:['sweet potato'], gi:44},
-    {words:['oat','porridge'], gi:55},
-    {words:['banana'], gi:52},
-    {words:['apple','pear','berry'], gi:36},
-    {words:['orange','mango','grape'], gi:52},
-    {words:['milk','yoghurt','yogurt'], gi:36},
-    {words:['juice'], gi:65},
-    {words:['cola','fizzy','lucozade','sports'], gi:65},
-    {words:['chocolate'], gi:40},
-    {words:['biscuit','cookie','cake','donut'], gi:65},
-    {words:['cereal','cornflake','weetabix'], gi:72},
-    {words:['bean','lentil','chickpea'], gi:30},
-    {words:['glucose','dextrose','jelly','gummy','gummie','vitamin','supplement'], gi:95},
-    {words:['honey','jam','syrup'], gi:65},
-    {words:['meat','chicken','beef','fish','egg','cheese','butter','oil','cream','bacon'], gi:0},
-  ];
-  var suggestGI = 55;
-  for (var i=0; i<giHints.length; i++) {
-    if (giHints[i].words.some(function(w){return lname.indexOf(w)>=0;})) {
-      suggestGI = giHints[i].gi; break;
-    }
-  }
+  var suggestGI = calcGIFromCarbs(0, 0, lname); // name-based hint first
 
-  // Build overlay entirely with DOM — no string escaping issues
   var el = document.createElement('div');
   el.id = 'food-add-overlay';
   el.style.cssText = 'position:fixed;inset:0;z-index:80;background:rgba(3,5,20,0.95);backdrop-filter:blur(14px);display:flex;flex-direction:column;align-items:center;justify-content:center;padding:24px;transition:opacity .2s;opacity:0;overflow-y:auto;-webkit-overflow-scrolling:touch';
@@ -4435,58 +4588,78 @@ function addCustomFood(name) {
     return d;
   }
 
-  function row(children) {
-    var d = document.createElement('div');
-    d.style.marginBottom = '14px';
-    children.forEach(function(c){ d.appendChild(c); });
-    return d;
-  }
-
   var wrap = document.createElement('div');
   wrap.style.cssText = 'max-width:320px;width:100%';
 
   // Title
   var title = document.createElement('div');
-  title.style.cssText = 'font-size:22px;font-style:italic;color:rgba(180,220,200,0.95);margin-bottom:3px';
+  title.style.cssText = "font-family:'Fraunces',serif;font-style:italic;font-weight:200;font-size:22px;color:rgba(180,220,200,0.95);margin-bottom:3px";
   title.textContent = 'add food';
   wrap.appendChild(title);
 
   var sub = document.createElement('div');
-  sub.style.cssText = 'font-family:monospace;font-size:12px;color:rgba(100,200,160,0.6);margin-bottom:22px';
+  sub.style.cssText = 'font-family:monospace;font-size:12px;color:rgba(100,200,160,0.6);margin-bottom:20px';
   sub.textContent = name;
   wrap.appendChild(sub);
 
-  // Carbs per 100g
-  var carbRow = document.createElement('div');
-  carbRow.style.marginBottom = '14px';
-  carbRow.appendChild(lbl('carbs per 100g', '· enter 0 for meat, eggs, cheese'));
+  // ── Toggle: carbs per 100g / carbs per serving ──────────────────
+  var toggleWrap = document.createElement('div');
+  toggleWrap.style.cssText = 'display:flex;gap:0;margin-bottom:16px;border-radius:10px;overflow:hidden;border:1px solid rgba(62,180,120,0.25)';
+
+  function makeToggleBtn(label, mode) {
+    var b = document.createElement('button');
+    b.id = 'toggle-' + mode;
+    b.textContent = label;
+    b.style.cssText = 'flex:1;padding:9px 0;border:none;cursor:pointer;font-family:monospace;font-size:10px;letter-spacing:0.5px;text-transform:uppercase;transition:background .15s, color .15s;touch-action:manipulation';
+    b.onclick = function() {
+      _addFoodMode = mode;
+      updateToggleState();
+      updateAddFoodPreview();
+    };
+    return b;
+  }
+  var btn100  = makeToggleBtn('per 100g', 'per100');
+  var btnServ = makeToggleBtn('per serving', 'perServing');
+  toggleWrap.appendChild(btn100);
+  toggleWrap.appendChild(btnServ);
+  wrap.appendChild(toggleWrap);
+
+  function updateToggleState() {
+    var is100 = _addFoodMode === 'per100';
+    btn100.style.background  = is100  ? 'rgba(62,180,120,0.18)' : 'transparent';
+    btn100.style.color       = is100  ? 'rgba(100,220,160,0.95)' : 'rgba(180,200,220,0.45)';
+    btnServ.style.background = !is100 ? 'rgba(62,180,120,0.18)' : 'transparent';
+    btnServ.style.color      = !is100 ? 'rgba(100,220,160,0.95)' : 'rgba(180,200,220,0.45)';
+    // Show/hide relevant inputs
+    var c100Row = document.getElementById('new-food-c100-row');
+    var cServRow = document.getElementById('new-food-cserv-row');
+    if (c100Row) c100Row.style.display = is100 ? '' : 'none';
+    if (cServRow) cServRow.style.display = !is100 ? '' : 'none';
+  }
+
+  // Carbs per 100g input
+  var c100Row = document.createElement('div');
+  c100Row.id = 'new-food-c100-row';
+  c100Row.style.marginBottom = '14px';
+  c100Row.appendChild(lbl('carbs per 100g', '· 0 for meat, eggs, cheese'));
   var carbInp = inp('new-food-c100', 'number', 'e.g. 28', 0, 100, '0.1', null, 'border-color:rgba(62,180,120,0.5);color:rgba(100,220,160,0.95);background:rgba(62,180,120,0.08)');
-  carbRow.appendChild(carbInp);
-  wrap.appendChild(carbRow);
+  c100Row.appendChild(carbInp);
+  wrap.appendChild(c100Row);
 
-  // GI
-  var giRow = document.createElement('div');
-  giRow.style.marginBottom = '6px';
-  giRow.appendChild(lbl('glycaemic index', '· how fast it absorbs'));
-  var giInp = inp('new-food-gi', 'number', '0–100', 0, 100, '1', suggestGI, 'border-color:rgba(200,160,60,0.5);color:rgba(220,180,80,0.95);background:rgba(200,160,60,0.07)');
-  giRow.appendChild(giInp);
-  var giNote = document.createElement('div');
-  giNote.id = 'new-food-gi-note';
-  giNote.style.cssText = 'font-family:monospace;font-size:9px;margin-top:5px;text-align:center;color:rgba(200,160,60,0.8)';
-  giNote.textContent = suggestGI>=90?'⚡ almost pure sugar':suggestGI>=70?'↑ fast':suggestGI>=55?'→ medium':suggestGI>0?'↓ slow':'no significant carbs';
-  giRow.appendChild(giNote);
-  wrap.appendChild(giRow);
+  // Carbs per serving input
+  var cServRow = document.createElement('div');
+  cServRow.id = 'new-food-cserv-row';
+  cServRow.style.cssText = 'margin-bottom:14px;display:none';
+  cServRow.appendChild(lbl('carbs per serving (g)'));
+  var cServInp = inp('new-food-cserv', 'number', 'e.g. 25', 0, 300, '0.1', null, 'border-color:rgba(62,180,120,0.5);color:rgba(100,220,160,0.95);background:rgba(62,180,120,0.08)');
+  cServRow.appendChild(cServInp);
+  wrap.appendChild(cServRow);
 
-  var giHint = document.createElement('div');
-  giHint.style.cssText = 'font-family:monospace;font-size:8px;color:rgba(255,255,255,0.3);margin-bottom:16px;line-height:1.7';
-  giHint.textContent = 'low <55 · medium 55–70 · high >70 · 95+ = pure sugar';
-  wrap.appendChild(giHint);
-
-  // Serving sizes row
+  // Serving sizes row — always visible
   var servRow = document.createElement('div');
   servRow.style.cssText = 'display:flex;gap:10px;margin-bottom:14px';
   var servDiv = document.createElement('div'); servDiv.style.flex = '1';
-  servDiv.appendChild(lbl('typical serving (g)'));
+  servDiv.appendChild(lbl('serving size (g)'));
   servDiv.appendChild(inp('new-food-g_serv', 'number', 'e.g. 30', 0, 2000, '1', null, ''));
   var eachDiv = document.createElement('div'); eachDiv.style.flex = '1';
   eachDiv.appendChild(lbl('weight each (g)'));
@@ -4495,7 +4668,55 @@ function addCustomFood(name) {
   servRow.appendChild(eachDiv);
   wrap.appendChild(servRow);
 
-  // Preview
+  // ── Auto-calc GI section ──────────────────────────────────────────
+  var giSection = document.createElement('div');
+  giSection.style.cssText = 'margin-bottom:6px';
+
+  var giHeader = document.createElement('div');
+  giHeader.style.cssText = 'display:flex;align-items:center;justify-content:space-between;margin-bottom:6px';
+
+  var giLblEl = document.createElement('div');
+  giLblEl.style.cssText = 'font-family:monospace;font-size:9px;letter-spacing:1px;text-transform:uppercase;color:rgba(255,255,255,0.6)';
+  giLblEl.textContent = 'glycaemic index';
+  giHeader.appendChild(giLblEl);
+
+  var giCalcBadge = document.createElement('div');
+  giCalcBadge.id = 'new-food-gi-badge';
+  giCalcBadge.style.cssText = 'font-family:monospace;font-size:8px;color:rgba(200,160,60,0.5);letter-spacing:0.5px';
+  giCalcBadge.textContent = 'calculated';
+  giHeader.appendChild(giCalcBadge);
+
+  giSection.appendChild(giHeader);
+
+  var giInp = inp('new-food-gi', 'number', '0–100', 0, 100, '1', suggestGI || 55,
+    'border-color:rgba(200,160,60,0.5);color:rgba(220,180,80,0.95);background:rgba(200,160,60,0.07)');
+  // Mark manually edited
+  giInp.addEventListener('input', function() {
+    var badge = document.getElementById('new-food-gi-badge');
+    if (badge) { badge.textContent = 'edited'; badge.style.color = 'rgba(220,180,80,0.7)'; }
+  });
+  giSection.appendChild(giInp);
+
+  // GI narrative
+  var giNote = document.createElement('div');
+  giNote.id = 'new-food-gi-note';
+  giNote.style.cssText = 'font-family:monospace;font-size:9px;margin-top:8px;line-height:1.7;color:rgba(200,160,60,0.8);min-height:36px';
+  giSection.appendChild(giNote);
+
+  wrap.appendChild(giSection);
+
+  // Curve preview — tiny sparkline showing absorption shape
+  var curveWrap = document.createElement('div');
+  curveWrap.style.cssText = 'margin-bottom:16px;border-radius:8px;border:1px solid rgba(255,255,255,0.06);background:rgba(255,255,255,0.02);padding:10px 12px';
+  var curveCanvas = document.createElement('canvas');
+  curveCanvas.id = 'new-food-curve';
+  curveCanvas.width = 276;
+  curveCanvas.height = 44;
+  curveCanvas.style.cssText = 'width:100%;height:44px;display:block';
+  curveWrap.appendChild(curveCanvas);
+  wrap.appendChild(curveWrap);
+
+  // Preview summary line
   var preview = document.createElement('div');
   preview.id = 'new-food-preview';
   preview.style.cssText = 'font-family:monospace;font-size:10px;color:rgba(100,200,160,0.8);text-align:center;margin-bottom:16px;min-height:16px';
@@ -4506,7 +4727,7 @@ function addCustomFood(name) {
   btnRow.style.cssText = 'display:flex;gap:8px';
 
   var saveBtn = document.createElement('button');
-  saveBtn.style.cssText = 'flex:1;padding:13px;border-radius:10px;border:1px solid rgba(62,180,120,0.4);background:rgba(62,180,120,0.12);font-size:17px;font-style:italic;color:rgba(100,220,160,0.95);cursor:pointer';
+  saveBtn.style.cssText = "flex:1;padding:13px;border-radius:10px;border:1px solid rgba(62,180,120,0.4);background:rgba(62,180,120,0.12);font-family:'Fraunces',serif;font-style:italic;font-weight:200;font-size:17px;color:rgba(100,220,160,0.95);cursor:pointer";
   saveBtn.textContent = 'save + add';
   saveBtn.onclick = function() { saveCustomFood(encodeURIComponent(name)); };
 
@@ -4524,44 +4745,131 @@ function addCustomFood(name) {
   el.addEventListener('keydown', function(e){ if(e.key==='Escape') el.remove(); });
   document.body.appendChild(el);
   requestAnimationFrame(function(){ el.style.opacity='1'; });
-  setTimeout(function(){ carbInp.focus(); }, 300);
+
+  // Init toggle state and run initial preview
+  updateToggleState();
+  setTimeout(function(){
+    carbInp.focus();
+    updateAddFoodPreview();
+  }, 300);
 }
+
+function _drawCurvePreview(gi, c100) {
+  var canvas = document.getElementById('new-food-curve');
+  if (!canvas) return;
+  var ctx = canvas.getContext('2d');
+  var W = canvas.width, H = canvas.height;
+  ctx.clearRect(0, 0, W, H);
+  if (c100 <= 0 || gi <= 0) return;
+
+  // Absorption curve: peaks at peakMin, width based on GI
+  var peakMin = gi >= 90 ? 15 : gi >= 70 ? 25 : gi >= 55 ? 42 : gi >= 30 ? 58 : 70;
+  var sigma   = gi >= 90 ? 10 : gi >= 70 ? 18 : gi >= 55 ? 28 : gi >= 30 ? 38 : 45;
+  var maxT    = peakMin + sigma * 2.5;
+  var col     = gi >= 90 ? [255, 80, 40] : gi >= 70 ? [220, 120, 40] : gi >= 55 ? [200, 160, 40] : [80, 180, 120];
+
+  // Build points
+  var pts = [];
+  for (var i = 0; i <= 60; i++) {
+    var t = (i / 60) * maxT;
+    var v = Math.exp(-0.5 * Math.pow((t - peakMin) / sigma, 2));
+    pts.push({ x: (i / 60) * W, y: H - 4 - v * (H - 10) });
+  }
+
+  // Fill
+  var gr = ctx.createLinearGradient(0, 0, 0, H);
+  gr.addColorStop(0,   'rgba(' + col + ',0.25)');
+  gr.addColorStop(0.6, 'rgba(' + col + ',0.08)');
+  gr.addColorStop(1,   'rgba(' + col + ',0)');
+  ctx.beginPath();
+  ctx.moveTo(0, H);
+  pts.forEach(function(p){ ctx.lineTo(p.x, p.y); });
+  ctx.lineTo(W, H);
+  ctx.closePath();
+  ctx.fillStyle = gr;
+  ctx.fill();
+
+  // Line
+  ctx.beginPath();
+  pts.forEach(function(p, i){ i === 0 ? ctx.moveTo(p.x, p.y) : ctx.lineTo(p.x, p.y); });
+  ctx.strokeStyle = 'rgba(' + col + ',0.7)';
+  ctx.lineWidth = 1.5;
+  ctx.stroke();
+
+  // Peak label
+  var peakX = (peakMin / maxT) * W;
+  ctx.fillStyle = 'rgba(' + col + ',0.7)';
+  ctx.font = "300 8px 'DM Mono',monospace";
+  ctx.textAlign = 'center';
+  ctx.fillText('peak ~' + peakMin + 'min', Math.max(30, Math.min(W - 30, peakX)), 10);
+}
+
 function updateAddFoodPreview() {
-  var c100  = parseFloat((document.getElementById('new-food-c100')||{}).value)||0;
-  var gi    = parseInt((document.getElementById('new-food-gi')||{}).value)||0;
+  var mode  = _addFoodMode || 'per100';
   var gServ = parseFloat((document.getElementById('new-food-g_serv')||{}).value)||0;
   var gEach = parseFloat((document.getElementById('new-food-g_each')||{}).value)||0;
-  var noteEl = document.getElementById('new-food-gi-note');
-  var preEl  = document.getElementById('new-food-preview');
-  if (noteEl) {
-    var giNote, giCol;
-    if (c100 >= 80 && gi < 70) {
-      giNote = '⚡ high carb density — consider GI 80+';
-      giCol  = 'rgba(255,120,40,0.8)';
-    } else {
-      giNote = gi>=90?'⚡ almost pure sugar':gi>=70?'↑ fast absorbing':gi>=55?'→ medium speed':gi>0?'↓ slow absorbing':'no significant carbs';
-      giCol  = gi>=70?'rgba(210,80,40,0.8)':gi>=55?'rgba(200,140,30,0.8)':gi>0?'rgba(60,160,90,0.8)':'rgba(150,150,150,0.5)';
-    }
-    noteEl.textContent = giNote;
-    noteEl.style.color = giCol;
+
+  // Resolve c100 from whichever mode is active
+  var c100;
+  if (mode === 'per100') {
+    c100 = parseFloat((document.getElementById('new-food-c100')||{}).value)||0;
+    // If per-serving entered, back-calc c100 and update hidden field
+    var cServEl = document.getElementById('new-food-cserv');
+    if (cServEl) cServEl.value = (gServ > 0 && c100 > 0) ? (c100 * gServ / 100).toFixed(1) : '';
+  } else {
+    var cServ = parseFloat((document.getElementById('new-food-cserv')||{}).value)||0;
+    // Back-calc c100 from serving
+    c100 = (gServ > 0 && cServ > 0) ? (cServ / gServ * 100) : 0;
+    var c100El = document.getElementById('new-food-c100');
+    if (c100El) c100El.value = c100 > 0 ? c100.toFixed(1) : '';
   }
+
+  // Determine GI — auto-calc unless user has manually edited
+  var giBadge = document.getElementById('new-food-gi-badge');
+  var giInpEl = document.getElementById('new-food-gi');
+  var isEdited = giBadge && giBadge.textContent === 'edited';
+  var gi;
+  if (isEdited) {
+    gi = parseInt((giInpEl||{}).value) || 0;
+  } else {
+    // Get food name from the sub div (second child of wrap)
+    var overlay = document.getElementById('food-add-overlay');
+    var foodName = overlay ? (overlay.querySelector('.food-name-sub') || {}).textContent || '' : '';
+    gi = calcGIFromCarbs(c100, gServ, foodName.toLowerCase());
+    if (giInpEl) giInpEl.value = gi;
+  }
+
+  // GI narrative
+  var noteEl = document.getElementById('new-food-gi-note');
+  if (noteEl) {
+    var narr = giNarrative(gi, c100);
+    noteEl.textContent = narr.text;
+    noteEl.style.color = narr.col;
+  }
+
+  // Curve sparkline
+  _drawCurvePreview(gi, c100);
+
+  // Summary line
+  var preEl = document.getElementById('new-food-preview');
   if (preEl) {
     var parts = [];
-    if (c100>0 && gServ>0) parts.push('serving: '+(c100*gServ/100).toFixed(1)+'g carbs');
-    if (c100>0 && gEach>0) parts.push('each: '+(c100*gEach/100).toFixed(1)+'g carbs');
+    if (c100 > 0) parts.push(c100.toFixed(1) + 'g carbs/100g');
+    if (c100 > 0 && gServ > 0) parts.push('serving: ' + (c100*gServ/100).toFixed(1) + 'g');
+    if (c100 > 0 && gEach > 0) parts.push('each: '    + (c100*gEach/100).toFixed(1) + 'g');
     preEl.textContent = parts.join(' · ');
   }
 }
 
 function saveCustomFood(encodedName) {
   var name  = decodeURIComponent(encodedName);
-  var carbs = parseFloat(document.getElementById('new-food-c100').value) || 0;
-  var gi    = parseInt(document.getElementById('new-food-gi').value) || 0;
+  // Always read c100 — updateAddFoodPreview keeps it in sync regardless of toggle mode
+  var carbs = parseFloat((document.getElementById('new-food-c100')||{}).value) || 0;
+  var gi    = parseInt((document.getElementById('new-food-gi')||{}).value) || 0;
   var gServ = parseFloat((document.getElementById('new-food-g_serv')||{}).value) || null;
   var gEach = parseFloat((document.getElementById('new-food-g_each')||{}).value) || null;
   var el    = document.getElementById('food-add-overlay');
   if (el) el.remove();
-  // Allow zero-carb foods (meat, cheese, eggs)
   var f = {name:name, c100:carbs, gi:gi, cat:'custom'};
   if (gServ) f.g_serv = gServ;
   if (gEach) f.g_each = gEach;
@@ -6607,6 +6915,9 @@ let _whisperOpen   = false;
 function setupOrbLongPress() {
   const cv = document.getElementById('c');
   if (!cv) return;
+
+  var _orbTouchStartT = 0;
+
   cv.addEventListener('touchstart', function(e) {
     const t = e.touches[0];
     const orbX = NOW_X * W;
@@ -6614,6 +6925,7 @@ function setupOrbLongPress() {
     const orbY = d ? bgToY(d.bg) : H * 0.6;
     const dist = Math.hypot(t.clientX - orbX, t.clientY - orbY);
     if (dist < 44) {
+      _orbTouchStartT = Date.now();
       _orbLongPressHint = 1.0;
       _orbPressTimer = setTimeout(function() {
         if (navigator.vibrate) navigator.vibrate(30);
@@ -6622,7 +6934,17 @@ function setupOrbLongPress() {
     }
   }, {passive:true});
   cv.addEventListener('touchend', function() {
-    if (_orbPressTimer) { clearTimeout(_orbPressTimer); _orbPressTimer = null; }
+    var dur = Date.now() - _orbTouchStartT;
+    if (_orbPressTimer) {
+      clearTimeout(_orbPressTimer);
+      _orbPressTimer = null;
+      // Short tap (< 400ms) — show the hint text
+      if (dur < 400 && _orbTouchStartT > 0) {
+        _orbTapHint = 1.0;
+        _orbTapHintT = Date.now();
+      }
+    }
+    _orbTouchStartT = 0;
   }, {passive:true});
   cv.addEventListener('mousedown', function(e) {
     const orbX = NOW_X * W;
@@ -6630,6 +6952,7 @@ function setupOrbLongPress() {
     const orbY = d ? bgToY(d.bg) : H * 0.6;
     const dist = Math.hypot(e.clientX - orbX, e.clientY - orbY);
     if (dist < 44) {
+      _orbTouchStartT = Date.now();
       _orbLongPressHint = 1.0;
       _orbPressTimer = setTimeout(function() {
         openOrbRadialMenu();
@@ -6637,7 +6960,16 @@ function setupOrbLongPress() {
     }
   });
   cv.addEventListener('mouseup', function() {
-    if (_orbPressTimer) { clearTimeout(_orbPressTimer); _orbPressTimer = null; }
+    var dur = Date.now() - _orbTouchStartT;
+    if (_orbPressTimer) {
+      clearTimeout(_orbPressTimer);
+      _orbPressTimer = null;
+      if (dur < 400 && _orbTouchStartT > 0) {
+        _orbTapHint = 1.0;
+        _orbTapHintT = Date.now();
+      }
+    }
+    _orbTouchStartT = 0;
   });
 }
 
@@ -6726,9 +7058,9 @@ function openOrbRadialMenu() {
   var lbl = document.createElement('div');
   lbl.style.cssText = [
     'position:absolute',
-    'left:' + (cx - 30) + 'px',
+    'left:' + (cx - 80) + 'px',
     'top:'  + (cy - 10) + 'px',
-    'width:60px',
+    'width:160px',
     'text-align:center',
     "font-family:'DM Mono',monospace",
     'font-size:9px',
@@ -6737,7 +7069,7 @@ function openOrbRadialMenu() {
     'color:rgba(180,200,220,0.4)',
     'pointer-events:none',
   ].join(';');
-  lbl.textContent = 'hold';
+  lbl.textContent = 'What do you want to do?';
   el.appendChild(lbl);
 
   document.body.appendChild(el);
