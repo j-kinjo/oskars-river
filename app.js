@@ -1721,7 +1721,9 @@ function drawBolusMarkers(pal) {
   if (!window._eventCards) window._eventCards = [];
   window._eventCards = [];
   CX.save();
-  const allEvents = [...BOLUS_EVENTS, ...SESSION.map(s => ({t:s.t, c:s.c||0, u:s.u||0}))];
+  // Use BOLUS_EVENTS only — all logged events are already pushed there at log time.
+  // Concatenating SESSION caused duplicates (and surfaced stale previous-day chips).
+  const allEvents = [...BOLUS_EVENTS];
 
   for (var _bIdx = 0; _bIdx < allEvents.length; _bIdx++) {
     const b = allEvents[_bIdx];
@@ -1731,7 +1733,11 @@ function drawBolusMarkers(pal) {
     const bgY = bgToY(d.bg);
 
     if (b.c > 1) {
-      const r = pal.cobR[0], g = pal.cobR[1], bv = pal.cobR[2];
+      // Hypo treatment events get the blue hypo colour, not the carb orange
+      var _isHypo = b.note && typeof b.note === 'string' && b.note.indexOf('hypo') === 0;
+      const r = _isHypo ? 100 : pal.cobR[0],
+            g = _isHypo ? 150 : pal.cobR[1],
+            bv= _isHypo ? 255 : pal.cobR[2];
       const cardY = bgY - 30 - Math.min(b.c * 0.4, 36);
       // Stem
       CX.globalAlpha = 0.35;
@@ -3685,9 +3691,31 @@ function openSheet() {
   _mealItems  = [];
   _bolusGiven = false;
   _sheetMode  = 'meal';
+  // Meal mode: full-screen dark overlay, consistent with correction/hypo screens
+  var s = document.getElementById('sheet');
+  if (s) {
+    s.style.position = 'fixed';
+    s.style.inset = '0';
+    s.style.zIndex = '60';
+    s.style.background = 'rgba(3,5,20,0.96)';
+    s.style.backdropFilter = 'blur(16px)';
+    s.style.overflowY = 'auto';
+    s.style.WebkitOverflowScrolling = 'touch';
+    s.style.transition = 'opacity .25s';
+    s.style.opacity = '0';
+    s.style.pointerEvents = 'auto';
+    s.style.touchAction = 'pan-y';
+    s.style.display = 'flex';
+    s.style.flexDirection = 'column';
+    s.style.borderRadius = '0';
+    s.style.transform = 'none';
+    s.style.maxHeight = 'none';
+  }
   renderSheet();
-  document.getElementById('sheet').classList.add('open');
-  document.getElementById('overlay').classList.add('open');
+  if (s) {
+    s.classList.add('open');
+    requestAnimationFrame(function(){ s.style.opacity = '1'; });
+  }
   setTimeNow();
 }
 
@@ -3698,7 +3726,18 @@ function closeSheet() {
   window._logMealLock = false;
   var s = document.getElementById('sheet');
   var o = document.getElementById('overlay');
-  if (s) s.classList.remove('open');
+  if (s) {
+    if (_sheetMode === 'meal') {
+      // Animate out then reset inline styles so kitchen mode still works
+      s.style.opacity = '0';
+      setTimeout(function() {
+        s.classList.remove('open');
+        s.style.cssText = ''; // restore CSS-class-driven bottom-sheet styles
+      }, 260);
+    } else {
+      s.classList.remove('open');
+    }
+  }
   if (o) o.classList.remove('open');
   _mealItems = [];
   _bolusVal  = null;
@@ -5267,17 +5306,27 @@ function openHypoLog() {
   el.addEventListener('click',function(e){if(e.target===el)closeHypoLog();});
   var _hypoDefault = new Date();
   var s='<div style="max-width:360px;width:100%">';
-  s+='<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px">';
+  s+='<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:4px">';
   s+='<div style="font-family:\'Fraunces\',serif;font-style:italic;font-weight:200;font-size:22px;color:rgba(100,150,255,0.9)">hypo treatment</div>';
   s+='<button onclick="closeHypoLog()" style="background:none;border:none;cursor:pointer;font-size:24px;color:rgba(255,255,255,0.2);padding:4px;touch-action:manipulation">×</button>';
   s+='</div>';
+  s+='<div style="font-family:\'DM Mono\',monospace;font-size:9px;letter-spacing:1px;text-transform:uppercase;color:rgba(100,130,200,0.4);margin-bottom:14px">also for course correction &middot; hypo prevention</div>';
   s+=timePickerHTML('hypo-time', _hypoDefault, false);
   s+='<div style="display:flex;flex-direction:column;gap:8px">';
   HYPO_TREATMENTS.forEach(function(t){
-    s+='<button onclick="logHypoTreatment(\''+t.id+'\')" style="display:flex;align-items:center;justify-content:space-between;padding:14px 16px;border-radius:10px;cursor:pointer;background:rgba(40,60,140,0.25);border:1px solid rgba(80,120,220,0.2);width:100%">';
-    s+='<div><div style="font-family:\'Fraunces\',serif;font-weight:200;font-size:16px;color:rgba(160,190,255,0.9)">'+t.name+'</div>';
-    s+='<div style="font-family:\'DM Mono\',monospace;font-size:10px;color:rgba(100,130,200,0.45);margin-top:2px">'+t.desc+'</div></div>';
-    s+='<div style="font-family:\'DM Mono\',monospace;font-size:13px;color:rgba(120,160,255,0.7)">'+t.carbs+'g</div></button>';
+    s+='<div style="display:flex;align-items:center;gap:10px;padding:12px 14px;border-radius:10px;background:rgba(40,60,140,0.25);border:1px solid rgba(80,120,220,0.2)">';
+    s+='<div style="flex:1">';
+    s+='<div style="font-family:\'Fraunces\',serif;font-weight:200;font-size:16px;color:rgba(160,190,255,0.9)">'+t.name+'</div>';
+    s+='<div style="font-family:\'DM Mono\',monospace;font-size:10px;color:rgba(100,130,200,0.45);margin-top:2px">'+t.desc+'</div>';
+    s+='</div>';
+    s+='<input id="hypo-g-'+t.id+'" type="number" value="'+t.carbs+'" min="1" max="100" step="1" ';
+    s+='style="width:50px;padding:6px;border-radius:7px;border:1px solid rgba(80,120,220,0.25);background:rgba(20,30,80,0.5);';
+    s+='font-family:\'DM Mono\',monospace;font-size:14px;color:rgba(160,190,255,0.9);text-align:center;outline:none;touch-action:manipulation">';
+    s+='<span style="font-family:\'DM Mono\',monospace;font-size:10px;color:rgba(100,130,200,0.5)">g</span>';
+    s+='<button onclick="logHypoTreatment(\''+t.id+'\')" style="padding:8px 14px;border-radius:8px;cursor:pointer;';
+    s+='background:rgba(60,100,220,0.2);border:1px solid rgba(80,120,220,0.35);';
+    s+='font-family:\'DM Mono\',monospace;font-size:10px;letter-spacing:.5px;text-transform:uppercase;color:rgba(120,160,255,0.8);touch-action:manipulation">log</button>';
+    s+='</div>';
   });
   s+='</div><div style="text-align:center;margin-top:16px">';
   s+='<button onclick="closeHypoLog()" style="background:none;border:none;cursor:pointer;font-family:\'DM Mono\',monospace;font-size:9px;letter-spacing:1px;text-transform:uppercase;color:rgba(100,130,200,0.25);padding:8px">cancel</button></div></div>';
@@ -5288,14 +5337,19 @@ function closeHypoLog(){var el=document.getElementById('hypo-overlay');if(el){el
 function logHypoTreatment(id){
   var t=HYPO_TREATMENTS.find(function(x){return x.id===id;});
   if(!t) return;
+  // Use edited carb value from input if present
+  var inp=document.getElementById('hypo-g-'+id);
+  var carbs=inp?Math.max(1,parseFloat(inp.value)||t.carbs):t.carbs;
   var now=getTimeVal('hypo-time');
-  SESSION.push({t:now,c:t.carbs,u:0,note:'hypo:'+id});
+  SESSION.push({t:now,c:carbs,u:0,note:'hypo:'+id});
   try{localStorage.setItem('river_session',JSON.stringify(SESSION));}catch(e){}
-  BOLUS_EVENTS.push({t:now,c:t.carbs,u:0});
+  BOLUS_EVENTS.push({t:now,c:carbs,u:0,note:'hypo:'+id});
+  LOGGED_EVENTS.push({t:now,c:carbs,u:0,note:'hypo:'+id,logged_by:_thisPersonId||'unknown'});
+  try{localStorage.setItem('river_logged',JSON.stringify(LOGGED_EVENTS));}catch(e){}
   syncAfterLog();
   closeHypoLog();
   var timeStr=document.getElementById('hypo-time-display')?.textContent||'';
-  showToast(t.name+'\n'+t.carbs+'g logged'+(timeStr?'\n'+timeStr:''));
+  showToast(t.name+'\n'+carbs+'g logged'+(timeStr?'\n'+timeStr:''));
 }
 
 // ── CORRECTION QUICK-LOG ──────────────────────────────────────────
@@ -6726,6 +6780,10 @@ function openEventEditor(eventIdx) {
   var timeStr = dt.toLocaleDateString('en-GB',{weekday:'short',day:'numeric',month:'short'}) +
     ' · ' + dt.toLocaleTimeString('en-GB',{hour:'2-digit',minute:'2-digit'});
 
+  // Build time value for datetime-local input
+  var tzOffset = dt.getTimezoneOffset() * 60000;
+  var dtLocalISO = new Date(dt.getTime() - tzOffset).toISOString().slice(0,16);
+
   el.innerHTML =
     '<div style="max-width:320px;width:100%">' +
     '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:20px">' +
@@ -6734,8 +6792,15 @@ function openEventEditor(eventIdx) {
       '<button onclick="document.getElementById(\'event-edit-overlay\').remove()" ' +
         'style="background:none;border:none;cursor:pointer;font-size:22px;color:rgba(255,255,255,0.3);padding:4px">×</button>' +
     '</div>' +
-    '<div style="font-family:\'DM Mono\',monospace;font-size:10px;color:rgba(255,255,255,0.3);margin-bottom:16px">' +
-      timeStr + '</div>' +
+    // Time editor — editable for all event types
+    '<div style="margin-bottom:16px">' +
+      '<div style="font-family:\'DM Mono\',monospace;font-size:8px;letter-spacing:1px;' +
+        'text-transform:uppercase;color:rgba(255,255,255,0.3);margin-bottom:6px">when</div>' +
+      '<input id="ee-time" type="datetime-local" value="' + dtLocalISO + '" ' +
+        'style="width:100%;padding:9px 12px;border-radius:8px;border:1px solid rgba(255,255,255,0.12);' +
+        'background:rgba(255,255,255,0.05);font-family:\'DM Mono\',monospace;font-size:13px;' +
+        'color:rgba(200,220,240,0.8);outline:none;box-sizing:border-box">' +
+    '</div>' +
     '<div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;margin-bottom:20px">' +
       '<div>' +
         '<div style="font-family:\'DM Mono\',monospace;font-size:8px;letter-spacing:1px;' +
@@ -6781,22 +6846,61 @@ function openEventEditor(eventIdx) {
 }
 
 function saveEventEdit(idx) {
-  var c = parseFloat(document.getElementById('ee-carbs').value) || 0;
-  var u = parseFloat(document.getElementById('ee-units').value) || 0;
-  if (idx < BOLUS_EVENTS.length) {
-    BOLUS_EVENTS[idx].c = c;
-    BOLUS_EVENTS[idx].u = u;
+  var c        = parseFloat(document.getElementById('ee-carbs').value) || 0;
+  var u        = parseFloat(document.getElementById('ee-units').value) || 0;
+  var waitMins = parseInt(document.getElementById('ee-wait').value)    || 0;
+  var timeEl   = document.getElementById('ee-time');
+  var newT     = timeEl && timeEl.value ? new Date(timeEl.value).getTime() : null;
+
+  if (!BOLUS_EVENTS[idx]) { var el=document.getElementById('event-edit-overlay'); if(el) el.remove(); return; }
+
+  var oldT = BOLUS_EVENTS[idx].t;
+  var oldWait = BOLUS_EVENTS[idx].waitMins || 0;
+
+  // --- Apply changes to BOLUS_EVENTS entry ---
+  BOLUS_EVENTS[idx].c = c;
+  BOLUS_EVENTS[idx].u = u;
+  BOLUS_EVENTS[idx].waitMins = waitMins;
+  if (newT && newT !== oldT) BOLUS_EVENTS[idx].t = newT;
+  var updatedT = BOLUS_EVENTS[idx].t;
+
+  // --- If this is a bolus event (u > 0) and wait changed, reposition linked carb chip ---
+  // The carb event sits at bolusT + waitMins*60000. Find it and move it.
+  if (u > 0) {
+    var oldCarbT = oldT + oldWait * 60000;
+    var newCarbT = updatedT + waitMins * 60000;
+    if (oldCarbT !== newCarbT) {
+      // Reposition in BOLUS_EVENTS
+      var carbIdx = BOLUS_EVENTS.findIndex(function(e, i) {
+        return i !== idx && e.c > 0 && e.u === 0 && Math.abs(e.t - oldCarbT) < 5 * 60000;
+      });
+      if (carbIdx >= 0) {
+        BOLUS_EVENTS[carbIdx].t = newCarbT;
+        // Sync carb event through SESSION and LOGGED_EVENTS too
+        var csi = SESSION.findIndex(function(s){ return Math.abs(s.t - oldCarbT) < 5*60000 && s.c > 0 && !s.u; });
+        if (csi >= 0) SESSION[csi].t = newCarbT;
+        var cli = LOGGED_EVENTS.findIndex(function(s){ return Math.abs(s.t - oldCarbT) < 5*60000 && s.c > 0 && !s.u; });
+        if (cli >= 0) LOGGED_EVENTS[cli].t = newCarbT;
+      }
+    }
   }
-  // Update SESSION
-  var t = BOLUS_EVENTS[idx]?.t;
-  if (t) {
-    var si = SESSION.findIndex(function(s){ return Math.abs(s.t - t) < 60000; });
-    if (si >= 0) { SESSION[si].c = c; SESSION[si].u = u; }
-    try { localStorage.setItem('river_session', JSON.stringify(SESSION)); } catch(e) {}
-    var li = LOGGED_EVENTS.findIndex(function(s){ return Math.abs(s.t - t) < 60000; });
-    if (li >= 0) { LOGGED_EVENTS[li].c = c; LOGGED_EVENTS[li].u = u; }
-    try { localStorage.setItem('river_logged', JSON.stringify(LOGGED_EVENTS)); } catch(e) {}
+
+  // --- Sync the edited event through SESSION ---
+  var si = SESSION.findIndex(function(s){ return Math.abs(s.t - oldT) < 60000; });
+  if (si >= 0) {
+    SESSION[si].c = c; SESSION[si].u = u;
+    if (newT && newT !== oldT) SESSION[si].t = updatedT;
   }
+  try { localStorage.setItem('river_session', JSON.stringify(SESSION)); } catch(e) {}
+
+  // --- Sync through LOGGED_EVENTS ---
+  var li = LOGGED_EVENTS.findIndex(function(s){ return Math.abs(s.t - oldT) < 60000; });
+  if (li >= 0) {
+    LOGGED_EVENTS[li].c = c; LOGGED_EVENTS[li].u = u;
+    if (newT && newT !== oldT) LOGGED_EVENTS[li].t = updatedT;
+  }
+  try { localStorage.setItem('river_logged', JSON.stringify(LOGGED_EVENTS)); } catch(e) {}
+
   var el = document.getElementById('event-edit-overlay');
   if (el) el.remove();
   showToast('entry updated');
