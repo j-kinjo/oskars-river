@@ -6510,16 +6510,38 @@ function openCorrectionLog(){
   s+='<div style="text-align:center;margin-bottom:20px">';
   s+='<div style="font-family:\'Fraunces\',serif;font-weight:200;font-size:52px;color:rgba(120,170,255,0.95);letter-spacing:-2px">'+sug.toFixed(1)+'</div>';
   s+='<div style="font-family:\'DM Mono\',monospace;font-size:10px;color:rgba(100,150,255,0.6)">suggested units</div></div>';
-  s+='<div style="display:flex;align-items:center;gap:10px;margin-bottom:20px">';
+  s+='<div style="display:flex;align-items:center;gap:10px;margin-bottom:6px">';
   s+='<span style="font-family:\'DM Mono\',monospace;font-size:9px;letter-spacing:1px;text-transform:uppercase;color:rgba(100,150,255,0.75)">actual</span>';
-  s+='<input id="corr-units" type="number" step="0.5" min="0" max="10" value="'+sug.toFixed(1)+'" style="flex:1;padding:10px;border-radius:8px;border:1px solid rgba(80,130,255,0.3);background:rgba(10,20,60,0.4);font-family:\'DM Mono\',monospace;font-size:18px;color:rgba(160,200,255,0.9);text-align:center;outline:none">';
+  s+='<input id="corr-units" type="number" step="0.5" min="0" max="20" inputmode="decimal" value="'+sug.toFixed(1)+'" oninput="_corrValidate()" style="flex:1;padding:10px;border-radius:8px;border:1px solid rgba(80,130,255,0.3);background:rgba(10,20,60,0.4);font-family:\'DM Mono\',monospace;font-size:18px;color:rgba(160,200,255,0.9);text-align:center;outline:none;transition:border-color .15s">';
   s+='<span style="font-family:\'DM Mono\',monospace;font-size:13px;color:rgba(100,150,255,0.75)">U</span></div>';
-  s+='<button onclick="logCorrection()" style="width:100%;padding:14px;border-radius:10px;border:1px solid rgba(80,130,255,0.3);background:rgba(20,40,120,0.3);font-family:\'Fraunces\',serif;font-style:italic;font-weight:200;font-size:17px;color:rgba(140,190,255,0.9);cursor:pointer;margin-bottom:12px">log correction</button>';
+  s+='<div id="corr-err" style="font-family:\'DM Mono\',monospace;font-size:10px;color:rgba(255,100,80,0.9);min-height:18px;margin-bottom:12px;text-align:center;letter-spacing:.3px"></div>';
+  s+='<button id="corr-log-btn" onclick="logCorrection()" style="width:100%;padding:14px;border-radius:10px;border:1px solid rgba(80,130,255,0.3);background:rgba(20,40,120,0.3);font-family:\'Fraunces\',serif;font-style:italic;font-weight:200;font-size:17px;color:rgba(140,190,255,0.9);cursor:pointer;margin-bottom:12px;transition:opacity .15s">log correction</button>';
   s+='<div style="text-align:center"><button onclick="closeCorrectionLog()" style="background:none;border:none;cursor:pointer;font-family:\'DM Mono\',monospace;font-size:9px;letter-spacing:1px;text-transform:uppercase;color:rgba(100,150,255,0.4);padding:4px">cancel</button></div></div>';
   el.innerHTML=s; document.body.appendChild(el);
   requestAnimationFrame(function(){el.style.opacity='1';});
 }
 function closeCorrectionLog(){var el=document.getElementById('corr-overlay');if(el){el.style.opacity='0';setTimeout(function(){el.remove();},250);}}
+function _corrValidate(){
+  var inp=document.getElementById('corr-units');
+  var btn=document.getElementById('corr-log-btn');
+  var err=document.getElementById('corr-err');
+  if(!inp) return;
+  var v=parseFloat(inp.value)||0;
+  var bad=v>20;
+  var warn=v>10&&v<=20;
+  if(err){
+    err.textContent=bad?'⚠️ max 20U per correction':warn?'⚠️ high dose — double-check':'';
+  }
+  if(inp){
+    inp.style.borderColor=bad?'rgba(255,80,60,0.7)':warn?'rgba(255,160,40,0.6)':'rgba(80,130,255,0.3)';
+    inp.style.color=bad?'rgba(255,120,100,0.95)':warn?'rgba(255,200,80,0.95)':'rgba(160,200,255,0.9)';
+  }
+  if(btn){
+    btn.disabled=bad;
+    btn.style.opacity=bad?'0.35':'1';
+    btn.style.cursor=bad?'not-allowed':'pointer';
+  }
+}
 function logCorrection(){
   var u=parseFloat(document.getElementById('corr-units').value)||0;
   if(u<=0){closeCorrectionLog();return;}
