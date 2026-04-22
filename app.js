@@ -4610,9 +4610,51 @@ async function _parseSpeechToFood(transcript) {
   }
 }
 
+// ── Fixed voice results panel (position:fixed, not clipped by sheet overflow) ──
+
+function _showVoicePanel(html) {
+  var panel = document.getElementById('voice-results-panel');
+  if (!panel) {
+    panel = document.createElement('div');
+    panel.id = 'voice-results-panel';
+    panel.style.cssText = [
+      'position:fixed',
+      'left:0','right:0','bottom:0',
+      'z-index:9999',
+      'background:rgba(14,20,38,0.98)',
+      'border-top:1px solid rgba(255,255,255,0.10)',
+      'border-radius:18px 18px 0 0',
+      'max-height:62vh',
+      'overflow-y:auto',
+      'box-shadow:0 -8px 40px rgba(0,0,0,0.5)',
+      'transform:translateY(100%)',
+      'transition:transform .25s cubic-bezier(.4,0,.2,1)',
+      '-webkit-overflow-scrolling:touch'
+    ].join(';');
+    document.body.appendChild(panel);
+  }
+  // Inject spin animation if needed
+  if (!document.getElementById('spin-style')) {
+    var s = document.createElement('style');
+    s.id = 'spin-style';
+    s.textContent = '@keyframes spin{from{transform:rotate(0deg)}to{transform:rotate(360deg)}}';
+    document.head.appendChild(s);
+  }
+  panel.innerHTML = html;
+  panel.style.display = 'block';
+  // Force reflow then slide up
+  panel.getBoundingClientRect();
+  panel.style.transform = 'translateY(0)';
+}
+
+function _closeVoicePanel() {
+  var panel = document.getElementById('voice-results-panel');
+  if (!panel) return;
+  panel.style.transform = 'translateY(100%)';
+  setTimeout(function() { if (panel) panel.style.display = 'none'; }, 280);
+}
+
 function _showVoiceResults(items, transcript) {
-  var results = document.getElementById('food-results');
-  if (!results) return;
   var all2 = FOOD_DB.concat(FOOD_LIBRARY);
 
   // Group items by dish
@@ -4643,10 +4685,10 @@ function _showVoiceResults(items, transcript) {
     var giCol   = matched ? (matched.gi >= 70 ? 'rgba(200,80,40,0.7)' : matched.gi >= 55 ? 'rgba(190,130,30,0.7)' : 'rgba(50,150,80,0.7)') : 'rgba(130,150,180,0.5)';
     var safeName = matched ? matched.name : item.name;
     var encName  = encodeURIComponent(safeName);
-    var pad      = indent ? 'padding:8px 14px 8px 28px' : 'padding:10px 14px';
+    var pad      = indent ? 'padding:8px 14px 8px 28px' : 'padding:10px 16px';
 
     if (matched) {
-      return '<div onclick="addFoodItemGrams(decodeURIComponent(\'' + encName + '\'),' + item.grams + ')" style="' + pad + ';cursor:pointer;border-bottom:1px solid rgba(255,255,255,0.06);display:flex;justify-content:space-between;align-items:center">' +
+      return '<div onclick="_closeVoicePanel();addFoodItemGrams(decodeURIComponent(\'' + encName + '\'),' + item.grams + ')" style="' + pad + ';cursor:pointer;border-bottom:1px solid rgba(255,255,255,0.06);display:flex;justify-content:space-between;align-items:center;touch-action:manipulation">' +
         '<div>' +
           '<div style="font-family:\'DM Mono\',monospace;font-size:12px;color:rgba(220,235,250,0.9)">' + item.name + '</div>' +
           '<div style="font-family:\'DM Mono\',monospace;font-size:9px;color:rgba(62,200,140,0.65)">' + item.grams + 'g · ' + carbs + 'g carbs</div>' +
@@ -4654,7 +4696,7 @@ function _showVoiceResults(items, transcript) {
         '<div style="font-size:10px;color:' + giCol + ';font-family:\'DM Mono\',monospace">GI ' + (matched.gi || '—') + '</div>' +
       '</div>';
     } else {
-      return '<div onclick="addCustomFood(decodeURIComponent(\'' + encName + '\'))" style="' + pad + ';cursor:pointer;border-bottom:1px solid rgba(255,255,255,0.06);display:flex;justify-content:space-between;align-items:center">' +
+      return '<div onclick="_closeVoicePanel();addCustomFood(decodeURIComponent(\'' + encName + '\'))" style="' + pad + ';cursor:pointer;border-bottom:1px solid rgba(255,255,255,0.06);display:flex;justify-content:space-between;align-items:center;touch-action:manipulation">' +
         '<div>' +
           '<div style="font-family:\'DM Mono\',monospace;font-size:12px;color:rgba(200,210,240,0.8)">' + item.name + '</div>' +
           '<div style="font-family:\'DM Mono\',monospace;font-size:9px;color:rgba(130,160,220,0.55)">' + item.grams + 'g estimated · tap to add to library</div>' +
@@ -4664,7 +4706,15 @@ function _showVoiceResults(items, transcript) {
     }
   }
 
-  var html = '<div style="padding:8px 12px 6px;font-family:\'DM Mono\',monospace;font-size:9px;color:rgba(62,200,140,0.7);letter-spacing:.8px;text-transform:uppercase;border-bottom:1px solid rgba(255,255,255,0.07)">heard · tap to add</div>';
+  var shortTranscript = transcript.length > 55 ? transcript.slice(0,52) + '…' : transcript;
+
+  var html = '' +
+    // Drag handle / close
+    '<div onclick="_closeVoicePanel()" style="padding:10px 16px 6px;display:flex;align-items:center;justify-content:space-between;border-bottom:1px solid rgba(255,255,255,0.07);cursor:pointer">' +
+      '<div style="width:36px;height:4px;border-radius:2px;background:rgba(255,255,255,0.18);margin:0 auto 0 0"></div>' +
+      '<div style="font-family:\'DM Mono\',monospace;font-size:8px;color:rgba(120,140,180,0.55);letter-spacing:.5px;text-align:right;max-width:75%;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">' + shortTranscript + '</div>' +
+    '</div>' +
+    '<div style="padding:7px 16px 5px;font-family:\'DM Mono\',monospace;font-size:9px;color:rgba(62,200,140,0.7);letter-spacing:.8px;text-transform:uppercase;border-bottom:1px solid rgba(255,255,255,0.06)">heard · tap item to add</div>';
 
   // Dish groups — collapsible header + indented items
   Object.keys(dishes).forEach(function(dishName) {
@@ -4676,12 +4726,12 @@ function _showVoiceResults(items, transcript) {
     }, 0);
     var encDishItems = encodeURIComponent(JSON.stringify(dishItems));
     // Dish header
-    html += '<div style="padding:8px 14px;background:rgba(255,255,255,0.04);border-bottom:1px solid rgba(255,255,255,0.07);display:flex;justify-content:space-between;align-items:center;cursor:pointer" onclick="var s=document.getElementById(\'' + dishId + '\');s.style.display=s.style.display===\'none\'?\'block\':\'none\'">' +
+    html += '<div style="padding:9px 16px;background:rgba(255,255,255,0.04);border-bottom:1px solid rgba(255,255,255,0.07);display:flex;justify-content:space-between;align-items:center;cursor:pointer;touch-action:manipulation" onclick="var s=document.getElementById(\'' + dishId + '\');s.style.display=s.style.display===\'none\'?\'block\':\'none\'">' +
       '<div>' +
         '<div style="font-family:\'DM Mono\',monospace;font-size:11px;color:rgba(220,235,250,0.8)">◈ ' + dishName + '</div>' +
         '<div style="font-family:\'DM Mono\',monospace;font-size:9px;color:rgba(180,200,220,0.5)">' + dishItems.length + ' ingredients · ~' + dishCarbs.toFixed(0) + 'g carbs</div>' +
       '</div>' +
-      '<button onclick="event.stopPropagation();_addAllVoiceItems(JSON.parse(decodeURIComponent(\'' + encDishItems + '\')))" style="font-family:\'DM Mono\',monospace;font-size:9px;padding:4px 9px;border-radius:6px;border:1px solid rgba(62,180,120,0.3);background:rgba(62,180,120,0.1);color:rgba(62,200,140,0.85);cursor:pointer;touch-action:manipulation">add all</button>' +
+      '<button onclick="event.stopPropagation();_addAllVoiceItems(JSON.parse(decodeURIComponent(\'' + encDishItems + '\')))" style="font-family:\'DM Mono\',monospace;font-size:9px;padding:5px 10px;border-radius:6px;border:1px solid rgba(62,180,120,0.3);background:rgba(62,180,120,0.1);color:rgba(62,200,140,0.85);cursor:pointer;touch-action:manipulation">add all</button>' +
     '</div>';
     // Dish ingredients (expanded by default)
     html += '<div id="' + dishId + '" style="display:block">';
@@ -4692,18 +4742,20 @@ function _showVoiceResults(items, transcript) {
   // Standalone items
   standalone.forEach(function(item) { html += itemRow(item, false); });
 
-  // "Add all matched" footer if multiple standalone matched items
+  // "Add all matched" footer if 2+ matched standalone items
   var matchedStandalone = standalone.filter(function(it) { return it && it.name && matchFood(it.name); });
   if (matchedStandalone.length > 1) {
     var encAll = encodeURIComponent(JSON.stringify(matchedStandalone));
-    html += '<div onclick="_addAllVoiceItems(JSON.parse(decodeURIComponent(\'' + encAll + '\')))" style="padding:10px 14px;cursor:pointer;background:rgba(62,180,120,0.07);border-top:1px solid rgba(62,180,120,0.15);display:flex;justify-content:space-between;align-items:center">' +
-      '<div style="font-family:\'DM Mono\',monospace;font-size:10px;color:rgba(62,200,140,0.85)">add all matched items</div>' +
-      '<div style="font-size:9px;color:rgba(62,180,120,0.6);font-family:\'DM Mono\',monospace">' + matchedStandalone.length + ' items</div>' +
+    html += '<div onclick="_addAllVoiceItems(JSON.parse(decodeURIComponent(\'' + encAll + '\')))" style="padding:12px 16px;cursor:pointer;background:rgba(62,180,120,0.07);border-top:1px solid rgba(62,180,120,0.15);display:flex;justify-content:space-between;align-items:center;touch-action:manipulation">' +
+      '<div style="font-family:\'DM Mono\',monospace;font-size:10px;color:rgba(62,200,140,0.85)">add all ' + matchedStandalone.length + ' matched items</div>' +
+      '<div style="font-size:18px;color:rgba(62,180,120,0.7)">＋</div>' +
     '</div>';
   }
 
-  results.innerHTML = html;
-  results.style.display = 'block';
+  // Bottom safe-area padding
+  html += '<div style="height:env(safe-area-inset-bottom,16px)"></div>';
+
+  _showVoicePanel(html);
 }
 
 function _addAllVoiceItems(items) {
@@ -4721,9 +4773,10 @@ function _addAllVoiceItems(items) {
       _mealItems.push({food: matched, grams: item.grams, carbs: carbs3});
     }
   });
+  _closeVoicePanel();
   var _b = document.getElementById('in-bolus'); if (_b && _b.value !== '') _bolusVal = _b.value;
-  document.getElementById('food-search').value = '';
-  document.getElementById('food-results').style.display = 'none';
+  var fs = document.getElementById('food-search'); if (fs) fs.value = '';
+  var fr = document.getElementById('food-results'); if (fr) fr.style.display = 'none';
   renderSheet();
 }
 
@@ -4743,23 +4796,16 @@ function addFoodItemGrams(name, grams) {
 
 // ── Status indicator for AI food operations ──
 function _showFoodAIStatus(msg) {
-  var results = document.getElementById('food-results');
-  if (!results) return;
-  results.innerHTML = '<div style="padding:12px 14px;font-family:\'DM Mono\',monospace;font-size:10px;color:rgba(62,200,140,0.7);letter-spacing:.5px">' +
-    '<span style="display:inline-block;animation:spin 1s linear infinite">◌</span> ' + msg + '</div>';
-  results.style.display = 'block';
-  // Inject spin animation if needed
-  if (!document.getElementById('spin-style')) {
-    var s = document.createElement('style');
-    s.id = 'spin-style';
-    s.textContent = '@keyframes spin{from{transform:rotate(0deg)}to{transform:rotate(360deg)}}';
-    document.head.appendChild(s);
-  }
+  // Use the fixed voice panel so it's never clipped by sheet overflow
+  _showVoicePanel(
+    '<div style="padding:20px 18px;font-family:\'DM Mono\',monospace;font-size:11px;color:rgba(62,200,140,0.7);letter-spacing:.5px;display:flex;align-items:center;gap:10px">' +
+    '<span style="display:inline-block;animation:spin 1s linear infinite;font-size:16px">◌</span>' +
+    '<span>' + msg + '</span></div>'
+  );
 }
 
 function _hideFoodAIStatus() {
-  var results = document.getElementById('food-results');
-  if (results) results.style.display = 'none';
+  _closeVoicePanel();
 }
 
 // ── Photo / nutrition label input ──
