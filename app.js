@@ -905,7 +905,8 @@ function topUpCOB(grams)  { _cobReservoir = Math.min(1, _cobReservoir + grams / 
 function topUpIOB(units)  { _iobReservoir = Math.min(1, _iobReservoir + units / 6);  }
 
 function _getActiveMealEvents() {
-  var cutoff = Date.now() - 4 * 3600000;
+  var refT   = viewTime || Date.now();
+  var cutoff = refT - 4 * 3600000;
   var events = [], seen = {};
   BOLUS_EVENTS.concat(SESSION).forEach(function(ev) {
     if (!ev.c || ev.c <= 0 || ev.t < cutoff) return;
@@ -919,7 +920,8 @@ function _getActiveMealEvents() {
 }
 
 function _getActiveBolusEvents() {
-  var cutoff = Date.now() - 4 * 3600000;
+  var refT   = viewTime || Date.now();
+  var cutoff = refT - 4 * 3600000;
   var events = [], seen = {};
   BOLUS_EVENTS.concat(SESSION).forEach(function(ev) {
     if (!ev.u || ev.u <= 0 || ev.t < cutoff) return;
@@ -3575,6 +3577,8 @@ function bolusNow() {
   var inp = document.getElementById('plate-bolus');
   var u   = parseFloat(inp&&inp.value) || 0;
   if (u<=0) return;
+  if (u > 20) { showToast('⚠️ ' + u.toFixed(1) + 'U is very high — max 20U per entry'); return; }
+  if (u > 15) { showToast('⚠️ ' + u.toFixed(1) + 'U logged — double-check this dose'); }
   var t = getEntryTime() || Date.now();
   SESSION.push({t:t, c:0, u:u});
   BOLUS_EVENTS.push({t:t, c:0, u:u});
@@ -4554,22 +4558,12 @@ function _resetVoiceBtn() {
 }
 
 async function _parseSpeechToFood(transcript) {
-  // Show transcript in search box while processing
   var searchEl = document.getElementById('food-search');
-  if (searchEl) searchEl.value = transcript;
+  if (searchEl) searchEl.value = '';
   showToast('Heard: "' + transcript.slice(0,60) + '"');
 
-  // First try a direct local match (fast path for single foods)
-  var ql = transcript.toLowerCase().replace(/\s+/g,' ').trim();
-  var all = FOOD_DB.concat(FOOD_LIBRARY);
-  var direct = all.filter(function(f){ return f.name.toLowerCase().indexOf(ql) >= 0; });
-  if (direct.length > 0 && direct.length <= 3) {
-    searchFood(transcript);
-    return;
-  }
-
-  // Use Claude to parse multi-item descriptions
-  _showFoodAIStatus('parsing meal…');
+  // Always route through Claude — ensures every food is a separate item
+  _showFoodAIStatus('parsing meal\u2026');
   try {
     var proxyUrl = 'https://orange-surf-6f98.john-king-uk.workers.dev/?url=' +
       encodeURIComponent('https://api.anthropic.com/v1/messages');
@@ -4582,32 +4576,37 @@ async function _parseSpeechToFood(transcript) {
       },
       body: JSON.stringify({
         model: 'claude-sonnet-4-20250514',
-        max_tokens: 400,
-        system: 'You parse spoken meal descriptions into structured food items. Return ONLY a JSON array, no other text, no markdown. Each item: {"name": "food name", "grams": estimated_grams_as_number}. Use common UK food names. If no weight mentioned, estimate a typical child portion. Example output: [{"name":"porridge","grams":180},{"name":"banana","grams":120}]',
-        messages: [{ role: 'user', content: 'Parse this spoken meal: "' + transcript + '"' }]
+        max_tokens: 500,
+        system: 'You parse spoken meal descriptions into individual food items for a diabetes app. RULES: (1) Each food is a SEPARATE object — never combine multiple foods into one object. "porridge and a banana and a plum" = THREE objects. (2) Every object MUST have a non-empty "name" field — use the simplest common UK food name e.g. "plum" not "a plum" not "". (3) Estimate a typical child portion in grams if not stated. (4) Return ONLY a valid JSON array, no markdown, no text outside the array. Example: [{"name":"porridge","grams":180},{"name":"banana","grams":120},{"name":"plum","grams":80}]',
+        messages: [{ role: 'user', content: 'Parse into individual food items: "' + transcript + '"' }]
       })
     });
     if (!r.ok) throw new Error('API ' + r.status);
     var data = await r.json();
     var text = ((data.content||[])[0]||{}).text || '[]';
     var clean = text.replace(/```json|```/g,'').trim();
-    var firstBracket = clean.indexOf('[');
-    var lastBracket = clean.lastIndexOf(']');
-    if (firstBracket < 0 || lastBracket < 0) throw new Error('No JSON array');
-    var items = JSON.parse(clean.slice(firstBracket, lastBracket+1));
+    var fb = clean.indexOf('['), lb = clean.lastIndexOf(']');
+    if (fb < 0 || lb < 0) throw new Error('No JSON array');
+    var items = JSON.parse(clean.slice(fb, lb+1));
+    // Sanitise: remove items with empty names, normalise
+    items = items.filter(function(it){ return it && it.name && String(it.name).trim().length > 0; });
+    items = items.map(function(it){
+      var n = String(it.name).trim().replace(/^(a |an |some )\s*/i, '');
+      n = n.charAt(0).toUpperCase() + n.slice(1);
+      return { name: n, grams: Math.max(1, Math.round(Number(it.grams)||100)) };
+    });
     _hideFoodAIStatus();
-    if (!items.length) { showToast('Could not parse meal — try searching manually'); return; }
+    if (!items.length) { showToast('Could not parse — try searching manually'); return; }
     _showVoiceResults(items, transcript);
   } catch(err) {
     _hideFoodAIStatus();
     console.warn('[voice food] parse error:', err);
-    // Fall back to showing search results for the transcript
-    searchFood(transcript);
+    showToast('Could not parse — try searching manually');
+    if (searchEl) { searchEl.value = transcript; searchFood(transcript); }
   }
 }
 
 function _showVoiceResults(items, transcript) {
-  // Show parsed items as tappable chips in the food-results dropdown
   var results = document.getElementById('food-results');
   if (!results) return;
   var all = FOOD_DB.concat(FOOD_LIBRARY);
@@ -4615,36 +4614,79 @@ function _showVoiceResults(items, transcript) {
   var html = '<div style="padding:8px 12px 4px;font-family:\'DM Mono\',monospace;font-size:9px;color:rgba(62,200,140,0.7);letter-spacing:.8px;text-transform:uppercase">heard: ' + transcript.slice(0,50) + '</div>';
 
   items.forEach(function(item) {
-    // Try to match to DB
+    if (!item || !item.name) return; // guard against malformed items
+
+    // Try to match to DB — check both directions
     var matched = null;
     var ql2 = item.name.toLowerCase();
-    for (var i=0; i<all.length; i++) {
-      if (all[i].name.toLowerCase().indexOf(ql2) >= 0 || ql2.indexOf(all[i].name.toLowerCase()) >= 0) {
-        matched = all[i]; break;
-      }
+    var all2 = FOOD_DB.concat(FOOD_LIBRARY);
+    for (var i = 0; i < all2.length; i++) {
+      var fn = all2[i].name.toLowerCase();
+      if (fn.indexOf(ql2) >= 0 || ql2.indexOf(fn) >= 0) { matched = all2[i]; break; }
     }
-    var carbs = matched ? Math.round(matched.c100 * item.grams / 100 * 10)/10 : null;
-    var giCol2 = matched && matched.gi >= 70 ? 'rgba(200,80,40,0.6)' : matched && matched.gi >= 55 ? 'rgba(190,130,30,0.6)' : 'rgba(50,150,80,0.6)';
-    var label = item.name + ' · ' + item.grams + 'g' + (carbs !== null ? ' · ' + carbs + 'g carbs' : '');
+
+    var carbs    = matched ? Math.round(matched.c100 * item.grams / 100 * 10) / 10 : null;
+    var giCol2   = matched ? (matched.gi >= 70 ? 'rgba(200,80,40,0.7)' : matched.gi >= 55 ? 'rgba(190,130,30,0.7)' : 'rgba(50,150,80,0.7)') : 'rgba(130,150,180,0.5)';
+    // Safe name for onclick — encode to avoid quote issues
+    var safeName = matched ? matched.name : item.name;
+    var encName  = encodeURIComponent(safeName);
 
     if (matched) {
-      html += '<div onclick="addFoodItemGrams(\'' + matched.name.replace(/'/g,"\\'") + '\',' + item.grams + ')" style="padding:10px 14px;cursor:pointer;border-bottom:1px solid rgba(255,255,255,0.07);display:flex;justify-content:space-between;align-items:center">' +
+      html += '<div onclick="addFoodItemGrams(decodeURIComponent(\'' + encName + '\'),' + item.grams + ')" style="padding:10px 14px;cursor:pointer;border-bottom:1px solid rgba(255,255,255,0.07);display:flex;justify-content:space-between;align-items:center">' +
         '<div>' +
           '<div style="font-family:\'DM Mono\',monospace;font-size:12px;color:rgba(220,235,250,0.9)">' + item.name + '</div>' +
-          '<div style="font-family:\'DM Mono\',monospace;font-size:9px;color:rgba(62,200,140,0.65)">' + item.grams + 'g · ' + carbs + 'g carbs</div>' +
+          '<div style="font-family:\'DM Mono\',monospace;font-size:9px;color:rgba(62,200,140,0.65)">' + item.grams + 'g estimated · ' + carbs + 'g carbs</div>' +
         '</div>' +
-        '<div style="font-size:10px;color:' + giCol2 + ';font-family:\'DM Mono\',monospace">GI ' + (matched.gi||'—') + '</div>' +
+        '<div style="font-size:10px;color:' + giCol2 + ';font-family:\'DM Mono\',monospace">GI ' + (matched.gi || '—') + '</div>' +
       '</div>';
     } else {
-      html += '<div onclick="addCustomFood(\'' + item.name.replace(/'/g,"\\'") + '\')" style="padding:10px 14px;cursor:pointer;border-bottom:1px solid rgba(255,255,255,0.07)">' +
-        '<div style="font-family:\'DM Mono\',monospace;font-size:12px;color:rgba(220,235,250,0.7)">' + item.name + ' <span style="color:rgba(100,130,180,0.6);font-size:9px">· add new</span></div>' +
-        '<div style="font-family:\'DM Mono\',monospace;font-size:9px;color:rgba(180,200,220,0.4)">' + item.grams + 'g estimated</div>' +
+      // Not in DB — show as "add new" with name clearly visible and pre-filled
+      html += '<div onclick="addCustomFood(decodeURIComponent(\'' + encName + '\'))" style="padding:10px 14px;cursor:pointer;border-bottom:1px solid rgba(255,255,255,0.07);display:flex;justify-content:space-between;align-items:center">' +
+        '<div>' +
+          '<div style="font-family:\'DM Mono\',monospace;font-size:12px;color:rgba(200,210,240,0.8)">' + item.name + '</div>' +
+          '<div style="font-family:\'DM Mono\',monospace;font-size:9px;color:rgba(130,160,220,0.55)">' + item.grams + 'g estimated · tap to add to library</div>' +
+        '</div>' +
+        '<div style="font-size:9px;color:rgba(100,130,200,0.7);font-family:\'DM Mono\',monospace;border:1px solid rgba(100,130,200,0.25);border-radius:5px;padding:2px 6px">+ new</div>' +
       '</div>';
     }
   });
 
+  // Add a "add all matched" shortcut if multiple items matched
+  var matchedCount = items.filter(function(it) {
+    if (!it || !it.name) return false;
+    var ql3 = it.name.toLowerCase();
+    return FOOD_DB.concat(FOOD_LIBRARY).some(function(f){ return f.name.toLowerCase().indexOf(ql3)>=0 || ql3.indexOf(f.name.toLowerCase())>=0; });
+  }).length;
+  if (matchedCount > 1) {
+    html += '<div onclick="_addAllVoiceItems(' + JSON.stringify(items).replace(/"/g, '&quot;') + ')" style="padding:10px 14px;cursor:pointer;background:rgba(62,180,120,0.07);border-top:1px solid rgba(62,180,120,0.15);display:flex;justify-content:space-between;align-items:center">' +
+      '<div style="font-family:\'DM Mono\',monospace;font-size:10px;color:rgba(62,200,140,0.85)">add all matched items</div>' +
+      '<div style="font-size:9px;color:rgba(62,180,120,0.6);font-family:\'DM Mono\',monospace">' + matchedCount + ' items</div>' +
+    '</div>';
+  }
+
   results.innerHTML = html;
   results.style.display = 'block';
+}
+
+function _addAllVoiceItems(items) {
+  var all2 = FOOD_DB.concat(FOOD_LIBRARY);
+  items.forEach(function(item) {
+    if (!item || !item.name) return;
+    var ql3 = item.name.toLowerCase();
+    var matched = null;
+    for (var i = 0; i < all2.length; i++) {
+      var fn = all2[i].name.toLowerCase();
+      if (fn.indexOf(ql3) >= 0 || ql3.indexOf(fn) >= 0) { matched = all2[i]; break; }
+    }
+    if (matched) {
+      var carbs3 = Math.round(matched.c100 * item.grams / 100 * 10) / 10;
+      _mealItems.push({food: matched, grams: item.grams, carbs: carbs3});
+    }
+  });
+  var _b = document.getElementById('in-bolus'); if (_b && _b.value !== '') _bolusVal = _b.value;
+  document.getElementById('food-search').value = '';
+  document.getElementById('food-results').style.display = 'none';
+  renderSheet();
 }
 
 // Add food item with a specific gram weight (used by voice results)
