@@ -4585,7 +4585,10 @@ async function _parseSpeechToFood(transcript) {
         messages: [{ role: 'user', content: 'Parse into individual food items, correcting any speech recognition errors: "' + transcript + '"' }]
       })
     });
-    if (!r.ok) throw new Error('API ' + r.status);
+    if (!r.ok) {
+      var errBody = await r.text().catch(function(){ return ''; });
+      throw new Error('API ' + r.status + ': ' + errBody.slice(0,120));
+    }
     var data = await r.json();
     var text = ((data.content||[])[0]||{}).text || '[]';
     var clean = text.replace(/```json|```/g,'').trim();
@@ -4603,10 +4606,17 @@ async function _parseSpeechToFood(transcript) {
     if (!items.length) { showToast('Could not parse — try searching manually'); return; }
     _showVoiceResults(items, transcript);
   } catch(err) {
-    _hideFoodAIStatus();
     console.warn('[voice food] parse error:', err);
-    showToast('Could not parse — try searching manually');
-    if (searchEl) { searchEl.value = transcript; searchFood(transcript); }
+    var errMsg = err && err.message ? err.message : String(err);
+    _showVoicePanel(
+      '<div onclick="_closeVoicePanel()" style="padding:18px 18px 24px;font-family:\'DM Mono\',monospace">' +
+        '<div style="font-size:10px;color:rgba(62,200,140,0.7);letter-spacing:.8px;text-transform:uppercase;margin-bottom:10px">heard · could not parse</div>' +
+        '<div style="font-size:11px;color:rgba(220,200,160,0.8);margin-bottom:10px;word-break:break-all">"' + transcript.slice(0,120) + '"</div>' +
+        '<div style="font-size:9px;color:rgba(200,80,60,0.7);margin-bottom:14px">error: ' + errMsg + '</div>' +
+        '<div style="font-size:9px;color:rgba(130,160,220,0.55)">tap to dismiss · search manually</div>' +
+      '</div>'
+    );
+    if (searchEl) searchEl.value = transcript;
   }
 }
 
