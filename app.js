@@ -2437,6 +2437,7 @@ const ALERTS = {
   beep(freq, dur, vol, type) {
     type = type || 'sine';
     try {
+      if (!window._riverHasUserGesture) return; // don't create AudioContext before first gesture
       if (!this._audioCtx) this._audioCtx = new (window.AudioContext || window.webkitAudioContext)();
       const ctx = this._audioCtx;
       // Resume context if suspended (Chrome autoplay policy)
@@ -2861,7 +2862,7 @@ function frame(ts) {
 
   // time labels handled by drawTimeLabels
 
-  checkAlerts(d);
+  checkAlerts(_isAtNow ? d : null);
   drawHypoPulse(pal);
   updateHUD(d, pal);
   updateNudgeChipVisibility();
@@ -4374,13 +4375,25 @@ function renderSheet() {
     // Food search
     '<div style="padding:0 18px;margin-bottom:10px">' +
       '<div style="position:relative">' +
-        '<input id="food-search" type="text" placeholder="search food..." autocomplete="off" autocorrect="off" spellcheck="false"' +
+        '<input id="food-search" type="text" placeholder="search food or paste URL..." autocomplete="off" autocorrect="off" spellcheck="false"' +
           ' style="width:100%;padding:10px 12px;border-radius:10px;border:1px solid rgba(255,255,255,0.15);background:rgba(255,255,255,0.08);font-family:\'DM Mono\',monospace;font-size:13px;color:rgba(220,235,250,0.9);outline:none;box-sizing:border-box"' +
-          ' oninput="searchFood(this.value)">' +
+          ' oninput="searchFood(this.value)" onpaste="setTimeout(function(){checkFoodPaste(document.getElementById(\'food-search\').value)},50)">' +
         '<div id="food-results" style="display:none;position:absolute;top:100%;left:0;right:0;z-index:50;' +
           'background:rgba(18,24,42,0.99);border:1px solid rgba(255,255,255,0.12);border-radius:10px;' +
           'box-shadow:0 4px 20px rgba(0,0,0,0.08);max-height:180px;overflow-y:auto;margin-top:4px"></div>' +
       '</div>' +
+      // Voice / Photo / URL input buttons
+      '<div style="display:flex;gap:8px;margin-top:8px">' +
+        '<button id="voice-food-btn" onpointerdown="startVoiceFood(event)" onpointerup="stopVoiceFood(event)" onpointerleave="stopVoiceFood(event)" style="flex:1;display:flex;align-items:center;justify-content:center;gap:6px;padding:9px 10px;border-radius:9px;border:1px solid rgba(255,255,255,0.12);background:rgba(255,255,255,0.05);font-family:\'DM Mono\',monospace;font-size:10px;color:rgba(180,200,220,0.6);cursor:pointer;touch-action:manipulation;transition:all .2s" title="hold to speak meal">' +
+          '<svg viewBox="0 0 16 16" width="13" height="13" fill="none"><rect x="5" y="1" width="6" height="9" rx="3" stroke="currentColor" stroke-width="1.3"/><path d="M2.5 8.5a5.5 5.5 0 0010 0" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/><line x1="8" y1="14" x2="8" y2="15.5" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/></svg>' +
+          'hold to speak' +
+        '</button>' +
+        '<button onclick="openPhotoFood()" style="flex:1;display:flex;align-items:center;justify-content:center;gap:6px;padding:9px 10px;border-radius:9px;border:1px solid rgba(255,255,255,0.12);background:rgba(255,255,255,0.05);font-family:\'DM Mono\',monospace;font-size:10px;color:rgba(180,200,220,0.6);cursor:pointer;touch-action:manipulation;transition:all .2s" title="photo of food label">' +
+          '<svg viewBox="0 0 16 16" width="13" height="13" fill="none"><rect x="1" y="3.5" width="14" height="10" rx="2" stroke="currentColor" stroke-width="1.3"/><circle cx="8" cy="8.5" r="2.5" stroke="currentColor" stroke-width="1.3"/><path d="M5.5 3.5L6.5 1.5h3l1 2" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/></svg>' +
+          'photo / label' +
+        '</button>' +
+      '</div>' +
+      '<input type="file" id="food-photo-input" accept="image/*" capture="environment" style="display:none" onchange="handleFoodPhoto(this)">' +
     '</div>' +
 
     // Meal items
@@ -4479,6 +4492,357 @@ function searchFood(q) {
       '<div style="font-size:10px;color:' + giCol2 + ';font-family:\'DM Mono\',monospace">GI ' + (f.gi||'—') + '</div>' +
     '</div>';
   }).join('');
+}
+
+// ── VOICE / PHOTO / URL FOOD INPUT ────────────────────────────────────────────
+
+// ── Voice input (Web Speech API, hold-to-speak) ──
+var _voiceRecog = null;
+var _voiceActive = false;
+
+function startVoiceFood(e) {
+  if (e && e.preventDefault) e.preventDefault();
+  var btn = document.getElementById('voice-food-btn');
+  var SpeechRec = window.SpeechRecognition || window.webkitSpeechRecognition;
+  if (!SpeechRec) {
+    showToast('Voice input not supported on this browser');
+    return;
+  }
+  if (_voiceActive) return;
+  _voiceActive = true;
+  if (btn) {
+    btn.style.background = 'rgba(62,180,120,0.18)';
+    btn.style.borderColor = 'rgba(62,180,120,0.5)';
+    btn.style.color = 'rgba(62,200,140,0.95)';
+    btn.textContent = '🎤 listening…';
+  }
+
+  var recog = new SpeechRec();
+  _voiceRecog = recog;
+  recog.lang = 'en-GB';
+  recog.interimResults = false;
+  recog.maxAlternatives = 1;
+  recog.continuous = false;
+
+  recog.onresult = function(ev) {
+    var transcript = ev.results[0][0].transcript;
+    _resetVoiceBtn();
+    _parseSpeechToFood(transcript);
+  };
+  recog.onerror = function(ev) {
+    _resetVoiceBtn();
+    if (ev.error !== 'aborted') showToast('Could not hear that — try again');
+  };
+  recog.onend = function() { _resetVoiceBtn(); };
+  try { recog.start(); } catch(err) { _resetVoiceBtn(); }
+}
+
+function stopVoiceFood(e) {
+  if (!_voiceActive) return;
+  if (_voiceRecog) { try { _voiceRecog.stop(); } catch(err) {} }
+}
+
+function _resetVoiceBtn() {
+  _voiceActive = false;
+  _voiceRecog = null;
+  var btn = document.getElementById('voice-food-btn');
+  if (!btn) return;
+  btn.style.background = 'rgba(255,255,255,0.05)';
+  btn.style.borderColor = 'rgba(255,255,255,0.12)';
+  btn.style.color = 'rgba(180,200,220,0.6)';
+  btn.innerHTML = '<svg viewBox="0 0 16 16" width="13" height="13" fill="none"><rect x="5" y="1" width="6" height="9" rx="3" stroke="currentColor" stroke-width="1.3"/><path d="M2.5 8.5a5.5 5.5 0 0010 0" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/><line x1="8" y1="14" x2="8" y2="15.5" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/></svg> hold to speak';
+}
+
+async function _parseSpeechToFood(transcript) {
+  // Show transcript in search box while processing
+  var searchEl = document.getElementById('food-search');
+  if (searchEl) searchEl.value = transcript;
+  showToast('Heard: "' + transcript.slice(0,60) + '"');
+
+  // First try a direct local match (fast path for single foods)
+  var ql = transcript.toLowerCase().replace(/\s+/g,' ').trim();
+  var all = FOOD_DB.concat(FOOD_LIBRARY);
+  var direct = all.filter(function(f){ return f.name.toLowerCase().indexOf(ql) >= 0; });
+  if (direct.length > 0 && direct.length <= 3) {
+    searchFood(transcript);
+    return;
+  }
+
+  // Use Claude to parse multi-item descriptions
+  _showFoodAIStatus('parsing meal…');
+  try {
+    var proxyUrl = 'https://orange-surf-6f98.john-king-uk.workers.dev/?url=' +
+      encodeURIComponent('https://api.anthropic.com/v1/messages');
+    var r = await fetch(proxyUrl, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'anthropic-version': '2023-06-01',
+        'anthropic-dangerous-direct-browser-access': 'true',
+      },
+      body: JSON.stringify({
+        model: 'claude-sonnet-4-20250514',
+        max_tokens: 400,
+        system: 'You parse spoken meal descriptions into structured food items. Return ONLY a JSON array, no other text, no markdown. Each item: {"name": "food name", "grams": estimated_grams_as_number}. Use common UK food names. If no weight mentioned, estimate a typical child portion. Example output: [{"name":"porridge","grams":180},{"name":"banana","grams":120}]',
+        messages: [{ role: 'user', content: 'Parse this spoken meal: "' + transcript + '"' }]
+      })
+    });
+    if (!r.ok) throw new Error('API ' + r.status);
+    var data = await r.json();
+    var text = ((data.content||[])[0]||{}).text || '[]';
+    var clean = text.replace(/```json|```/g,'').trim();
+    var firstBracket = clean.indexOf('[');
+    var lastBracket = clean.lastIndexOf(']');
+    if (firstBracket < 0 || lastBracket < 0) throw new Error('No JSON array');
+    var items = JSON.parse(clean.slice(firstBracket, lastBracket+1));
+    _hideFoodAIStatus();
+    if (!items.length) { showToast('Could not parse meal — try searching manually'); return; }
+    _showVoiceResults(items, transcript);
+  } catch(err) {
+    _hideFoodAIStatus();
+    console.warn('[voice food] parse error:', err);
+    // Fall back to showing search results for the transcript
+    searchFood(transcript);
+  }
+}
+
+function _showVoiceResults(items, transcript) {
+  // Show parsed items as tappable chips in the food-results dropdown
+  var results = document.getElementById('food-results');
+  if (!results) return;
+  var all = FOOD_DB.concat(FOOD_LIBRARY);
+
+  var html = '<div style="padding:8px 12px 4px;font-family:\'DM Mono\',monospace;font-size:9px;color:rgba(62,200,140,0.7);letter-spacing:.8px;text-transform:uppercase">heard: ' + transcript.slice(0,50) + '</div>';
+
+  items.forEach(function(item) {
+    // Try to match to DB
+    var matched = null;
+    var ql2 = item.name.toLowerCase();
+    for (var i=0; i<all.length; i++) {
+      if (all[i].name.toLowerCase().indexOf(ql2) >= 0 || ql2.indexOf(all[i].name.toLowerCase()) >= 0) {
+        matched = all[i]; break;
+      }
+    }
+    var carbs = matched ? Math.round(matched.c100 * item.grams / 100 * 10)/10 : null;
+    var giCol2 = matched && matched.gi >= 70 ? 'rgba(200,80,40,0.6)' : matched && matched.gi >= 55 ? 'rgba(190,130,30,0.6)' : 'rgba(50,150,80,0.6)';
+    var label = item.name + ' · ' + item.grams + 'g' + (carbs !== null ? ' · ' + carbs + 'g carbs' : '');
+
+    if (matched) {
+      html += '<div onclick="addFoodItemGrams(\'' + matched.name.replace(/'/g,"\\'") + '\',' + item.grams + ')" style="padding:10px 14px;cursor:pointer;border-bottom:1px solid rgba(255,255,255,0.07);display:flex;justify-content:space-between;align-items:center">' +
+        '<div>' +
+          '<div style="font-family:\'DM Mono\',monospace;font-size:12px;color:rgba(220,235,250,0.9)">' + item.name + '</div>' +
+          '<div style="font-family:\'DM Mono\',monospace;font-size:9px;color:rgba(62,200,140,0.65)">' + item.grams + 'g · ' + carbs + 'g carbs</div>' +
+        '</div>' +
+        '<div style="font-size:10px;color:' + giCol2 + ';font-family:\'DM Mono\',monospace">GI ' + (matched.gi||'—') + '</div>' +
+      '</div>';
+    } else {
+      html += '<div onclick="addCustomFood(\'' + item.name.replace(/'/g,"\\'") + '\')" style="padding:10px 14px;cursor:pointer;border-bottom:1px solid rgba(255,255,255,0.07)">' +
+        '<div style="font-family:\'DM Mono\',monospace;font-size:12px;color:rgba(220,235,250,0.7)">' + item.name + ' <span style="color:rgba(100,130,180,0.6);font-size:9px">· add new</span></div>' +
+        '<div style="font-family:\'DM Mono\',monospace;font-size:9px;color:rgba(180,200,220,0.4)">' + item.grams + 'g estimated</div>' +
+      '</div>';
+    }
+  });
+
+  results.innerHTML = html;
+  results.style.display = 'block';
+}
+
+// Add food item with a specific gram weight (used by voice results)
+function addFoodItemGrams(name, grams) {
+  var all   = FOOD_DB.concat(FOOD_LIBRARY);
+  var food  = null;
+  for (var i=0; i<all.length; i++) { if (all[i].name === name) { food = all[i]; break; } }
+  if (!food) return;
+  var carbs = Math.round((food.c100 * grams / 100) * 10) / 10;
+  _mealItems.push({food: food, grams: grams, carbs: carbs});
+  var _b = document.getElementById('in-bolus'); if (_b && _b.value !== '') _bolusVal = _b.value;
+  document.getElementById('food-search').value = '';
+  document.getElementById('food-results').style.display = 'none';
+  renderSheet();
+}
+
+// ── Status indicator for AI food operations ──
+function _showFoodAIStatus(msg) {
+  var results = document.getElementById('food-results');
+  if (!results) return;
+  results.innerHTML = '<div style="padding:12px 14px;font-family:\'DM Mono\',monospace;font-size:10px;color:rgba(62,200,140,0.7);letter-spacing:.5px">' +
+    '<span style="display:inline-block;animation:spin 1s linear infinite">◌</span> ' + msg + '</div>';
+  results.style.display = 'block';
+  // Inject spin animation if needed
+  if (!document.getElementById('spin-style')) {
+    var s = document.createElement('style');
+    s.id = 'spin-style';
+    s.textContent = '@keyframes spin{from{transform:rotate(0deg)}to{transform:rotate(360deg)}}';
+    document.head.appendChild(s);
+  }
+}
+
+function _hideFoodAIStatus() {
+  var results = document.getElementById('food-results');
+  if (results) results.style.display = 'none';
+}
+
+// ── Photo / nutrition label input ──
+function openPhotoFood() {
+  var input = document.getElementById('food-photo-input');
+  if (input) input.click();
+}
+
+async function handleFoodPhoto(inputEl) {
+  var file = inputEl.files && inputEl.files[0];
+  if (!file) return;
+  inputEl.value = ''; // reset so same file can be picked again
+
+  _showFoodAIStatus('reading label…');
+
+  try {
+    var base64 = await new Promise(function(res, rej) {
+      var r = new FileReader();
+      r.onload = function() { res(r.result.split(',')[1]); };
+      r.onerror = function() { rej(new Error('Read failed')); };
+      r.readAsDataURL(file);
+    });
+
+    var mediaType = file.type || 'image/jpeg';
+    var proxyUrl = 'https://orange-surf-6f98.john-king-uk.workers.dev/?url=' +
+      encodeURIComponent('https://api.anthropic.com/v1/messages');
+    var r = await fetch(proxyUrl, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'anthropic-version': '2023-06-01',
+        'anthropic-dangerous-direct-browser-access': 'true',
+      },
+      body: JSON.stringify({
+        model: 'claude-sonnet-4-20250514',
+        max_tokens: 400,
+        system: 'You extract nutritional information from food packaging photos and nutrition labels. Return ONLY a JSON object, no markdown, no explanation. Fields: {"name": "product name", "c100": carbs_per_100g_as_number, "gi": estimated_gi_as_number_or_null, "g_serv": serving_size_grams_as_number_or_null, "sugar": sugars_per_100g_as_number_or_null}. Use the "Carbohydrate" or "Total Carbohydrate" row (not "of which sugars" for c100). Estimate GI from the food type if not shown: white bread ~75, wholemeal ~55, pasta ~48, biscuits ~70, oats ~55, fruit ~45. If image is not a food label, return {"error": "not a label"}.',
+        messages: [{
+          role: 'user',
+          content: [
+            { type: 'image', source: { type: 'base64', media_type: mediaType, data: base64 } },
+            { type: 'text', text: 'Extract nutritional info from this food label.' }
+          ]
+        }]
+      })
+    });
+    if (!r.ok) throw new Error('API ' + r.status);
+    var data = await r.json();
+    var text = ((data.content||[])[0]||{}).text || '{}';
+    var clean = text.replace(/```json|```/g,'').trim();
+    var firstBrace = clean.indexOf('{');
+    var lastBrace = clean.lastIndexOf('}');
+    if (firstBrace < 0 || lastBrace < 0) throw new Error('No JSON');
+    var info = JSON.parse(clean.slice(firstBrace, lastBrace+1));
+    _hideFoodAIStatus();
+
+    if (info.error) { showToast('No label found — try a clearer photo'); return; }
+    if (!info.name || !info.c100) { showToast('Could not read label — try again'); return; }
+
+    // Pre-populate add food modal with extracted values
+    _photoFoodData = info;
+    addCustomFood(info.name);
+  } catch(err) {
+    _hideFoodAIStatus();
+    console.warn('[photo food] error:', err);
+    showToast('Could not read label — try again');
+  }
+}
+
+var _photoFoodData = null; // set by handleFoodPhoto, consumed by addCustomFood
+
+// ── URL paste detection ──
+async function checkFoodPaste(val) {
+  if (!val) return;
+  val = val.trim();
+  // Check if it looks like a URL
+  if (!/^https?:\/\//i.test(val) && !/^www\./i.test(val)) return;
+
+  var url = val.startsWith('www.') ? 'https://' + val : val;
+  var searchEl = document.getElementById('food-search');
+  if (searchEl) searchEl.value = '';
+  _showFoodAIStatus('fetching recipe / nutrition…');
+
+  try {
+    // Fetch via Worker to avoid CORS
+    var workerUrl = 'https://orange-surf-6f98.john-king-uk.workers.dev/?url=' +
+      encodeURIComponent('https://api.anthropic.com/v1/messages');
+
+    // First fetch the page text via a simple proxy approach —
+    // We ask Claude to use its knowledge about the URL domain to estimate,
+    // but actually fetch the page via the worker's URL proxy endpoint
+    var pageResp = await fetch('https://orange-surf-6f98.john-king-uk.workers.dev/?url=' + encodeURIComponent(url), {
+      method: 'GET',
+      headers: { 'Accept': 'text/html,text/plain' }
+    });
+    var pageText = '';
+    if (pageResp.ok) {
+      pageText = (await pageResp.text()).slice(0, 8000); // cap to avoid token explosion
+    }
+
+    // Now ask Claude to extract ingredients
+    var r = await fetch(workerUrl, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'anthropic-version': '2023-06-01',
+        'anthropic-dangerous-direct-browser-access': 'true',
+      },
+      body: JSON.stringify({
+        model: 'claude-sonnet-4-20250514',
+        max_tokens: 600,
+        system: 'You extract recipe ingredients or nutritional info from webpage text. Return ONLY a JSON array, no markdown. Each item: {"name": "food name", "c100": carbs_per_100g_as_number, "gi": estimated_gi_or_null, "g_serv": typical_serving_grams_or_null}. If the page contains a recipe, extract the main ingredients with estimated carb content per 100g. If it contains a single product with nutrition info, return a single-item array. If you cannot extract any food data, return []. Use common UK food names.',
+        messages: [{ role: 'user', content: 'URL: ' + url + '\n\nPage content:\n' + (pageText || '(could not fetch page)') + '\n\nExtract food/nutrition data.' }]
+      })
+    });
+    if (!r.ok) throw new Error('API ' + r.status);
+    var data = await r.json();
+    var text = ((data.content||[])[0]||{}).text || '[]';
+    var clean2 = text.replace(/```json|```/g,'').trim();
+    var fb = clean2.indexOf('['); var lb = clean2.lastIndexOf(']');
+    if (fb < 0 || lb < 0) throw new Error('No array');
+    var items = JSON.parse(clean2.slice(fb, lb+1));
+    _hideFoodAIStatus();
+
+    if (!items.length) { showToast('No food data found at that URL'); return; }
+
+    // Add each new food to library and show tappable results
+    var results = document.getElementById('food-results');
+    if (!results) return;
+    var html = '<div style="padding:8px 12px 4px;font-family:\'DM Mono\',monospace;font-size:9px;color:rgba(130,160,220,0.7);letter-spacing:.8px;text-transform:uppercase">from url · tap to add</div>';
+    items.forEach(function(item) {
+      if (!item.name || !item.c100) return;
+      var giEst = item.gi || 55;
+      var gServ = item.g_serv || 100;
+      var carbsServ = Math.round(item.c100 * gServ / 100 * 10) / 10;
+      html += '<div onclick="addUrlFoodItem(' + JSON.stringify(item).replace(/'/g,"\\'") + ')" style="padding:10px 14px;cursor:pointer;border-bottom:1px solid rgba(255,255,255,0.07);display:flex;justify-content:space-between;align-items:center">' +
+        '<div>' +
+          '<div style="font-family:\'DM Mono\',monospace;font-size:12px;color:rgba(220,235,250,0.9)">' + item.name + '</div>' +
+          '<div style="font-family:\'DM Mono\',monospace;font-size:9px;color:rgba(62,200,140,0.65)">' + item.c100 + 'g carbs/100g · serv ' + gServ + 'g</div>' +
+        '</div>' +
+        '<div style="font-size:10px;color:rgba(130,160,220,0.6);font-family:\'DM Mono\',monospace">GI ' + giEst + '</div>' +
+      '</div>';
+    });
+    results.innerHTML = html;
+    results.style.display = 'block';
+  } catch(err) {
+    _hideFoodAIStatus();
+    console.warn('[url food] error:', err);
+    showToast('Could not read that URL');
+  }
+}
+
+function addUrlFoodItem(item) {
+  // Save to library if not already present
+  var all = FOOD_DB.concat(FOOD_LIBRARY);
+  var existing = all.filter(function(f){ return f.name === item.name; })[0];
+  if (!existing) {
+    var newFood = { name: item.name, c100: item.c100, gi: item.gi || 55, g_serv: item.g_serv || 100 };
+    FOOD_LIBRARY.push(newFood);
+    try { localStorage.setItem('river_food_lib', JSON.stringify(FOOD_LIBRARY)); } catch(e) {}
+  }
+  // Add to meal
+  addFoodItemGrams(item.name, item.g_serv || 100);
 }
 
 function addFoodItem(name) {
@@ -4770,6 +5134,23 @@ function addCustomFood(name) {
   document.body.appendChild(el);
   requestAnimationFrame(function(){ el.style.opacity='1'; });
 
+  // Pre-fill from photo data if available
+  if (_photoFoodData) {
+    var pfd = _photoFoodData;
+    _photoFoodData = null;
+    setTimeout(function() {
+      if (pfd.c100 !== undefined) { var c100el = document.getElementById('new-food-c100'); if (c100el) c100el.value = pfd.c100; }
+      if (pfd.gi)   { var giel  = document.getElementById('new-food-gi');   if (giel)  { giel.value = pfd.gi; var badge = document.getElementById('new-food-gi-badge'); if (badge) { badge.textContent = 'from label'; badge.style.color = 'rgba(62,200,140,0.7)'; } } }
+      if (pfd.g_serv) { var gsel = document.getElementById('new-food-g_serv'); if (gsel) gsel.value = pfd.g_serv; }
+      // Add photo banner
+      var banner = document.createElement('div');
+      banner.style.cssText = 'font-family:monospace;font-size:9px;color:rgba(62,200,140,0.7);letter-spacing:.5px;text-align:center;margin-bottom:12px;padding:6px 10px;border-radius:7px;background:rgba(62,180,120,0.08);border:1px solid rgba(62,180,120,0.2)';
+      banner.textContent = '📷 pre-filled from label — check and save';
+      wrap.insertBefore(banner, sub.nextSibling);
+      updateAddFoodPreview();
+    }, 50);
+  }
+
   // Init toggle state and run initial preview
   updateToggleState();
   setTimeout(function(){
@@ -4962,6 +5343,22 @@ function logMealEntry(carbsOnly) {
     u = inp ? (parseFloat(inp.value) || 0) : 0;
   }
 
+  // ── Input guardrails ──────────────────────────────────────────────
+  if (totalCarbs > 300) {
+    showToast('⚠️ ' + totalCarbs.toFixed(0) + 'g carbs is very high — check your entries');
+    window._logMealLock = false;
+    return;
+  }
+  if (u > 20) {
+    showToast('⚠️ ' + u.toFixed(1) + 'U insulin is very high — max 20U per entry');
+    window._logMealLock = false;
+    return;
+  }
+  if (u > 15) {
+    // Soft warning — allow proceed but show toast
+    showToast('⚠️ ' + u.toFixed(1) + 'U logged — double-check this dose');
+  }
+
   // Calculate avgGI first — used by suggestEatWait below
   var avgGI = _mealItems.length > 0
     ? _mealItems.reduce(function(s,i){return s+(i.food.gi||55)*i.carbs;},0) / Math.max(totalCarbs,1)
@@ -5087,6 +5484,8 @@ function commitManualBolus() {
   if (!el) return;
   var u = parseFloat(el.value) || 0;
   if (u <= 0) return;
+  if (u > 20) { showToast('⚠️ ' + u.toFixed(1) + 'U is very high — max 20U per entry'); return; }
+  if (u > 15) { showToast('⚠️ ' + u.toFixed(1) + 'U logged — double-check this dose'); }
   var t = typeof getEntryTime === 'function' ? getEntryTime() : Date.now();
   SESSION.push({t: t, c: 0, u: u});
   try { localStorage.setItem('river_session',JSON.stringify(SESSION)); } catch(e) {}
@@ -7227,6 +7626,7 @@ window.addEventListener('load', function() {
   setupOrbLongPress();
   // Unlock AudioContext on first user gesture (Chrome autoplay policy)
   function _unlockAudio() {
+    window._riverHasUserGesture = true;
     if (ALERTS._audioCtx && ALERTS._audioCtx.state === 'suspended') {
       ALERTS._audioCtx.resume();
     }
