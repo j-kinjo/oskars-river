@@ -4562,7 +4562,11 @@ async function _parseSpeechToFood(transcript) {
   if (searchEl) searchEl.value = '';
   showToast('Heard: "' + transcript.slice(0,60) + '"');
 
-  // Always route through Claude — ensures every food is a separate item
+  // Build known recipe/dish names for context
+  var knownDishes = RECIPES.map(function(r){ return r.name; }).join(', ') || 'none';
+  // Build a short food library hint (first 30 items)
+  var libraryHint = FOOD_DB.concat(FOOD_LIBRARY).slice(0,30).map(function(f){ return f.name; }).join(', ');
+
   _showFoodAIStatus('parsing meal\u2026');
   try {
     var proxyUrl = 'https://orange-surf-6f98.john-king-uk.workers.dev/?url=' +
@@ -4576,9 +4580,9 @@ async function _parseSpeechToFood(transcript) {
       },
       body: JSON.stringify({
         model: 'claude-sonnet-4-20250514',
-        max_tokens: 500,
-        system: 'You parse spoken meal descriptions into individual food items for a diabetes app. RULES: (1) Each food is a SEPARATE object — never combine multiple foods into one object. "porridge and a banana and a plum" = THREE objects. (2) Every object MUST have a non-empty "name" field — use the simplest common UK food name e.g. "plum" not "a plum" not "". (3) Estimate a typical child portion in grams if not stated. (4) Return ONLY a valid JSON array, no markdown, no text outside the array. Example: [{"name":"porridge","grams":180},{"name":"banana","grams":120},{"name":"plum","grams":80}]',
-        messages: [{ role: 'user', content: 'Parse into individual food items: "' + transcript + '"' }]
+        max_tokens: 700,
+        system: 'You parse garbled speech-to-text meal descriptions for a UK child\'s diabetes app. Speech recognition often mangles brand names and food words — correct them phonetically (e.g. "Lindell chocolate ball" = "Lindor chocolate ball", "benecault" = "Benecol", "wild from" = "wild farm"). RULES: (1) Each food/ingredient is a SEPARATE object — never combine. A sandwich = bread + filling items as separate objects. (2) Every object needs: "name" (clean UK food name, never empty), "grams" (typical child portion estimate), and optionally "dish" (if it\'s part of a dish/sandwich, set dish:"sandwich" or dish:"recipe name"). (3) If something sounds like a known dish [' + knownDishes + '] set type:"dish" and include its likely ingredients as separate objects with dish set to the recipe name. (4) Known foods for reference: ' + libraryHint + '. (5) Return ONLY a valid JSON array. Example for "cheese sandwich and a plum": [{"name":"bread","grams":60,"dish":"sandwich"},{"name":"cheddar cheese","grams":30,"dish":"sandwich"},{"name":"plum","grams":80}]',
+        messages: [{ role: 'user', content: 'Parse into individual food items, correcting any speech recognition errors: "' + transcript + '"' }]
       })
     });
     if (!r.ok) throw new Error('API ' + r.status);
@@ -4588,12 +4592,12 @@ async function _parseSpeechToFood(transcript) {
     var fb = clean.indexOf('['), lb = clean.lastIndexOf(']');
     if (fb < 0 || lb < 0) throw new Error('No JSON array');
     var items = JSON.parse(clean.slice(fb, lb+1));
-    // Sanitise: remove items with empty names, normalise
+    // Sanitise
     items = items.filter(function(it){ return it && it.name && String(it.name).trim().length > 0; });
     items = items.map(function(it){
       var n = String(it.name).trim().replace(/^(a |an |some )\s*/i, '');
       n = n.charAt(0).toUpperCase() + n.slice(1);
-      return { name: n, grams: Math.max(1, Math.round(Number(it.grams)||100)) };
+      return { name: n, grams: Math.max(1, Math.round(Number(it.grams)||100)), dish: it.dish||null };
     });
     _hideFoodAIStatus();
     if (!items.length) { showToast('Could not parse — try searching manually'); return; }
@@ -4609,39 +4613,48 @@ async function _parseSpeechToFood(transcript) {
 function _showVoiceResults(items, transcript) {
   var results = document.getElementById('food-results');
   if (!results) return;
-  var all = FOOD_DB.concat(FOOD_LIBRARY);
+  var all2 = FOOD_DB.concat(FOOD_LIBRARY);
 
-  var html = '<div style="padding:8px 12px 4px;font-family:\'DM Mono\',monospace;font-size:9px;color:rgba(62,200,140,0.7);letter-spacing:.8px;text-transform:uppercase">heard: ' + transcript.slice(0,50) + '</div>';
-
+  // Group items by dish
+  var dishes = {};   // dishName -> [items]
+  var standalone = [];
   items.forEach(function(item) {
-    if (!item || !item.name) return; // guard against malformed items
+    if (item.dish) {
+      if (!dishes[item.dish]) dishes[item.dish] = [];
+      dishes[item.dish].push(item);
+    } else {
+      standalone.push(item);
+    }
+  });
 
-    // Try to match to DB — check both directions
-    var matched = null;
-    var ql2 = item.name.toLowerCase();
-    var all2 = FOOD_DB.concat(FOOD_LIBRARY);
+  function matchFood(name) {
+    var ql = name.toLowerCase();
     for (var i = 0; i < all2.length; i++) {
       var fn = all2[i].name.toLowerCase();
-      if (fn.indexOf(ql2) >= 0 || ql2.indexOf(fn) >= 0) { matched = all2[i]; break; }
+      if (fn.indexOf(ql) >= 0 || ql.indexOf(fn) >= 0) return all2[i];
     }
+    return null;
+  }
 
-    var carbs    = matched ? Math.round(matched.c100 * item.grams / 100 * 10) / 10 : null;
-    var giCol2   = matched ? (matched.gi >= 70 ? 'rgba(200,80,40,0.7)' : matched.gi >= 55 ? 'rgba(190,130,30,0.7)' : 'rgba(50,150,80,0.7)') : 'rgba(130,150,180,0.5)';
-    // Safe name for onclick — encode to avoid quote issues
+  function itemRow(item, indent) {
+    if (!item || !item.name) return '';
+    var matched = matchFood(item.name);
+    var carbs   = matched ? Math.round(matched.c100 * item.grams / 100 * 10) / 10 : null;
+    var giCol   = matched ? (matched.gi >= 70 ? 'rgba(200,80,40,0.7)' : matched.gi >= 55 ? 'rgba(190,130,30,0.7)' : 'rgba(50,150,80,0.7)') : 'rgba(130,150,180,0.5)';
     var safeName = matched ? matched.name : item.name;
     var encName  = encodeURIComponent(safeName);
+    var pad      = indent ? 'padding:8px 14px 8px 28px' : 'padding:10px 14px';
 
     if (matched) {
-      html += '<div onclick="addFoodItemGrams(decodeURIComponent(\'' + encName + '\'),' + item.grams + ')" style="padding:10px 14px;cursor:pointer;border-bottom:1px solid rgba(255,255,255,0.07);display:flex;justify-content:space-between;align-items:center">' +
+      return '<div onclick="addFoodItemGrams(decodeURIComponent(\'' + encName + '\'),' + item.grams + ')" style="' + pad + ';cursor:pointer;border-bottom:1px solid rgba(255,255,255,0.06);display:flex;justify-content:space-between;align-items:center">' +
         '<div>' +
           '<div style="font-family:\'DM Mono\',monospace;font-size:12px;color:rgba(220,235,250,0.9)">' + item.name + '</div>' +
-          '<div style="font-family:\'DM Mono\',monospace;font-size:9px;color:rgba(62,200,140,0.65)">' + item.grams + 'g estimated · ' + carbs + 'g carbs</div>' +
+          '<div style="font-family:\'DM Mono\',monospace;font-size:9px;color:rgba(62,200,140,0.65)">' + item.grams + 'g · ' + carbs + 'g carbs</div>' +
         '</div>' +
-        '<div style="font-size:10px;color:' + giCol2 + ';font-family:\'DM Mono\',monospace">GI ' + (matched.gi || '—') + '</div>' +
+        '<div style="font-size:10px;color:' + giCol + ';font-family:\'DM Mono\',monospace">GI ' + (matched.gi || '—') + '</div>' +
       '</div>';
     } else {
-      // Not in DB — show as "add new" with name clearly visible and pre-filled
-      html += '<div onclick="addCustomFood(decodeURIComponent(\'' + encName + '\'))" style="padding:10px 14px;cursor:pointer;border-bottom:1px solid rgba(255,255,255,0.07);display:flex;justify-content:space-between;align-items:center">' +
+      return '<div onclick="addCustomFood(decodeURIComponent(\'' + encName + '\'))" style="' + pad + ';cursor:pointer;border-bottom:1px solid rgba(255,255,255,0.06);display:flex;justify-content:space-between;align-items:center">' +
         '<div>' +
           '<div style="font-family:\'DM Mono\',monospace;font-size:12px;color:rgba(200,210,240,0.8)">' + item.name + '</div>' +
           '<div style="font-family:\'DM Mono\',monospace;font-size:9px;color:rgba(130,160,220,0.55)">' + item.grams + 'g estimated · tap to add to library</div>' +
@@ -4649,18 +4662,43 @@ function _showVoiceResults(items, transcript) {
         '<div style="font-size:9px;color:rgba(100,130,200,0.7);font-family:\'DM Mono\',monospace;border:1px solid rgba(100,130,200,0.25);border-radius:5px;padding:2px 6px">+ new</div>' +
       '</div>';
     }
+  }
+
+  var html = '<div style="padding:8px 12px 6px;font-family:\'DM Mono\',monospace;font-size:9px;color:rgba(62,200,140,0.7);letter-spacing:.8px;text-transform:uppercase;border-bottom:1px solid rgba(255,255,255,0.07)">heard · tap to add</div>';
+
+  // Dish groups — collapsible header + indented items
+  Object.keys(dishes).forEach(function(dishName) {
+    var dishItems = dishes[dishName];
+    var dishId    = 'vd-' + dishName.replace(/\s+/g,'-').toLowerCase();
+    var dishCarbs = dishItems.reduce(function(s, it) {
+      var m = matchFood(it.name);
+      return s + (m ? Math.round(m.c100 * it.grams / 100 * 10) / 10 : 0);
+    }, 0);
+    var encDishItems = encodeURIComponent(JSON.stringify(dishItems));
+    // Dish header
+    html += '<div style="padding:8px 14px;background:rgba(255,255,255,0.04);border-bottom:1px solid rgba(255,255,255,0.07);display:flex;justify-content:space-between;align-items:center;cursor:pointer" onclick="var s=document.getElementById(\'' + dishId + '\');s.style.display=s.style.display===\'none\'?\'block\':\'none\'">' +
+      '<div>' +
+        '<div style="font-family:\'DM Mono\',monospace;font-size:11px;color:rgba(220,235,250,0.8)">◈ ' + dishName + '</div>' +
+        '<div style="font-family:\'DM Mono\',monospace;font-size:9px;color:rgba(180,200,220,0.5)">' + dishItems.length + ' ingredients · ~' + dishCarbs.toFixed(0) + 'g carbs</div>' +
+      '</div>' +
+      '<button onclick="event.stopPropagation();_addAllVoiceItems(JSON.parse(decodeURIComponent(\'' + encDishItems + '\')))" style="font-family:\'DM Mono\',monospace;font-size:9px;padding:4px 9px;border-radius:6px;border:1px solid rgba(62,180,120,0.3);background:rgba(62,180,120,0.1);color:rgba(62,200,140,0.85);cursor:pointer;touch-action:manipulation">add all</button>' +
+    '</div>';
+    // Dish ingredients (expanded by default)
+    html += '<div id="' + dishId + '" style="display:block">';
+    dishItems.forEach(function(item) { html += itemRow(item, true); });
+    html += '</div>';
   });
 
-  // Add a "add all matched" shortcut if multiple items matched
-  var matchedCount = items.filter(function(it) {
-    if (!it || !it.name) return false;
-    var ql3 = it.name.toLowerCase();
-    return FOOD_DB.concat(FOOD_LIBRARY).some(function(f){ return f.name.toLowerCase().indexOf(ql3)>=0 || ql3.indexOf(f.name.toLowerCase())>=0; });
-  }).length;
-  if (matchedCount > 1) {
-    html += '<div onclick="_addAllVoiceItems(' + JSON.stringify(items).replace(/"/g, '&quot;') + ')" style="padding:10px 14px;cursor:pointer;background:rgba(62,180,120,0.07);border-top:1px solid rgba(62,180,120,0.15);display:flex;justify-content:space-between;align-items:center">' +
+  // Standalone items
+  standalone.forEach(function(item) { html += itemRow(item, false); });
+
+  // "Add all matched" footer if multiple standalone matched items
+  var matchedStandalone = standalone.filter(function(it) { return it && it.name && matchFood(it.name); });
+  if (matchedStandalone.length > 1) {
+    var encAll = encodeURIComponent(JSON.stringify(matchedStandalone));
+    html += '<div onclick="_addAllVoiceItems(JSON.parse(decodeURIComponent(\'' + encAll + '\')))" style="padding:10px 14px;cursor:pointer;background:rgba(62,180,120,0.07);border-top:1px solid rgba(62,180,120,0.15);display:flex;justify-content:space-between;align-items:center">' +
       '<div style="font-family:\'DM Mono\',monospace;font-size:10px;color:rgba(62,200,140,0.85)">add all matched items</div>' +
-      '<div style="font-size:9px;color:rgba(62,180,120,0.6);font-family:\'DM Mono\',monospace">' + matchedCount + ' items</div>' +
+      '<div style="font-size:9px;color:rgba(62,180,120,0.6);font-family:\'DM Mono\',monospace">' + matchedStandalone.length + ' items</div>' +
     '</div>';
   }
 
@@ -6434,11 +6472,13 @@ function hypoQtyChanged(id, carbs_each, qty){
 function logHypoTreatment(id){
   var t=HYPO_TREATMENTS.find(function(x){return x.id===id;});
   if(!t) return;
-  // Read quantity and compute carbs
   var qtyInp=document.getElementById('hypo-qty-'+id);
   var qty=qtyInp?Math.max(1,parseFloat(qtyInp.value)||t.default_qty||1):(t.default_qty||1);
   var carbs_each=t.carbs_each||t.carbs;
   var carbs=Math.round(qty*carbs_each*10)/10;
+  // Guardrail — 60g is already a very heavy hypo treatment for a child
+  if(carbs>60){showToast('⚠️ '+carbs.toFixed(0)+'g is a very large hypo treatment — check quantity');return;}
+  if(carbs>30){showToast('⚠️ '+carbs.toFixed(0)+'g logged — confirm this is correct');}
   var now=getTimeVal('hypo-time');
   SESSION.push({t:now,c:carbs,u:0,note:'hypo:'+id});
   try{localStorage.setItem('river_session',JSON.stringify(SESSION));}catch(e){}
@@ -6483,6 +6523,8 @@ function closeCorrectionLog(){var el=document.getElementById('corr-overlay');if(
 function logCorrection(){
   var u=parseFloat(document.getElementById('corr-units').value)||0;
   if(u<=0){closeCorrectionLog();return;}
+  if(u>20){showToast('⚠️ '+u.toFixed(1)+'U is very high — max 20U per correction');return;}
+  if(u>10){showToast('⚠️ '+u.toFixed(1)+'U logged — double-check this dose');}
   var now=getTimeVal('corr-time');
   SESSION.push({t:now,c:0,u:u});
   try{localStorage.setItem('river_session',JSON.stringify(SESSION));}catch(e){}
