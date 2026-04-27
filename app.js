@@ -345,6 +345,104 @@ var RIVER_VISUAL_PREFS = (function() {
   try { return JSON.parse(localStorage.getItem('river_visual_prefs') || 'null') || {}; }
   catch(e) { return {}; }
 })();
+// Apply contrast tokens immediately on load
+(function(){ if(typeof applyUITokens==='function') applyUITokens(RIVER_VISUAL_PREFS.bgTint||'#060914'); })();
+
+
+// ── UI CONTRAST TOKENS — derived from background luminance ───────────
+// Called on startup and whenever visual prefs change.
+// Sets CSS custom properties on :root so all overlays inherit automatically.
+
+function _hexLuminance(hex) {
+  hex = (hex || '#060914').replace('#','');
+  if (hex.length === 3) hex = hex.split('').map(function(c){return c+c;}).join('');
+  var r = parseInt(hex.slice(0,2),16)/255;
+  var g = parseInt(hex.slice(2,4),16)/255;
+  var b = parseInt(hex.slice(4,6),16)/255;
+  // sRGB linearise
+  var lin = function(c){ return c<=0.04045 ? c/12.92 : Math.pow((c+0.055)/1.055,2.4); };
+  return 0.2126*lin(r) + 0.7152*lin(g) + 0.0722*lin(b);
+}
+
+function deriveUITokens(bgHex) {
+  var lum = _hexLuminance(bgHex || '#060914');
+  var dark = lum < 0.18;   // true for most night/dark themes
+  var mid  = lum >= 0.18 && lum < 0.5; // mid-tone — needs care
+
+  // Panel background — slightly lighter/darker than canvas bg
+  var panelBg, panelBorder, inputBg, inputBorder;
+  var textPrimary, textSecondary, textMuted, textDim;
+  var swatchBorder, divider, closeBtnCol;
+
+  if (dark) {
+    panelBg      = 'rgba(4,6,22,0.97)';
+    panelBorder  = 'rgba(255,255,255,0.07)';
+    inputBg      = 'rgba(255,255,255,0.05)';
+    inputBorder  = 'rgba(255,255,255,0.10)';
+    textPrimary  = 'rgba(200,220,240,0.88)';
+    textSecondary= 'rgba(180,200,220,0.65)';
+    textMuted    = 'rgba(160,180,200,0.38)';
+    textDim      = 'rgba(140,160,180,0.22)';
+    swatchBorder = 'rgba(255,255,255,0.14)';
+    divider      = 'rgba(255,255,255,0.06)';
+    closeBtnCol  = 'rgba(255,255,255,0.22)';
+  } else if (mid) {
+    // Mid-tone: use dark-on-light for text, slightly opaque panel
+    panelBg      = 'rgba(240,238,232,0.96)';
+    panelBorder  = 'rgba(0,0,0,0.10)';
+    inputBg      = 'rgba(0,0,0,0.06)';
+    inputBorder  = 'rgba(0,0,0,0.14)';
+    textPrimary  = 'rgba(20,24,32,0.90)';
+    textSecondary= 'rgba(30,34,44,0.65)';
+    textMuted    = 'rgba(40,44,54,0.42)';
+    textDim      = 'rgba(40,44,54,0.25)';
+    swatchBorder = 'rgba(0,0,0,0.18)';
+    divider      = 'rgba(0,0,0,0.08)';
+    closeBtnCol  = 'rgba(0,0,0,0.30)';
+  } else {
+    // Light bg: full dark-on-light
+    panelBg      = 'rgba(248,246,240,0.98)';
+    panelBorder  = 'rgba(0,0,0,0.08)';
+    inputBg      = 'rgba(0,0,0,0.05)';
+    inputBorder  = 'rgba(0,0,0,0.12)';
+    textPrimary  = 'rgba(16,20,30,0.92)';
+    textSecondary= 'rgba(24,28,40,0.68)';
+    textMuted    = 'rgba(32,36,50,0.44)';
+    textDim      = 'rgba(32,36,50,0.26)';
+    swatchBorder = 'rgba(0,0,0,0.16)';
+    divider      = 'rgba(0,0,0,0.07)';
+    closeBtnCol  = 'rgba(0,0,0,0.28)';
+  }
+
+  return {
+    lum, dark, mid,
+    panelBg, panelBorder, inputBg, inputBorder,
+    textPrimary, textSecondary, textMuted, textDim,
+    swatchBorder, divider, closeBtnCol,
+  };
+}
+
+// Returns the user's preferred label opacity (safety-floored at 0.15)
+function getLabelOpacity() {
+  var v = RIVER_VISUAL_PREFS.labelOpacity;
+  return (v !== undefined && v !== null) ? Math.max(0.15, v) : 0.7;
+}
+
+function applyUITokens(bgHex) {
+  var tk = deriveUITokens(bgHex);
+  var root = document.documentElement;
+  root.style.setProperty('--rv-panel-bg',       tk.panelBg);
+  root.style.setProperty('--rv-panel-border',    tk.panelBorder);
+  root.style.setProperty('--rv-input-bg',        tk.inputBg);
+  root.style.setProperty('--rv-input-border',    tk.inputBorder);
+  root.style.setProperty('--rv-text-primary',    tk.textPrimary);
+  root.style.setProperty('--rv-text-secondary',  tk.textSecondary);
+  root.style.setProperty('--rv-text-muted',      tk.textMuted);
+  root.style.setProperty('--rv-text-dim',        tk.textDim);
+  root.style.setProperty('--rv-swatch-border',   tk.swatchBorder);
+  root.style.setProperty('--rv-divider',         tk.divider);
+  root.style.setProperty('--rv-close-btn',       tk.closeBtnCol);
+}
 
 function saveVisualPrefs() {
   try { localStorage.setItem('river_visual_prefs', JSON.stringify(RIVER_VISUAL_PREFS)); }
@@ -2248,13 +2346,14 @@ function drawTimeLabels(pal) {
   if (el) {
     // When scrolled away from now, show the view time with day context
     var awayMs = HISTORY_RAW.length > 0 ? (HISTORY_RAW[HISTORY_RAW.length-1].t - viewTime) : 0;
+    var _lo = getLabelOpacity();
     if (awayMs > 5 * 60000) {
       // Scrolled: show day + time of the view position
       el.textContent = DNAMES[nd.getDay()] + ' ' +
         nd.getHours().toString().padStart(2,'0') + ':' +
         nd.getMinutes().toString().padStart(2,'0');
-      el.style.opacity = '0.75';
-      el.style.color   = 'rgba(180,210,240,0.7)';
+      el.style.opacity = String(Math.min(0.92, _lo));
+      el.style.color   = 'rgba(180,210,240,' + _lo + ')';
     } else {
       // At now: subtle, just show time
       var nowD = new Date();
@@ -2268,7 +2367,7 @@ function drawTimeLabels(pal) {
   const startT = xT(0), endT = xT(W);
   const firstT = Math.ceil(startT/tickMs)*tickMs;
 
-  CX.save(); CX.textAlign = 'center';
+  CX.save(); CX.globalAlpha = getLabelOpacity(); CX.textAlign = 'center';
   for (let t=firstT; t<=endT; t+=tickMs) {
     const x = tX(t);
     if (x < 20 || x > W-20) continue;
@@ -2810,11 +2909,13 @@ function updateHUD(d, pal) {
   var color = d.bg < BG_LOW  ? 'rgba(100,150,255,0.9)'  :
               d.bg > BG_HIGH ? 'rgba(255,160,80,0.9)'   :
               'rgba(' + pal.bgLine[0] + ',' + pal.bgLine[1] + ',' + pal.bgLine[2] + ',0.92)';
+  var _lo = getLabelOpacity();
   bgEl.innerHTML = d.bg.toFixed(1) +
-    '<span style="font-size:20px;opacity:0.45;margin-left:4px">' + arr + '</span>';
+    '<span style="font-size:20px;opacity:' + (0.45 * _lo) + ';margin-left:4px">' + arr + '</span>';
   bgEl.style.color = color;
+  bgEl.style.opacity = String(Math.min(1, _lo * 1.15));
 
-  document.getElementById('bg-unit').style.color = 'rgba(150,180,200,0.4)';
+  document.getElementById('bg-unit').style.color = 'rgba(150,180,200,' + (_lo * 0.45) + ')';
 
   // COB / IOB — colour + opacity scale with active values
   var mcEl = document.getElementById('mc-val');
@@ -3241,7 +3342,7 @@ function openPeopleInFlow() {
   if (ex) { ex.remove(); return; }
   var el = document.createElement('div');
   el.id = 'people-overlay';
-  el.style.cssText = 'position:fixed;inset:0;z-index:85;background:rgba(3,5,20,0.95);backdrop-filter:blur(16px);display:flex;flex-direction:column;align-items:center;justify-content:flex-start;padding:48px 24px 40px;overflow-y:auto;transition:opacity .2s;opacity:0;touch-action:pan-y';
+  el.style.cssText = 'position:fixed;inset:0;z-index:85;background:var(--rv-panel-bg);backdrop-filter:blur(16px);display:flex;flex-direction:column;align-items:center;justify-content:flex-start;padding:48px 24px 40px;overflow-y:auto;transition:opacity .2s;opacity:0;touch-action:pan-y';
   el.addEventListener('touchstart',function(e){e.stopPropagation();},{passive:true});
   renderPeopleScreen(el);
   document.body.appendChild(el);
@@ -3263,50 +3364,50 @@ function renderPeopleScreen(el) {
   var html = '<div style="max-width:380px;width:100%">';
   html += '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px">';
   html += '<div style="font-family:\'Fraunces\',serif;font-style:italic;font-weight:200;font-size:26px;color:rgba(180,220,200,0.9)">people in the flow</div>';
-  html += '<button onclick="closePeopleInFlow()" style="background:none;border:none;cursor:pointer;font-size:24px;color:rgba(255,255,255,0.25);padding:4px">×</button>';
+  html += '<button onclick="closePeopleInFlow()" style="background:none;border:none;cursor:pointer;font-size:24px;color:var(--rv-close-btn);padding:4px">×</button>';
   html += '</div>';
   html += '<div style="font-family:\'DM Mono\',monospace;font-size:9px;color:rgba(100,160,140,0.35);letter-spacing:1px;text-transform:uppercase;margin-bottom:28px">who\'s watching the river</div>';
 
   // This device
   var me = getThisPerson();
-  html += '<div style="font-family:\'DM Mono\',monospace;font-size:8px;letter-spacing:1px;text-transform:uppercase;color:rgba(255,255,255,0.2);margin-bottom:10px">this device</div>';
+  html += '<div style="font-family:\'DM Mono\',monospace;font-size:8px;letter-spacing:1px;text-transform:uppercase;color:var(--rv-text-dim);margin-bottom:10px">this device</div>';
   if (me) {
-    html += '<div style="display:flex;align-items:center;gap:12px;padding:14px 16px;border-radius:12px;background:rgba(255,255,255,0.05);border:1px solid rgba(255,255,255,0.1);margin-bottom:20px">';
+    html += '<div style="display:flex;align-items:center;gap:12px;padding:14px 16px;border-radius:12px;background:var(--rv-input-bg);border:1px solid var(--rv-panel-border);margin-bottom:20px">';
     html += '<div style="width:40px;height:40px;border-radius:50%;background:'+me.colour+';display:flex;align-items:center;justify-content:center;font-family:\'Fraunces\',serif;font-size:18px;color:#fff;font-weight:200">'+me.name.slice(0,1).toUpperCase()+'</div>';
-    html += '<div style="flex:1"><div style="font-family:\'Fraunces\',serif;font-weight:200;font-size:18px;color:rgba(255,255,255,0.9)">'+me.name+'</div>';
-    html += '<div style="font-family:\'DM Mono\',monospace;font-size:9px;color:rgba(255,255,255,0.3)">'+me.role+'</div></div>';
-    html += '<button onclick="clearThisDevice()" style="padding:6px 12px;border-radius:8px;border:1px solid rgba(255,255,255,0.1);background:transparent;font-family:\'DM Mono\',monospace;font-size:9px;color:rgba(255,255,255,0.25);cursor:pointer">change</button>';
+    html += '<div style="flex:1"><div style="font-family:\'Fraunces\',serif;font-weight:200;font-size:18px;color:var(--rv-text-primary)">'+me.name+'</div>';
+    html += '<div style="font-family:\'DM Mono\',monospace;font-size:9px;color:var(--rv-text-muted)">'+me.role+'</div></div>';
+    html += '<button onclick="clearThisDevice()" style="padding:6px 12px;border-radius:8px;border:1px solid var(--rv-panel-border);background:transparent;font-family:\'DM Mono\',monospace;font-size:9px;color:var(--rv-close-btn);cursor:pointer">change</button>';
     html += '</div>';
   } else {
-    html += '<div style="padding:14px 16px;border-radius:12px;background:rgba(255,255,255,0.03);border:1px dashed rgba(255,255,255,0.1);margin-bottom:20px;font-family:\'DM Mono\',monospace;font-size:11px;color:rgba(255,255,255,0.3)">not set — pick below</div>';
+    html += '<div style="padding:14px 16px;border-radius:12px;background:var(--rv-input-bg);border:1px dashed rgba(255,255,255,0.1);margin-bottom:20px;font-family:\'DM Mono\',monospace;font-size:11px;color:var(--rv-text-muted)">not set — pick below</div>';
   }
 
   // All people
-  html += '<div style="font-family:\'DM Mono\',monospace;font-size:8px;letter-spacing:1px;text-transform:uppercase;color:rgba(255,255,255,0.2);margin-bottom:10px">the team</div>';
+  html += '<div style="font-family:\'DM Mono\',monospace;font-size:8px;letter-spacing:1px;text-transform:uppercase;color:var(--rv-text-dim);margin-bottom:10px">the team</div>';
   html += '<div style="display:flex;flex-direction:column;gap:8px;margin-bottom:20px">';
 
   FLOW_PEOPLE.forEach(function(person) {
     var isMe = person.id === _thisPersonId;
     html += '<div style="display:flex;align-items:center;gap:12px;padding:12px 14px;border-radius:10px;background:'+(isMe?'rgba(62,180,120,0.1)':'rgba(255,255,255,0.03)')+';border:1px solid '+(isMe?'rgba(62,180,120,0.3)':'rgba(255,255,255,0.07)')+';">';
     html += '<div style="width:34px;height:34px;border-radius:50%;background:'+person.colour+';display:flex;align-items:center;justify-content:center;font-family:\'Fraunces\',serif;font-size:16px;color:#fff;font-weight:200;flex-shrink:0">'+person.name.slice(0,1).toUpperCase()+'</div>';
-    html += '<div style="flex:1"><div style="font-family:\'Fraunces\',serif;font-weight:200;font-size:16px;color:rgba(255,255,255,0.85)">'+person.name+'</div>';
-    html += '<div style="font-family:\'DM Mono\',monospace;font-size:9px;color:rgba(255,255,255,0.3)">'+person.role+'</div></div>';
+    html += '<div style="flex:1"><div style="font-family:\'Fraunces\',serif;font-weight:200;font-size:16px;color:var(--rv-text-primary)">'+person.name+'</div>';
+    html += '<div style="font-family:\'DM Mono\',monospace;font-size:9px;color:var(--rv-text-muted)">'+person.role+'</div></div>';
     if (!isMe) {
-      html += '<button onclick="setThisDeviceTo(\''+person.id+'\')" style="padding:6px 12px;border-radius:8px;border:1px solid rgba(255,255,255,0.12);background:transparent;font-family:\'DM Mono\',monospace;font-size:9px;color:rgba(255,255,255,0.4);cursor:pointer">this is me</button>';
+      html += '<button onclick="setThisDeviceTo(\''+person.id+'\')" style="padding:6px 12px;border-radius:8px;border:1px solid var(--rv-panel-border);background:transparent;font-family:\'DM Mono\',monospace;font-size:9px;color:var(--rv-text-muted);cursor:pointer">this is me</button>';
     } else {
       html += '<div style="font-family:\'DM Mono\',monospace;font-size:9px;color:rgba(62,180,120,0.7)">← you</div>';
     }
-    html += '<button onclick="removePerson(\''+person.id+'\')" style="padding:4px 8px;border-radius:6px;border:none;background:transparent;font-family:\'DM Mono\',monospace;font-size:11px;color:rgba(255,255,255,0.15);cursor:pointer">×</button>';
+    html += '<button onclick="removePerson(\''+person.id+'\')" style="padding:4px 8px;border-radius:6px;border:none;background:transparent;font-family:\'DM Mono\',monospace;font-size:11px;color:var(--rv-text-dim);cursor:pointer">×</button>';
     html += '</div>';
   });
   html += '</div>';
 
   // Add person form
-  html += '<div style="padding:16px;border-radius:12px;background:rgba(255,255,255,0.03);border:1px solid rgba(255,255,255,0.08)">';
-  html += '<div style="font-family:\'DM Mono\',monospace;font-size:8px;letter-spacing:1px;text-transform:uppercase;color:rgba(255,255,255,0.2);margin-bottom:12px">add someone</div>';
+  html += '<div style="padding:16px;border-radius:12px;background:var(--rv-input-bg);border:1px solid var(--rv-panel-border)">';
+  html += '<div style="font-family:\'DM Mono\',monospace;font-size:8px;letter-spacing:1px;text-transform:uppercase;color:var(--rv-text-dim);margin-bottom:12px">add someone</div>';
   html += '<div style="display:flex;gap:8px;margin-bottom:10px">';
-  html += '<input id="new-person-name" type="text" placeholder="name" autocorrect="off" style="flex:1;padding:10px 12px;border-radius:8px;border:1px solid rgba(255,255,255,0.12);background:rgba(255,255,255,0.06);font-family:\'DM Mono\',monospace;font-size:13px;color:rgba(255,255,255,0.8);outline:none">';
-  html += '<select id="new-person-role" style="padding:10px;border-radius:8px;border:1px solid rgba(255,255,255,0.12);background:rgba(255,255,255,0.06);font-family:\'DM Mono\',monospace;font-size:11px;color:rgba(255,255,255,0.6);outline:none">';
+  html += '<input id="new-person-name" type="text" placeholder="name" autocorrect="off" style="flex:1;padding:10px 12px;border-radius:8px;border:1px solid var(--rv-panel-border);background:var(--rv-input-bg);font-family:\'DM Mono\',monospace;font-size:13px;color:var(--rv-text-secondary);outline:none">';
+  html += '<select id="new-person-role" style="padding:10px;border-radius:8px;border:1px solid var(--rv-panel-border);background:var(--rv-input-bg);font-family:\'DM Mono\',monospace;font-size:11px;color:var(--rv-text-secondary);outline:none">';
   ['parent','carer','school TA','family','other'].forEach(function(r){
     html += '<option value="'+r+'">'+r+'</option>';
   });
@@ -3514,15 +3615,15 @@ function renderKitchen() {
     var col    = isCook?'rgba(180,160,60,0.8)':'rgba(62,180,120,0.8)';
     return '<div style="display:flex;align-items:center;gap:8px;padding:8px 0;border-bottom:1px solid rgba(255,255,255,0.05)">' +
       '<div style="flex:1">' +
-        '<div style="font-family:\'DM Mono\',monospace;font-size:11px;color:rgba(255,255,255,0.75)">'+item.name+'</div>' +
+        '<div style="font-family:\'DM Mono\',monospace;font-size:11px;color:var(--rv-text-secondary)">'+item.name+'</div>' +
         (isCook&&item.needsWeighing?'<div style="font-family:\'DM Mono\',monospace;font-size:9px;color:rgba(200,160,60,0.6)">⚖ weigh the portion</div>':'') +
       '</div>' +
       '<input type="number" value="'+item.grams+'" min="0" max="2000" step="1" ' +
         'onchange="updatePlateItemGrams('+idx+',this.value)" ' +
-        'style="width:58px;padding:6px;border-radius:7px;border:1px solid rgba(255,255,255,0.12);background:rgba(255,255,255,0.07);font-family:\'DM Mono\',monospace;font-size:12px;color:rgba(255,255,255,0.8);text-align:right;outline:none">'+
-      '<span style="font-family:\'DM Mono\',monospace;font-size:9px;color:rgba(255,255,255,0.3);width:12px">g</span>' +
+        'style="width:58px;padding:6px;border-radius:7px;border:1px solid var(--rv-panel-border);background:var(--rv-input-bg);font-family:\'DM Mono\',monospace;font-size:12px;color:var(--rv-text-secondary);text-align:right;outline:none">'+
+      '<span style="font-family:\'DM Mono\',monospace;font-size:9px;color:var(--rv-text-muted);width:12px">g</span>' +
       '<div style="min-width:36px;text-align:right;font-family:\'DM Mono\',monospace;font-size:12px;color:'+col+'">'+item.carbs.toFixed(1)+'g</div>' +
-      '<button onclick="removePlateItem('+idx+')" style="background:none;border:none;cursor:pointer;color:rgba(255,255,255,0.2);font-size:16px;padding:0 4px">×</button>' +
+      '<button onclick="removePlateItem('+idx+')" style="background:none;border:none;cursor:pointer;color:var(--rv-text-dim);font-size:16px;padding:0 4px">×</button>' +
     '</div>';
   }).join('');
 
@@ -3531,14 +3632,14 @@ function renderKitchen() {
     '<div style="position:relative;margin-bottom:10px">' +
       '<input id="plate-search" type="text" placeholder="add food to plate..." autocomplete="off" autocorrect="off" ' +
         'oninput="searchPlateFood(this.value)" ' +
-        'style="width:100%;padding:10px 12px;border-radius:10px;border:1px solid rgba(255,255,255,0.12);background:rgba(255,255,255,0.06);font-family:\'DM Mono\',monospace;font-size:13px;color:rgba(255,255,255,0.8);outline:none;box-sizing:border-box">' +
-      '<div id="plate-results" style="display:none;position:absolute;top:100%;left:0;right:0;z-index:50;background:rgba(15,20,35,0.99);border:1px solid rgba(255,255,255,0.1);border-radius:10px;max-height:180px;overflow-y:auto;margin-top:4px"></div>' +
+        'style="width:100%;padding:10px 12px;border-radius:10px;border:1px solid var(--rv-panel-border);background:var(--rv-input-bg);font-family:\'DM Mono\',monospace;font-size:13px;color:var(--rv-text-secondary);outline:none;box-sizing:border-box">' +
+      '<div id="plate-results" style="display:none;position:absolute;top:100%;left:0;right:0;z-index:50;background:rgba(15,20,35,0.99);border:1px solid var(--rv-panel-border);border-radius:10px;max-height:180px;overflow-y:auto;margin-top:4px"></div>' +
     '</div>';
 
   // Recipe chips
   var recipeChips = '';
   if (RECIPES.length > 0) {
-    recipeChips = '<div style="margin-bottom:12px"><div style="font-family:\'DM Mono\',monospace;font-size:8px;letter-spacing:1px;text-transform:uppercase;color:rgba(255,255,255,0.2);margin-bottom:6px">saved recipes</div>' +
+    recipeChips = '<div style="margin-bottom:12px"><div style="font-family:\'DM Mono\',monospace;font-size:8px;letter-spacing:1px;text-transform:uppercase;color:var(--rv-text-dim);margin-bottom:6px">saved recipes</div>' +
       '<div style="display:flex;flex-wrap:wrap;gap:6px">' +
       RECIPES.map(function(r){
         var ratio = getLatestRatio(r);
@@ -3563,26 +3664,26 @@ function renderKitchen() {
         '</div>';
     } else {
       bolusHTML =
-        '<div style="padding:14px;border-radius:12px;background:rgba(40,50,80,0.4);border:1px solid rgba(255,255,255,0.08);margin-bottom:12px">' +
+        '<div style="padding:14px;border-radius:12px;background:rgba(40,50,80,0.4);border:1px solid var(--rv-panel-border);margin-bottom:12px">' +
           // Carb total prominent
           '<div style="text-align:center;margin-bottom:12px">' +
             '<div style="font-family:\'Fraunces\',serif;font-weight:200;font-size:48px;color:rgba(255,160,60,0.95);letter-spacing:-2px;line-height:1">' + total.toFixed(0) + '</div>' +
             '<div style="font-family:\'DM Mono\',monospace;font-size:8px;letter-spacing:1.5px;text-transform:uppercase;color:rgba(255,160,70,0.7)">grams carbs · GI ' + avgGI.toFixed(0) + '</div>' +
           '</div>' +
           // Wait time
-          '<div style="display:flex;align-items:center;gap:8px;margin-bottom:12px;padding:8px 10px;border-radius:8px;background:rgba(255,255,255,0.04)">' +
+          '<div style="display:flex;align-items:center;gap:8px;margin-bottom:12px;padding:8px 10px;border-radius:8px;background:var(--rv-input-bg)">' +
             '<div style="flex:1;font-family:\'Fraunces\',serif;font-style:italic;font-weight:200;font-size:13px;color:rgba(255,255,255,0.5)">bolus now → eat ~' + eatStr + ' (+' + eatWait + 'min)</div>' +
-            '<button onclick="setWait(-5)" style="width:28px;height:28px;border-radius:7px;border:1px solid rgba(255,255,255,0.12);background:rgba(255,255,255,0.06);color:rgba(255,255,255,0.6);font-size:16px;cursor:pointer">−</button>' +
-            '<input id="wait-mins" type="number" value="'+eatWait+'" min="0" max="60" step="5" onchange="setWaitDirect(this.value)" style="width:40px;text-align:center;padding:4px;border-radius:6px;border:1px solid rgba(255,255,255,0.1);background:rgba(255,255,255,0.06);font-family:\'DM Mono\',monospace;font-size:12px;color:rgba(255,255,255,0.7);outline:none">' +
-            '<button onclick="setWait(5)" style="width:28px;height:28px;border-radius:7px;border:1px solid rgba(255,255,255,0.12);background:rgba(255,255,255,0.06);color:rgba(255,255,255,0.6);font-size:16px;cursor:pointer">+</button>' +
+            '<button onclick="setWait(-5)" style="width:28px;height:28px;border-radius:7px;border:1px solid var(--rv-panel-border);background:var(--rv-input-bg);color:var(--rv-text-secondary);font-size:16px;cursor:pointer">−</button>' +
+            '<input id="wait-mins" type="number" value="'+eatWait+'" min="0" max="60" step="5" onchange="setWaitDirect(this.value)" style="width:40px;text-align:center;padding:4px;border-radius:6px;border:1px solid var(--rv-panel-border);background:var(--rv-input-bg);font-family:\'DM Mono\',monospace;font-size:12px;color:var(--rv-text-secondary);outline:none">' +
+            '<button onclick="setWait(5)" style="width:28px;height:28px;border-radius:7px;border:1px solid var(--rv-panel-border);background:var(--rv-input-bg);color:var(--rv-text-secondary);font-size:16px;cursor:pointer">+</button>' +
           '</div>' +
           // Bolus input
           '<div style="display:flex;align-items:center;gap:10px;margin-bottom:10px">' +
             '<input id="plate-bolus" type="number" inputmode="decimal" placeholder="'+bolus.total.toFixed(1)+'" step="0.5" min="0" max="20" ' +
               'style="flex:1;padding:12px;border-radius:9px;border:1px solid rgba(60,130,220,0.25);background:rgba(60,130,220,0.07);font-family:\'Fraunces\',serif;font-size:24px;color:rgba(100,160,255,0.9);text-align:center;outline:none">' +
-            '<span style="font-family:\'DM Mono\',monospace;font-size:13px;color:rgba(255,255,255,0.3)">U</span>' +
+            '<span style="font-family:\'DM Mono\',monospace;font-size:13px;color:var(--rv-text-muted)">U</span>' +
           '</div>' +
-          '<div style="font-family:\'DM Mono\',monospace;font-size:9px;color:rgba(255,255,255,0.2);text-align:center;margin-bottom:10px">' +
+          '<div style="font-family:\'DM Mono\',monospace;font-size:9px;color:var(--rv-text-dim);text-align:center;margin-bottom:10px">' +
             'context: '+bolus.carbDose.toFixed(1)+'U carbs + '+bolus.corrDose.toFixed(1)+'U corr · ISF 1:'+bolus.isf+'</div>' +
           '<button onclick="bolusNow()" style="width:100%;padding:13px;border-radius:10px;border:1px solid rgba(60,130,220,0.3);background:rgba(60,130,220,0.1);font-family:\'Fraunces\',serif;font-style:italic;font-weight:200;font-size:17px;color:rgba(100,160,255,0.9);cursor:pointer">bolus now · keep cooking</button>' +
         '</div>';
@@ -3602,7 +3703,7 @@ function renderKitchen() {
   if (_sheetMode === 'kitchen') {
     var whisper = buildKitchenWhisper(avgGI, totalCarbs);
     var _kDiv = document.createElement('div');
-    _kDiv.style.cssText = 'display:flex;align-items:center;gap:10px;padding:8px 14px;border-radius:10px;background:rgba(255,255,255,0.05);border:1px solid rgba(255,255,255,0.08);margin-bottom:14px';
+    _kDiv.style.cssText = 'display:flex;align-items:center;gap:10px;padding:8px 14px;border-radius:10px;background:var(--rv-input-bg);border:1px solid var(--rv-panel-border);margin-bottom:14px';
     var _kBG = document.createElement('div');
     _kBG.style.fontSize = '24px';
     _kBG.style.color = bg<3.9 ? 'rgba(100,140,255,0.95)' : bg>10 ? 'rgba(255,120,40,0.95)' : 'rgba(62,200,140,0.95)';
@@ -3624,7 +3725,7 @@ function renderKitchen() {
   // Assemble close button
   var closeBtn = '<button onclick="closeSheet()" style="position:absolute;top:14px;right:16px;' +
     'background:none;border:none;cursor:pointer;font-size:20px;' +
-    'color:rgba(255,255,255,0.3);padding:4px 8px;line-height:1;touch-action:manipulation">×</button>';
+    'color:var(--rv-text-muted);padding:4px 8px;line-height:1;touch-action:manipulation">×</button>';
 
   sheet.innerHTML =
     '<div style="position:relative;padding:20px 18px 24px;">' +
@@ -3645,7 +3746,7 @@ function searchPlateFood(q) {
   results.style.display='block';
   results.innerHTML = matches.map(function(f){
     return '<div onclick="addPlateFood(\''+f.name.replace(/'/g,"\\'")+'\')" style="padding:10px 14px;cursor:pointer;border-bottom:1px solid rgba(255,255,255,0.05);display:flex;justify-content:space-between;align-items:center">' +
-      '<div style="font-family:\'DM Mono\',monospace;font-size:12px;color:rgba(255,255,255,0.75)">'+f.name+'</div>' +
+      '<div style="font-family:\'DM Mono\',monospace;font-size:12px;color:var(--rv-text-secondary)">'+f.name+'</div>' +
       '<div style="font-family:\'DM Mono\',monospace;font-size:10px;color:rgba(62,180,120,0.6)">'+f.c100+'g/100g</div>' +
     '</div>';
   }).join('');
@@ -3736,7 +3837,7 @@ function openRecipeManager() {
   if(ex){ex.remove();return;}
   var el=document.createElement('div');
   el.id='recipe-overlay';
-  el.style.cssText='position:fixed;inset:0;z-index:90;background:rgba(3,5,20,0.96);overflow-y:auto;transition:opacity .2s;opacity:0;touch-action:pan-y;-webkit-overflow-scrolling:touch';
+  el.style.cssText='position:fixed;inset:0;z-index:90;background:var(--rv-panel-bg);overflow-y:auto;transition:opacity .2s;opacity:0;touch-action:pan-y;-webkit-overflow-scrolling:touch';
   el.addEventListener('touchstart',function(e){e.stopPropagation();},{passive:true});
   renderRecipeManager(el);
   document.body.appendChild(el);
@@ -3756,22 +3857,22 @@ function renderRecipeManager(el) {
   html+='<div style="font-family:\'Fraunces\',serif;font-style:italic;font-weight:200;font-size:24px;color:rgba(200,180,80,0.9)">recipes</div>';
   html+='<div style="display:flex;gap:8px">';
   html+='<button onclick="startNewRecipe()" style="padding:8px 14px;border-radius:9px;border:1px solid rgba(200,180,60,0.3);background:rgba(200,180,60,0.07);font-family:\'DM Mono\',monospace;font-size:10px;color:rgba(200,180,70,0.8);cursor:pointer">+ new recipe</button>';
-  html+='<button onclick="closeRecipeManager()" style="padding:8px 12px;border-radius:9px;border:1px solid rgba(255,255,255,0.1);background:transparent;font-family:\'DM Mono\',monospace;font-size:10px;color:rgba(255,255,255,0.3);cursor:pointer">close</button>';
+  html+='<button onclick="closeRecipeManager()" style="padding:8px 12px;border-radius:9px;border:1px solid var(--rv-panel-border);background:transparent;font-family:\'DM Mono\',monospace;font-size:10px;color:var(--rv-text-muted);cursor:pointer">close</button>';
   html+='</div></div>';
 
   if(RECIPES.length===0){
-    html+='<div style="font-family:\'DM Mono\',monospace;font-size:11px;color:rgba(255,255,255,0.25);text-align:center;padding:40px 0">no recipes yet<br><span style="opacity:0.5">add Kaarina\'s specials here</span></div>';
+    html+='<div style="font-family:\'DM Mono\',monospace;font-size:11px;color:var(--rv-close-btn);text-align:center;padding:40px 0">no recipes yet<br><span style="opacity:0.5">add Kaarina\'s specials here</span></div>';
   } else {
     RECIPES.forEach(function(r){
       var ratio=getLatestRatio(r);
       var instances=r.instances||[];
-      html+='<div style="padding:16px;border-radius:12px;background:rgba(255,255,255,0.03);border:1px solid rgba(200,180,60,0.15);margin-bottom:12px">';
+      html+='<div style="padding:16px;border-radius:12px;background:var(--rv-input-bg);border:1px solid rgba(200,180,60,0.15);margin-bottom:12px">';
       html+='<div style="display:flex;align-items:flex-start;justify-content:space-between;margin-bottom:8px">';
       html+='<div><div style="font-family:\'Fraunces\',serif;font-weight:200;font-size:18px;color:rgba(220,200,80,0.9)">'+r.name+'</div>';
-      html+='<div style="font-family:\'DM Mono\',monospace;font-size:9px;color:rgba(255,255,255,0.25)">'+r.ingredients.length+' ingredients · '+instances.length+' cook'+(instances.length!==1?'s':'')+'</div></div>';
+      html+='<div style="font-family:\'DM Mono\',monospace;font-size:9px;color:var(--rv-close-btn)">'+r.ingredients.length+' ingredients · '+instances.length+' cook'+(instances.length!==1?'s':'')+'</div></div>';
       html+='<div style="display:flex;gap:6px">';
       html+='<button onclick="cookRecipe(\''+r.id+'\')" style="padding:6px 12px;border-radius:8px;border:1px solid rgba(200,180,60,0.3);background:rgba(200,180,60,0.08);font-family:\'DM Mono\',monospace;font-size:9px;color:rgba(200,180,70,0.8);cursor:pointer">cook now</button>';
-      html+='<button onclick="editRecipe(\''+r.id+'\')" style="padding:6px 10px;border-radius:8px;border:1px solid rgba(255,255,255,0.1);background:transparent;font-family:\'DM Mono\',monospace;font-size:9px;color:rgba(255,255,255,0.3);cursor:pointer">edit</button>';
+      html+='<button onclick="editRecipe(\''+r.id+'\')" style="padding:6px 10px;border-radius:8px;border:1px solid var(--rv-panel-border);background:transparent;font-family:\'DM Mono\',monospace;font-size:9px;color:var(--rv-text-muted);cursor:pointer">edit</button>';
       html+='</div></div>';
       if(ratio){
         html+='<div style="font-family:\'DM Mono\',monospace;font-size:10px;color:rgba(200,180,70,0.6)">'+ratio.toFixed(3)+'g carbs/g · last cook '+(instances.length>0?new Date(instances[instances.length-1].date).toLocaleDateString('en-GB',{day:'numeric',month:'short'}):'')+'</div>';
@@ -3780,7 +3881,7 @@ function renderRecipeManager(el) {
       if(instances.length>0){
         html+='<div style="margin-top:8px;display:flex;flex-wrap:wrap;gap:4px">';
         instances.slice(-3).reverse().forEach(function(inst){
-          html+='<div style="font-family:\'DM Mono\',monospace;font-size:8px;color:rgba(255,255,255,0.2);padding:3px 7px;border-radius:5px;background:rgba(255,255,255,0.04)">'+
+          html+='<div style="font-family:\'DM Mono\',monospace;font-size:8px;color:var(--rv-text-dim);padding:3px 7px;border-radius:5px;background:var(--rv-input-bg)">'+
             new Date(inst.date).toLocaleDateString('en-GB',{day:'numeric',month:'short'})+' · '+inst.ratio.toFixed(3)+'g/g</div>';
         });
         html+='</div>';
@@ -3809,31 +3910,31 @@ function showRecipeForm(recipe) {
 
   var html='<div style="max-width:480px;margin:0 auto;padding:48px 20px 60px">';
   html+='<div style="display:flex;align-items:center;gap:12px;margin-bottom:24px">';
-  html+='<button onclick="renderRecipeManager()" style="background:none;border:none;cursor:pointer;font-family:\'DM Mono\',monospace;font-size:10px;color:rgba(255,255,255,0.3);padding:4px">← back</button>';
+  html+='<button onclick="renderRecipeManager()" style="background:none;border:none;cursor:pointer;font-family:\'DM Mono\',monospace;font-size:10px;color:var(--rv-text-muted);padding:4px">← back</button>';
   html+='<div style="font-family:\'Fraunces\',serif;font-style:italic;font-weight:200;font-size:22px;color:rgba(200,180,80,0.9)">'+(isNew?'new recipe':'edit recipe')+'</div>';
   html+='</div>';
 
-  html+='<div style="margin-bottom:14px"><div style="font-family:\'DM Mono\',monospace;font-size:8px;letter-spacing:1px;text-transform:uppercase;color:rgba(255,255,255,0.3);margin-bottom:5px">recipe name</div>';
-  html+='<input id="recipe-name" type="text" value="'+(recipe?recipe.name:'')+'" placeholder="e.g. Kaarina\'s Macaroni Laatikko" autocorrect="off" style="width:100%;padding:11px 14px;border-radius:9px;border:1px solid rgba(200,180,60,0.2);background:rgba(200,180,60,0.05);font-family:\'DM Mono\',monospace;font-size:13px;color:rgba(255,255,255,0.8);outline:none;box-sizing:border-box"></div>';
+  html+='<div style="margin-bottom:14px"><div style="font-family:\'DM Mono\',monospace;font-size:8px;letter-spacing:1px;text-transform:uppercase;color:var(--rv-text-muted);margin-bottom:5px">recipe name</div>';
+  html+='<input id="recipe-name" type="text" value="'+(recipe?recipe.name:'')+'" placeholder="e.g. Kaarina\'s Macaroni Laatikko" autocorrect="off" style="width:100%;padding:11px 14px;border-radius:9px;border:1px solid rgba(200,180,60,0.2);background:rgba(200,180,60,0.05);font-family:\'DM Mono\',monospace;font-size:13px;color:var(--rv-text-secondary);outline:none;box-sizing:border-box"></div>';
 
-  html+='<div style="margin-bottom:14px"><div style="font-family:\'DM Mono\',monospace;font-size:8px;letter-spacing:1px;text-transform:uppercase;color:rgba(255,255,255,0.3);margin-bottom:6px">carb ingredients <span style="opacity:0.5">(skip zero-carb items like meat, eggs)</span></div>';
+  html+='<div style="margin-bottom:14px"><div style="font-family:\'DM Mono\',monospace;font-size:8px;letter-spacing:1px;text-transform:uppercase;color:var(--rv-text-muted);margin-bottom:6px">carb ingredients <span style="opacity:0.5">(skip zero-carb items like meat, eggs)</span></div>';
   html+='<div id="recipe-ings">';
   ings.forEach(function(ing,i){
     html+=recipeIngRow(i,ing.name,ing.c100,ing.gi);
   });
   html+='</div>';
   html+='<div style="position:relative;margin-top:8px">';
-  html+='<input id="recipe-ing-search" type="text" placeholder="search to add ingredient..." autocomplete="off" autocorrect="off" oninput="searchRecipeIng(this.value)" style="width:100%;padding:9px 12px;border-radius:9px;border:1px solid rgba(255,255,255,0.1);background:rgba(255,255,255,0.05);font-family:\'DM Mono\',monospace;font-size:12px;color:rgba(255,255,255,0.7);outline:none;box-sizing:border-box">';
-  html+='<div id="recipe-ing-results" style="display:none;position:absolute;top:100%;left:0;right:0;z-index:50;background:rgba(15,20,35,0.99);border:1px solid rgba(255,255,255,0.1);border-radius:9px;max-height:160px;overflow-y:auto;margin-top:4px"></div>';
+  html+='<input id="recipe-ing-search" type="text" placeholder="search to add ingredient..." autocomplete="off" autocorrect="off" oninput="searchRecipeIng(this.value)" style="width:100%;padding:9px 12px;border-radius:9px;border:1px solid var(--rv-panel-border);background:var(--rv-input-bg);font-family:\'DM Mono\',monospace;font-size:12px;color:var(--rv-text-secondary);outline:none;box-sizing:border-box">';
+  html+='<div id="recipe-ing-results" style="display:none;position:absolute;top:100%;left:0;right:0;z-index:50;background:rgba(15,20,35,0.99);border:1px solid var(--rv-panel-border);border-radius:9px;max-height:160px;overflow-y:auto;margin-top:4px"></div>';
   html+='</div></div>';
 
-  html+='<div style="font-family:\'DM Mono\',monospace;font-size:9px;color:rgba(255,255,255,0.25);margin-bottom:16px;line-height:1.7">';
+  html+='<div style="font-family:\'DM Mono\',monospace;font-size:9px;color:var(--rv-close-btn);margin-bottom:16px;line-height:1.7">';
   html+='When you cook, you\'ll enter the actual weight of each ingredient. The app calculates total carbs, you weigh the finished dish, and it works out the ratio (g carbs per g of dish).</div>';
 
   html+='<div style="display:flex;gap:8px">';
   html+='<button onclick="saveRecipeForm(\''+encodeURIComponent(recipe?recipe.id:'')+'\','+isNew+')" style="flex:1;padding:12px;border-radius:10px;border:1px solid rgba(200,180,60,0.3);background:rgba(200,180,60,0.08);font-family:\'Fraunces\',serif;font-style:italic;font-weight:200;font-size:16px;color:rgba(220,200,80,0.9);cursor:pointer">save recipe</button>';
   if(!isNew) html+='<button onclick="deleteRecipe(\''+recipe.id+'\')" style="padding:12px 16px;border-radius:10px;border:1px solid rgba(200,60,60,0.2);background:transparent;font-family:\'DM Mono\',monospace;font-size:10px;color:rgba(200,80,80,0.5);cursor:pointer">delete</button>';
-  html+='<button onclick="renderRecipeManager()" style="padding:12px 14px;border-radius:10px;border:1px solid rgba(255,255,255,0.08);background:transparent;font-family:\'DM Mono\',monospace;font-size:10px;color:rgba(255,255,255,0.25);cursor:pointer">cancel</button>';
+  html+='<button onclick="renderRecipeManager()" style="padding:12px 14px;border-radius:10px;border:1px solid var(--rv-panel-border);background:transparent;font-family:\'DM Mono\',monospace;font-size:10px;color:var(--rv-close-btn);cursor:pointer">cancel</button>';
   html+='</div></div>';
 
   el.innerHTML=html;
@@ -3842,9 +3943,9 @@ function showRecipeForm(recipe) {
 
 function recipeIngRow(i, name, c100, gi) {
   return '<div id="ring-'+i+'" style="display:flex;align-items:center;gap:8px;padding:7px 0;border-bottom:1px solid rgba(255,255,255,0.05)">' +
-    '<div style="flex:1;font-family:\'DM Mono\',monospace;font-size:11px;color:rgba(255,255,255,0.7)">'+name+'</div>' +
+    '<div style="flex:1;font-family:\'DM Mono\',monospace;font-size:11px;color:var(--rv-text-secondary)">'+name+'</div>' +
     '<div style="font-family:\'DM Mono\',monospace;font-size:10px;color:rgba(62,180,120,0.6)">'+c100+'g/100g</div>' +
-    '<button onclick="removeRecipeIng('+i+')" style="background:none;border:none;cursor:pointer;color:rgba(255,255,255,0.2);font-size:15px;padding:0 4px">×</button>' +
+    '<button onclick="removeRecipeIng('+i+')" style="background:none;border:none;cursor:pointer;color:var(--rv-text-dim);font-size:15px;padding:0 4px">×</button>' +
   '</div>';
 }
 
@@ -3857,7 +3958,7 @@ function searchRecipeIng(q) {
   res.style.display='block';
   res.innerHTML=matches.map(function(f){
     return '<div onclick="addRecipeIng(\''+f.name.replace(/'/g,"\\'")+'\','+f.c100+','+(f.gi||55)+')" style="padding:9px 12px;cursor:pointer;border-bottom:1px solid rgba(255,255,255,0.05);display:flex;justify-content:space-between">' +
-      '<div style="font-family:\'DM Mono\',monospace;font-size:11px;color:rgba(255,255,255,0.7)">'+f.name+'</div>' +
+      '<div style="font-family:\'DM Mono\',monospace;font-size:11px;color:var(--rv-text-secondary)">'+f.name+'</div>' +
       '<div style="font-family:\'DM Mono\',monospace;font-size:10px;color:rgba(62,180,120,0.5)">'+f.c100+'g/100g</div>' +
     '</div>';
   }).join('');
@@ -3917,35 +4018,35 @@ function cookRecipe(id) {
 
   var html='<div style="max-width:480px;margin:0 auto;padding:48px 20px 60px">';
   html+='<div style="display:flex;align-items:center;gap:12px;margin-bottom:6px">';
-  html+='<button onclick="renderRecipeManager()" style="background:none;border:none;cursor:pointer;font-family:\'DM Mono\',monospace;font-size:10px;color:rgba(255,255,255,0.3);padding:4px">← back</button>';
+  html+='<button onclick="renderRecipeManager()" style="background:none;border:none;cursor:pointer;font-family:\'DM Mono\',monospace;font-size:10px;color:var(--rv-text-muted);padding:4px">← back</button>';
   html+='<div style="font-family:\'Fraunces\',serif;font-style:italic;font-weight:200;font-size:22px;color:rgba(200,180,80,0.9)">'+recipe.name+'</div>';
   html+='</div>';
-  html+='<div style="font-family:\'DM Mono\',monospace;font-size:9px;color:rgba(255,255,255,0.25);margin-bottom:24px">weigh each ingredient as you add it</div>';
+  html+='<div style="font-family:\'DM Mono\',monospace;font-size:9px;color:var(--rv-close-btn);margin-bottom:24px">weigh each ingredient as you add it</div>';
 
   // Ingredient weight inputs
   html+='<div style="margin-bottom:16px">';
   recipe.ingredients.forEach(function(ing,i){
     html+='<div style="display:flex;align-items:center;gap:10px;padding:10px 0;border-bottom:1px solid rgba(255,255,255,0.05)">';
-    html+='<div style="flex:1;font-family:\'DM Mono\',monospace;font-size:12px;color:rgba(255,255,255,0.75)">'+ing.name+'<span style="opacity:0.4;margin-left:6px;font-size:9px">'+ing.c100+'g/100g</span></div>';
+    html+='<div style="flex:1;font-family:\'DM Mono\',monospace;font-size:12px;color:var(--rv-text-secondary)">'+ing.name+'<span style="opacity:0.4;margin-left:6px;font-size:9px">'+ing.c100+'g/100g</span></div>';
     html+='<input id="cook-ing-'+i+'" type="number" inputmode="decimal" placeholder="grams" min="0" max="2000" step="1" oninput="updateCookPreview(\''+recipe.id+'\')" style="width:70px;padding:8px;border-radius:8px;border:1px solid rgba(200,180,60,0.2);background:rgba(200,180,60,0.05);font-family:\'DM Mono\',monospace;font-size:13px;color:rgba(220,200,80,0.9);text-align:right;outline:none">';
-    html+='<span style="font-family:\'DM Mono\',monospace;font-size:9px;color:rgba(255,255,255,0.25)">g</span>';
+    html+='<span style="font-family:\'DM Mono\',monospace;font-size:9px;color:var(--rv-close-btn)">g</span>';
     html+='</div>';
   });
   html+='</div>';
 
   // Totals preview
-  html+='<div id="cook-preview" style="padding:12px;border-radius:10px;background:rgba(255,255,255,0.03);border:1px solid rgba(255,255,255,0.07);margin-bottom:14px;font-family:\'DM Mono\',monospace;font-size:10px;color:rgba(255,255,255,0.35)">enter weights above to see carb total</div>';
+  html+='<div id="cook-preview" style="padding:12px;border-radius:10px;background:var(--rv-input-bg);border:1px solid var(--rv-panel-border);margin-bottom:14px;font-family:\'DM Mono\',monospace;font-size:10px;color:var(--rv-text-muted)">enter weights above to see carb total</div>';
 
   // Batch weight
-  html+='<div style="margin-bottom:16px"><div style="font-family:\'DM Mono\',monospace;font-size:8px;letter-spacing:1px;text-transform:uppercase;color:rgba(255,255,255,0.3);margin-bottom:6px">finished dish weight (g)</div>';
-  html+='<input id="cook-batch-weight" type="number" inputmode="decimal" placeholder="weigh the whole dish" min="0" max="10000" step="1" oninput="updateCookPreview(\''+recipe.id+'\')" style="width:100%;padding:11px 14px;border-radius:9px;border:1px solid rgba(255,255,255,0.12);background:rgba(255,255,255,0.05);font-family:\'DM Mono\',monospace;font-size:16px;color:rgba(255,255,255,0.8);outline:none;box-sizing:border-box">';
+  html+='<div style="margin-bottom:16px"><div style="font-family:\'DM Mono\',monospace;font-size:8px;letter-spacing:1px;text-transform:uppercase;color:var(--rv-text-muted);margin-bottom:6px">finished dish weight (g)</div>';
+  html+='<input id="cook-batch-weight" type="number" inputmode="decimal" placeholder="weigh the whole dish" min="0" max="10000" step="1" oninput="updateCookPreview(\''+recipe.id+'\')" style="width:100%;padding:11px 14px;border-radius:9px;border:1px solid var(--rv-panel-border);background:var(--rv-input-bg);font-family:\'DM Mono\',monospace;font-size:16px;color:var(--rv-text-secondary);outline:none;box-sizing:border-box">';
   html+='</div>';
 
   html+='<div id="cook-ratio-preview" style="font-family:\'DM Mono\',monospace;font-size:11px;color:rgba(200,180,70,0.7);margin-bottom:16px;min-height:16px"></div>';
 
   html+='<div style="display:flex;gap:8px">';
   html+='<button onclick="saveCookInstance(\''+recipe.id+'\')" style="flex:1;padding:12px;border-radius:10px;border:1px solid rgba(200,180,60,0.3);background:rgba(200,180,60,0.08);font-family:\'Fraunces\',serif;font-style:italic;font-weight:200;font-size:16px;color:rgba(220,200,80,0.9);cursor:pointer">save this cook</button>';
-  html+='<button onclick="renderRecipeManager()" style="padding:12px 14px;border-radius:10px;border:1px solid rgba(255,255,255,0.08);background:transparent;font-family:\'DM Mono\',monospace;font-size:10px;color:rgba(255,255,255,0.25);cursor:pointer">cancel</button>';
+  html+='<button onclick="renderRecipeManager()" style="padding:12px 14px;border-radius:10px;border:1px solid var(--rv-panel-border);background:transparent;font-family:\'DM Mono\',monospace;font-size:10px;color:var(--rv-close-btn);cursor:pointer">cancel</button>';
   html+='</div></div>';
 
   el.innerHTML=html;
@@ -4068,8 +4169,8 @@ function buildKitchenWhisper(avgGI, totalCarbs) {
     col = 'rgba(62,180,120,0.5)';
   }
 
-  return '<div style="padding:8px 12px;border-radius:8px;background:rgba(255,255,255,0.03);border-left:2px solid '+col+';margin-bottom:12px">' +
-    '<div style="font-family:\'DM Mono\',monospace;font-size:8px;letter-spacing:1px;text-transform:uppercase;color:rgba(255,255,255,0.2);margin-bottom:3px">the river remembers</div>' +
+  return '<div style="padding:8px 12px;border-radius:8px;background:var(--rv-input-bg);border-left:2px solid '+col+';margin-bottom:12px">' +
+    '<div style="font-family:\'DM Mono\',monospace;font-size:8px;letter-spacing:1px;text-transform:uppercase;color:var(--rv-text-dim);margin-bottom:3px">the river remembers</div>' +
     '<div style="font-family:\'DM Mono\',monospace;font-size:10px;color:'+col+'">'+msg+'</div>' +
   '</div>';
 }
@@ -4293,7 +4394,7 @@ function renderSheet() {
       '<span style="font-family:\'DM Mono\',monospace;font-size:8px;color:rgba(180,200,220,0.5)">g</span>' +
       '<input type="number" value="' + item.grams + '" min="1" max="1000" step="1" ' +
         'style="width:54px;padding:4px 6px;border-radius:6px;border:1px solid rgba(255,255,255,0.14);' +
-        'background:rgba(255,255,255,0.07);font-family:\'DM Mono\',monospace;font-size:11px;color:rgba(220,235,250,0.9);text-align:right" ' +
+        'background:var(--rv-input-bg);font-family:\'DM Mono\',monospace;font-size:11px;color:rgba(220,235,250,0.9);text-align:right" ' +
         'onchange="updateItemGrams(' + idx + ',\'g\',this.value)">' +
       '<span style="font-family:\'DM Mono\',monospace;font-size:8px;color:rgba(62,200,140,0.7)">carbs</span>' +
       '<input type="number" value="' + item.carbs.toFixed(1) + '" min="0" max="200" step="0.5" ' +
@@ -4301,7 +4402,7 @@ function renderSheet() {
         'background:rgba(62,180,120,0.05);font-family:\'DM Mono\',monospace;font-size:11px;color:rgba(62,180,120,0.9);text-align:right" ' +
         'onchange="updateItemGrams(' + idx + ',\'c\',this.value)">' +
       '<button onclick="removeMealItem(' + idx + ')" style="background:none;border:none;cursor:pointer;' +
-        'color:rgba(255,255,255,0.3);font-size:14px;padding:0 4px">×</button>' +
+        'color:var(--rv-text-muted);font-size:14px;padding:0 4px">×</button>' +
       '</div></div>';
   }).join('');
 
@@ -4325,7 +4426,7 @@ function renderSheet() {
     var peakCol = peakBG > BG_HIGH ? 'rgba(210,100,40,0.8)' : peakBG < BG_LOW ? 'rgba(80,120,200,0.8)' : 'rgba(60,180,120,0.8)';
 
     forecastHTML = '<div style="padding:0 18px;margin-bottom:12px">' +
-      '<div style="background:rgba(255,255,255,0.04);border-radius:10px;padding:10px 12px;border:1px solid rgba(255,255,255,0.07)">' +
+      '<div style="background:var(--rv-input-bg);border-radius:10px;padding:10px 12px;border:1px solid var(--rv-panel-border)">' +
       '<div style="font-family:\'DM Mono\',monospace;font-size:9px;color:rgba(180,200,220,0.55);' +
         'letter-spacing:1px;text-transform:uppercase;margin-bottom:6px">forecast · 3h</div>' +
       '<svg width="' + W + '" height="' + H + '" style="overflow:visible">' +
@@ -4381,8 +4482,8 @@ function renderSheet() {
 
         // Wait time — editable
         '<div style="display:flex;align-items:center;gap:8px;margin-bottom:12px;' +
-          'padding:8px 10px;border-radius:8px;background:rgba(255,255,255,0.04);' +
-          'border:1px solid rgba(255,255,255,0.08)">' +
+          'padding:8px 10px;border-radius:8px;background:var(--rv-input-bg);' +
+          'border:1px solid var(--rv-panel-border)">' +
           '<div style="flex:1">' +
             '<div style="font-family:\'DM Mono\',monospace;font-size:8px;letter-spacing:1px;' +
               'text-transform:uppercase;color:rgba(180,200,220,0.6);margin-bottom:2px">bolus wait</div>' +
@@ -4411,7 +4512,7 @@ function renderSheet() {
           '<input id="in-bolus" type="number" inputmode="decimal" placeholder="—" value="' + (_bolusVal||'') + '" ' +
             'min="0" max="20" step="0.5" ' +
             'style="flex:1;padding:10px 14px;border-radius:9px;' +
-            'border:1px solid rgba(80,140,255,0.3);background:rgba(255,255,255,0.07);' +
+            'border:1px solid rgba(80,140,255,0.3);background:var(--rv-input-bg);' +
             'font-family:\'Fraunces\',serif;font-size:22px;color:rgba(220,235,255,0.9);' +
             'outline:none;text-align:center">' +
           '<span style="font-family:\'DM Mono\',monospace;font-size:13px;color:rgba(180,200,220,0.5)">U</span>' +
@@ -4428,7 +4529,7 @@ function renderSheet() {
           // Log carbs only (skip bolus)
           '<button onclick="logMealEntry(true)" ' +
             'style="padding:11px 14px;border-radius:9px;' +
-            'border:1px solid rgba(255,255,255,0.12);background:transparent;' +
+            'border:1px solid var(--rv-panel-border);background:transparent;' +
             'font-family:\'DM Mono\',monospace;font-size:9px;letter-spacing:.5px;' +
             'text-transform:uppercase;color:rgba(180,200,220,0.45);cursor:pointer">no insulin</button>' +
         '</div>' +
@@ -4440,18 +4541,18 @@ function renderSheet() {
     '<div style="display:flex;align-items:center;justify-content:space-between;padding:0 8px 0 0">' +
     '<div style="font-family:\'Fraunces\',serif;font-style:italic;font-weight:200;font-size:22px;color:rgba(255,140,50,0.9);padding:18px 18px 0">add to the flow</div>' +
     '<button onclick="closeSheet()" style="background:none;border:none;cursor:pointer;font-size:26px;' +
-      'color:rgba(255,255,255,0.3);padding:4px 8px;line-height:1;touch-action:manipulation">×</button>' +
+      'color:var(--rv-text-muted);padding:4px 8px;line-height:1;touch-action:manipulation">×</button>' +
     '</div>' +
 
     // Time row
     '<div style="display:flex;align-items:center;gap:8px;padding:0 18px;margin-bottom:14px">' +
       '<div style="margin-bottom:4px">' +
-      '<span id="time-display" style="font-family:\'Fraunces\',serif;font-style:italic;font-weight:200;font-size:16px;color:rgba(200,220,240,0.85)">' + 
+      '<span id="time-display" style="font-family:\'Fraunces\',serif;font-style:italic;font-weight:200;font-size:16px;color:var(--rv-text-primary)">' + 
         (function(){ var d=_entryTimeVal?new Date(_entryTimeVal):new Date(); return d.toLocaleDateString('en-GB',{weekday:'short',day:'numeric',month:'short'}) + ' · ' + d.toLocaleTimeString('en-GB',{hour:'2-digit',minute:'2-digit'}); }()) +
       '</span></div>' +
       '<span style="font-family:\'DM Mono\',monospace;font-size:9px;color:rgba(180,200,220,0.5);letter-spacing:1px;text-transform:uppercase">when</span>' +
-      '<input id="in-time" type="datetime-local" style="flex:1;padding:8px 10px;border-radius:8px;border:1px solid rgba(255,255,255,0.15);background:rgba(255,255,255,0.07);font-family:\'DM Mono\',monospace;font-size:12px;color:rgba(200,220,240,0.8);outline:none" onchange="onTimeChange(this.value)">' +
-      '<button onclick="setTimeNow()" style="padding:6px 10px;border-radius:7px;border:1px solid rgba(255,255,255,0.12);background:rgba(255,255,255,0.05);font-family:\'DM Mono\',monospace;font-size:9px;color:rgba(180,200,220,0.6);cursor:pointer">now</button>' +
+      '<input id="in-time" type="datetime-local" style="flex:1;padding:8px 10px;border-radius:8px;border:1px solid rgba(255,255,255,0.15);background:var(--rv-input-bg);font-family:\'DM Mono\',monospace;font-size:12px;color:rgba(200,220,240,0.8);outline:none" onchange="onTimeChange(this.value)">' +
+      '<button onclick="setTimeNow()" style="padding:6px 10px;border-radius:7px;border:1px solid var(--rv-panel-border);background:var(--rv-input-bg);font-family:\'DM Mono\',monospace;font-size:9px;color:rgba(180,200,220,0.6);cursor:pointer">now</button>' +
     '</div>' +
 
     // Food search
@@ -4461,16 +4562,16 @@ function renderSheet() {
           ' style="width:100%;padding:10px 12px;border-radius:10px;border:1px solid rgba(255,255,255,0.15);background:rgba(255,255,255,0.08);font-family:\'DM Mono\',monospace;font-size:13px;color:rgba(220,235,250,0.9);outline:none;box-sizing:border-box"' +
           ' oninput="searchFood(this.value)" onpaste="setTimeout(function(){checkFoodPaste(document.getElementById(\'food-search\').value)},50)">' +
         '<div id="food-results" style="display:none;position:absolute;top:100%;left:0;right:0;z-index:50;' +
-          'background:rgba(18,24,42,0.99);border:1px solid rgba(255,255,255,0.12);border-radius:10px;' +
+          'background:rgba(18,24,42,0.99);border:1px solid var(--rv-panel-border);border-radius:10px;' +
           'box-shadow:0 4px 20px rgba(0,0,0,0.08);max-height:180px;overflow-y:auto;margin-top:4px"></div>' +
       '</div>' +
       // Voice / Photo / URL input buttons
       '<div style="display:flex;gap:8px;margin-top:8px">' +
-        '<button id="voice-food-btn" onpointerdown="startVoiceFood(event)" onpointerup="stopVoiceFood(event)" onpointerleave="stopVoiceFood(event)" style="flex:1;display:flex;align-items:center;justify-content:center;gap:6px;padding:9px 10px;border-radius:9px;border:1px solid rgba(255,255,255,0.12);background:rgba(255,255,255,0.05);font-family:\'DM Mono\',monospace;font-size:10px;color:rgba(180,200,220,0.6);cursor:pointer;touch-action:manipulation;transition:all .2s" title="hold to speak meal">' +
+        '<button id="voice-food-btn" onpointerdown="startVoiceFood(event)" onpointerup="stopVoiceFood(event)" onpointerleave="stopVoiceFood(event)" style="flex:1;display:flex;align-items:center;justify-content:center;gap:6px;padding:9px 10px;border-radius:9px;border:1px solid var(--rv-panel-border);background:var(--rv-input-bg);font-family:\'DM Mono\',monospace;font-size:10px;color:rgba(180,200,220,0.6);cursor:pointer;touch-action:manipulation;transition:all .2s" title="hold to speak meal">' +
           '<svg viewBox="0 0 16 16" width="13" height="13" fill="none"><rect x="5" y="1" width="6" height="9" rx="3" stroke="currentColor" stroke-width="1.3"/><path d="M2.5 8.5a5.5 5.5 0 0010 0" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/><line x1="8" y1="14" x2="8" y2="15.5" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/></svg>' +
           'hold to speak' +
         '</button>' +
-        '<button onclick="openPhotoFood()" style="flex:1;display:flex;align-items:center;justify-content:center;gap:6px;padding:9px 10px;border-radius:9px;border:1px solid rgba(255,255,255,0.12);background:rgba(255,255,255,0.05);font-family:\'DM Mono\',monospace;font-size:10px;color:rgba(180,200,220,0.6);cursor:pointer;touch-action:manipulation;transition:all .2s" title="photo of food label">' +
+        '<button onclick="openPhotoFood()" style="flex:1;display:flex;align-items:center;justify-content:center;gap:6px;padding:9px 10px;border-radius:9px;border:1px solid var(--rv-panel-border);background:var(--rv-input-bg);font-family:\'DM Mono\',monospace;font-size:10px;color:rgba(180,200,220,0.6);cursor:pointer;touch-action:manipulation;transition:all .2s" title="photo of food label">' +
           '<svg viewBox="0 0 16 16" width="13" height="13" fill="none"><rect x="1" y="3.5" width="14" height="10" rx="2" stroke="currentColor" stroke-width="1.3"/><circle cx="8" cy="8.5" r="2.5" stroke="currentColor" stroke-width="1.3"/><path d="M5.5 3.5L6.5 1.5h3l1 2" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/></svg>' +
           'photo / label' +
         '</button>' +
@@ -4503,7 +4604,7 @@ function renderSheet() {
         '<div style="display:flex;align-items:center;gap:10px">' +
           '<div style="width:8px;height:8px;border-radius:50%;background:rgba(40,85,200,0.8);flex-shrink:0"></div>' +
           '<input id="in-i" type="number" inputmode="decimal" placeholder="units" min="0" max="20" step="0.5"' +
-            ' style="flex:1;background:rgba(255,255,255,0.07);border:1px solid rgba(255,255,255,0.15);border-radius:8px;padding:10px 12px;font-family:\'Fraunces\',serif;font-size:18px;color:rgba(220,235,250,0.9);outline:none">' +
+            ' style="flex:1;background:var(--rv-input-bg);border:1px solid rgba(255,255,255,0.15);border-radius:8px;padding:10px 12px;font-family:\'Fraunces\',serif;font-size:18px;color:rgba(220,235,250,0.9);outline:none">' +
           '<span style="font-family:\'DM Mono\',monospace;font-size:11px;color:rgba(180,200,220,0.5)">U</span>' +
           '<button onclick="commitManualBolus()" style="padding:10px 14px;border-radius:9px;border:1px solid rgba(40,85,200,0.3);background:rgba(40,85,200,0.08);font-family:\'DM Mono\',monospace;font-size:10px;color:rgba(40,85,200,0.8);cursor:pointer">log</button>' +
         '</div>' +
@@ -4535,8 +4636,8 @@ function buildRecentMealsHTML() {
   var chips = unique.map(function(entry) {
     var m = entry.m; var i = entry.i;
     return '<button onclick="loadMealHistory(' + i + ')" style="padding:6px 12px;border-radius:10px;' +
-      'border:1px solid rgba(255,255,255,0.11);background:rgba(255,255,255,0.06);' +
-      'font-family:\'DM Mono\',monospace;font-size:10px;color:rgba(200,220,240,0.75);' +
+      'border:1px solid rgba(255,255,255,0.11);background:var(--rv-input-bg);' +
+      'font-family:\'DM Mono\',monospace;font-size:10px;color:var(--rv-text-secondary);' +
       'cursor:pointer;white-space:nowrap;touch-action:manipulation">' +
       m.name.slice(0,32) + ' · ' + m.totalCarbs + 'g</button>';
   }).join('');
@@ -4814,7 +4915,7 @@ function _showVoiceResults(items, transcript) {
     }, 0);
     var encDishItems = encodeURIComponent(JSON.stringify(dishItems));
     // Dish header
-    html += '<div style="padding:9px 16px;background:rgba(255,255,255,0.04);border-bottom:1px solid rgba(255,255,255,0.07);display:flex;justify-content:space-between;align-items:center;cursor:pointer;touch-action:manipulation" onclick="var s=document.getElementById(\'' + dishId + '\');s.style.display=s.style.display===\'none\'?\'block\':\'none\'">' +
+    html += '<div style="padding:9px 16px;background:var(--rv-input-bg);border-bottom:1px solid rgba(255,255,255,0.07);display:flex;justify-content:space-between;align-items:center;cursor:pointer;touch-action:manipulation" onclick="var s=document.getElementById(\'' + dishId + '\');s.style.display=s.style.display===\'none\'?\'block\':\'none\'">' +
       '<div>' +
         '<div style="font-family:\'DM Mono\',monospace;font-size:11px;color:rgba(220,235,250,0.8)">◈ ' + dishName + '</div>' +
         '<div style="font-family:\'DM Mono\',monospace;font-size:9px;color:rgba(180,200,220,0.5)">' + dishItems.length + ' ingredients · ~' + dishCarbs.toFixed(0) + 'g carbs</div>' +
@@ -5162,7 +5263,7 @@ function addCustomFood(name) {
 
   var el = document.createElement('div');
   el.id = 'food-add-overlay';
-  el.style.cssText = 'position:fixed;inset:0;z-index:80;background:rgba(3,5,20,0.95);backdrop-filter:blur(14px);display:flex;flex-direction:column;align-items:center;justify-content:center;padding:24px;transition:opacity .2s;opacity:0;overflow-y:auto;-webkit-overflow-scrolling:touch';
+  el.style.cssText = 'position:fixed;inset:0;z-index:80;background:var(--rv-panel-bg);backdrop-filter:blur(14px);display:flex;flex-direction:column;align-items:center;justify-content:center;padding:24px;transition:opacity .2s;opacity:0;overflow-y:auto;-webkit-overflow-scrolling:touch';
 
   function inp(id, type, placeholder, min, max, step, val, extraStyle) {
     var i = document.createElement('input');
@@ -5173,13 +5274,13 @@ function addCustomFood(name) {
     if (val !== undefined && val !== null) i.value = val;
     i.setAttribute('inputmode', 'decimal');
     i.setAttribute('oninput', 'updateAddFoodPreview()');
-    i.style.cssText = 'width:100%;padding:11px 14px;border-radius:9px;border:1px solid rgba(255,255,255,0.2);background:rgba(255,255,255,0.08);font-family:monospace;font-size:15px;color:rgba(255,255,255,0.9);text-align:center;outline:none;box-sizing:border-box;' + (extraStyle||'');
+    i.style.cssText = 'width:100%;padding:11px 14px;border-radius:9px;border:1px solid rgba(255,255,255,0.2);background:rgba(255,255,255,0.08);font-family:monospace;font-size:15px;color:var(--rv-text-primary);text-align:center;outline:none;box-sizing:border-box;' + (extraStyle||'');
     return i;
   }
 
   function lbl(text, sub) {
     var d = document.createElement('div');
-    d.style.cssText = 'font-family:monospace;font-size:9px;letter-spacing:1px;text-transform:uppercase;color:rgba(255,255,255,0.6);margin-bottom:6px';
+    d.style.cssText = 'font-family:monospace;font-size:9px;letter-spacing:1px;text-transform:uppercase;color:var(--rv-text-secondary);margin-bottom:6px';
     d.textContent = text;
     if (sub) {
       var s = document.createElement('span');
@@ -5278,7 +5379,7 @@ function addCustomFood(name) {
   giHeader.style.cssText = 'display:flex;align-items:center;justify-content:space-between;margin-bottom:6px';
 
   var giLblEl = document.createElement('div');
-  giLblEl.style.cssText = 'font-family:monospace;font-size:9px;letter-spacing:1px;text-transform:uppercase;color:rgba(255,255,255,0.6)';
+  giLblEl.style.cssText = 'font-family:monospace;font-size:9px;letter-spacing:1px;text-transform:uppercase;color:var(--rv-text-secondary)';
   giLblEl.textContent = 'glycaemic index';
   giHeader.appendChild(giLblEl);
 
@@ -5309,7 +5410,7 @@ function addCustomFood(name) {
 
   // Curve preview — tiny sparkline showing absorption shape
   var curveWrap = document.createElement('div');
-  curveWrap.style.cssText = 'margin-bottom:16px;border-radius:8px;border:1px solid rgba(255,255,255,0.06);background:rgba(255,255,255,0.02);padding:10px 12px';
+  curveWrap.style.cssText = 'margin-bottom:16px;border-radius:8px;border:1px solid var(--rv-panel-border);background:rgba(255,255,255,0.02);padding:10px 12px';
   var curveCanvas = document.createElement('canvas');
   curveCanvas.id = 'new-food-curve';
   curveCanvas.width = 276;
@@ -6521,7 +6622,7 @@ function timePickerHTML(id, defaultDate, allowFuture) {
   var max = allowFuture ? '' : 'max="' + toDatetimeLocal(new Date()) + '"';
   return '<div style="margin:14px 0 10px">' +
     '<div style="font-family:\'DM Mono\',monospace;font-size:8px;letter-spacing:1px;' +
-      'text-transform:uppercase;color:rgba(255,255,255,0.25);margin-bottom:5px">when</div>' +
+      'text-transform:uppercase;color:var(--rv-close-btn);margin-bottom:5px">when</div>' +
     '<div style="display:flex;align-items:center;gap:8px">' +
     '<div id="' + id + '-display" style="flex:1;font-family:\'Fraunces\',serif;' +
       'font-style:italic;font-weight:200;font-size:15px;color:rgba(200,220,240,0.7)">' +
@@ -6531,8 +6632,8 @@ function timePickerHTML(id, defaultDate, allowFuture) {
       'onchange="document.getElementById(\'' + id + '-display\').textContent=fmtTime(this.value)">' +
     '<button onclick="document.getElementById(\'' + id + '\').showPicker?.' +
       'call(document.getElementById(\'' + id + '\'))||document.getElementById(\'' + id + '\').click()" ' +
-      'style="padding:5px 10px;border-radius:7px;border:1px solid rgba(255,255,255,0.12);' +
-      'background:rgba(255,255,255,0.05);font-family:\'DM Mono\',monospace;font-size:9px;' +
+      'style="padding:5px 10px;border-radius:7px;border:1px solid var(--rv-panel-border);' +
+      'background:var(--rv-input-bg);font-family:\'DM Mono\',monospace;font-size:9px;' +
       'color:rgba(200,220,240,0.4);cursor:pointer;touch-action:manipulation">change</button>' +
     '</div></div>';
 }
@@ -6553,7 +6654,7 @@ function openHypoLog() {
   var s='<div style="max-width:360px;width:100%">';
   s+='<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:4px">';
   s+='<div style="font-family:\'Fraunces\',serif;font-style:italic;font-weight:200;font-size:22px;color:rgba(255,210,40,0.9)">hypo treatment</div>';
-  s+='<button onclick="closeHypoLog()" style="background:none;border:none;cursor:pointer;font-size:24px;color:rgba(255,255,255,0.2);padding:4px;touch-action:manipulation">×</button>';
+  s+='<button onclick="closeHypoLog()" style="background:none;border:none;cursor:pointer;font-size:24px;color:var(--rv-text-dim);padding:4px;touch-action:manipulation">×</button>';
   s+='</div>';
   s+='<div style="font-family:\'DM Mono\',monospace;font-size:9px;letter-spacing:1px;text-transform:uppercase;color:rgba(255,210,40,0.45);margin-bottom:14px">also for course correction &middot; hypo prevention</div>';
   s+=timePickerHTML('hypo-time', _hypoDefault, false);
@@ -6637,7 +6738,7 @@ function openCorrectionLog(){
   var s='<div style="max-width:320px;width:100%">';
   s+='<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:4px">';
   s+='<div style="font-family:\'Fraunces\',serif;font-style:italic;font-weight:200;font-size:22px;color:rgba(100,160,255,0.9)">correction</div>';
-  s+='<button onclick="closeCorrectionLog()" style="background:none;border:none;cursor:pointer;font-size:24px;color:rgba(255,255,255,0.2);padding:4px;touch-action:manipulation">×</button>';
+  s+='<button onclick="closeCorrectionLog()" style="background:none;border:none;cursor:pointer;font-size:24px;color:var(--rv-text-dim);padding:4px;touch-action:manipulation">×</button>';
   s+='</div>';
   s+=timePickerHTML('corr-time', _corrDefault, false);
   s+='<div style="font-family:\'DM Mono\',monospace;font-size:9px;letter-spacing:1.5px;text-transform:uppercase;color:rgba(100,150,255,0.6);text-align:center;margin-bottom:20px">bg '+d.bg.toFixed(1)+' mmol &middot; isf 1:'+ISF.toFixed(0)+'</div>';
@@ -7219,7 +7320,7 @@ function openFoodManager() {
 
   var el = document.createElement('div');
   el.id = 'food-mgr-overlay';
-  el.style.cssText = 'position:fixed;inset:0;z-index:70;background:rgba(3,5,15,0.96);overflow-y:auto;transition:opacity .2s;opacity:0;-webkit-overflow-scrolling:touch;touch-action:pan-y;pointer-events:auto';
+  el.style.cssText = 'position:fixed;inset:0;z-index:70;background:var(--rv-panel-bg);overflow-y:auto;transition:opacity .2s;opacity:0;-webkit-overflow-scrolling:touch;touch-action:pan-y;pointer-events:auto';
 
   renderFoodManager(el);
   el.addEventListener('touchstart', function(e){ e.stopPropagation(); }, {passive:true});
@@ -7253,7 +7354,7 @@ function renderFoodManager(el) {
   html += '<div style="font-family:\'Fraunces\',serif;font-style:italic;font-weight:200;font-size:24px;color:rgba(180,220,200,0.9)">food library</div>';
   html += '<div style="display:flex;gap:8px">';
   html += '<button onclick="startAddFood()" style="padding:8px 14px;border-radius:9px;border:1px solid rgba(62,180,120,0.3);background:rgba(62,180,120,0.08);font-family:\'DM Mono\',monospace;font-size:10px;letter-spacing:.5px;color:rgba(62,180,120,0.8);cursor:pointer">+ add food</button>';
-  html += '<button onclick="closeFoodManager()" style="padding:8px 12px;border-radius:9px;border:1px solid rgba(255,255,255,0.1);background:transparent;font-family:\'DM Mono\',monospace;font-size:10px;color:rgba(255,255,255,0.3);cursor:pointer">close</button>';
+  html += '<button onclick="closeFoodManager()" style="padding:8px 12px;border-radius:9px;border:1px solid var(--rv-panel-border);background:transparent;font-family:\'DM Mono\',monospace;font-size:10px;color:var(--rv-text-muted);cursor:pointer">close</button>';
   html += '</div></div>';
 
   // Group by category
@@ -7262,7 +7363,7 @@ function renderFoodManager(el) {
     if (items.length === 0) return;
 
     html += '<div style="margin-bottom:20px">';
-    html += '<div style="font-family:\'DM Mono\',monospace;font-size:8px;letter-spacing:1.5px;text-transform:uppercase;color:rgba(255,255,255,0.2);margin-bottom:8px;padding-bottom:4px;border-bottom:1px solid rgba(255,255,255,0.06)">' + (catLabels[cat]||cat) + '</div>';
+    html += '<div style="font-family:\'DM Mono\',monospace;font-size:8px;letter-spacing:1.5px;text-transform:uppercase;color:var(--rv-text-dim);margin-bottom:8px;padding-bottom:4px;border-bottom:1px solid rgba(255,255,255,0.06)">' + (catLabels[cat]||cat) + '</div>';
 
     items.forEach(function(f, i) {
       var isCustom = FOOD_LIBRARY.some(function(l){ return l.name===f.name; });
@@ -7272,12 +7373,12 @@ function renderFoodManager(el) {
       var servCarbs = f.g_serv ? (f.c100 * f.g_serv / 100).toFixed(1) : null;
       var fid = encodeURIComponent(f.name);
 
-      html += '<div id="frow-' + fid + '" style="display:flex;align-items:center;gap:10px;padding:10px 8px;border-radius:10px;margin-bottom:4px;background:rgba(255,255,255,0.03)">';
+      html += '<div id="frow-' + fid + '" style="display:flex;align-items:center;gap:10px;padding:10px 8px;border-radius:10px;margin-bottom:4px;background:var(--rv-input-bg)">';
 
       // Name + note
       html += '<div style="flex:1;min-width:0">';
       html += '<div style="font-family:\'DM Mono\',monospace;font-size:12px;color:rgba(220,230,240,0.85);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">' + f.name + '</div>';
-      if (f.note) html += '<div style="font-family:\'DM Mono\',monospace;font-size:9px;color:rgba(255,255,255,0.2);margin-top:1px">' + f.note + '</div>';
+      if (f.note) html += '<div style="font-family:\'DM Mono\',monospace;font-size:9px;color:var(--rv-text-dim);margin-top:1px">' + f.note + '</div>';
       html += '</div>';
 
       // Serving carbs
@@ -7291,17 +7392,17 @@ function renderFoodManager(el) {
       // GI badge
       html += '<div style="text-align:center;min-width:28px">';
       html += '<div style="font-family:\'DM Mono\',monospace;font-size:10px;color:' + giC + '">' + (gi||'—') + '</div>';
-      html += '<div style="font-family:\'DM Mono\',monospace;font-size:7px;color:rgba(255,255,255,0.15)">gi</div>';
+      html += '<div style="font-family:\'DM Mono\',monospace;font-size:7px;color:var(--rv-text-dim)">gi</div>';
       html += '</div>';
 
       // c100
       html += '<div style="text-align:center;min-width:32px">';
-      html += '<div style="font-family:\'DM Mono\',monospace;font-size:10px;color:rgba(255,255,255,0.4)">' + f.c100 + '</div>';
-      html += '<div style="font-family:\'DM Mono\',monospace;font-size:7px;color:rgba(255,255,255,0.15)">c/100g</div>';
+      html += '<div style="font-family:\'DM Mono\',monospace;font-size:10px;color:var(--rv-text-muted)">' + f.c100 + '</div>';
+      html += '<div style="font-family:\'DM Mono\',monospace;font-size:7px;color:var(--rv-text-dim)">c/100g</div>';
       html += '</div>';
 
       // Edit button
-      html += '<button onclick="editFood(\'' + fid + '\')" style="padding:5px 10px;border-radius:7px;border:1px solid rgba(255,255,255,0.08);background:transparent;font-family:\'DM Mono\',monospace;font-size:9px;color:rgba(255,255,255,0.3);cursor:pointer">edit</button>';
+      html += '<button onclick="editFood(\'' + fid + '\')" style="padding:5px 10px;border-radius:7px;border:1px solid var(--rv-panel-border);background:transparent;font-family:\'DM Mono\',monospace;font-size:9px;color:var(--rv-text-muted);cursor:pointer">edit</button>';
 
       html += '</div>';
     });
@@ -7335,16 +7436,16 @@ function showFoodEditForm(f) {
 
   var html = '<div style="max-width:420px;margin:0 auto;padding:20px 16px 60px">';
   html += '<div style="display:flex;align-items:center;gap:12px;margin-bottom:24px">';
-  html += '<button onclick="renderFoodManager()" style="background:none;border:none;cursor:pointer;font-family:\'DM Mono\',monospace;font-size:10px;color:rgba(255,255,255,0.3);padding:4px">← back</button>';
+  html += '<button onclick="renderFoodManager()" style="background:none;border:none;cursor:pointer;font-family:\'DM Mono\',monospace;font-size:10px;color:var(--rv-text-muted);padding:4px">← back</button>';
   html += '<div style="font-family:\'Fraunces\',serif;font-style:italic;font-weight:200;font-size:22px;color:rgba(180,220,200,0.9)">' + (isNew?'new food':'edit food') + '</div>';
   html += '</div>';
 
   var fld = function(id, label, val, type, placeholder, note) {
     var v = (val!==undefined&&val!==null) ? val : '';
     return '<div style="margin-bottom:14px">' +
-      '<div style="font-family:\'DM Mono\',monospace;font-size:8px;letter-spacing:1px;text-transform:uppercase;color:rgba(255,255,255,0.3);margin-bottom:5px">' + label + (note?'<span style="opacity:0.5;margin-left:6px;font-size:7px">'+note+'</span>':'') + '</div>' +
+      '<div style="font-family:\'DM Mono\',monospace;font-size:8px;letter-spacing:1px;text-transform:uppercase;color:var(--rv-text-muted);margin-bottom:5px">' + label + (note?'<span style="opacity:0.5;margin-left:6px;font-size:7px">'+note+'</span>':'') + '</div>' +
       '<input id="fe-'+id+'" type="'+(type||'text')+'" value="'+v+'" placeholder="'+(placeholder||'')+'" ' +
-      'style="width:100%;padding:10px 12px;border-radius:9px;border:1px solid rgba(255,255,255,0.12);background:rgba(255,255,255,0.05);font-family:\'DM Mono\',monospace;font-size:14px;color:rgba(220,230,240,0.9);outline:none;box-sizing:border-box">' +
+      'style="width:100%;padding:10px 12px;border-radius:9px;border:1px solid var(--rv-panel-border);background:var(--rv-input-bg);font-family:\'DM Mono\',monospace;font-size:14px;color:rgba(220,230,240,0.9);outline:none;box-sizing:border-box">' +
       '</div>';
   };
 
@@ -7360,8 +7461,8 @@ function showFoodEditForm(f) {
   html += '<div id="fe-serv-preview" style="font-family:\'DM Mono\',monospace;font-size:11px;color:rgba(62,207,160,0.6);margin-bottom:14px;min-height:18px"></div>';
 
   html += '<div style="margin-bottom:14px">';
-  html += '<div style="font-family:\'DM Mono\',monospace;font-size:8px;letter-spacing:1px;text-transform:uppercase;color:rgba(255,255,255,0.3);margin-bottom:5px">category</div>';
-  html += '<select id="fe-cat" style="width:100%;padding:10px 12px;border-radius:9px;border:1px solid rgba(255,255,255,0.12);background:rgba(255,255,255,0.05);font-family:\'DM Mono\',monospace;font-size:13px;color:rgba(220,230,240,0.8);outline:none">' + catOpts + '</select>';
+  html += '<div style="font-family:\'DM Mono\',monospace;font-size:8px;letter-spacing:1px;text-transform:uppercase;color:var(--rv-text-muted);margin-bottom:5px">category</div>';
+  html += '<select id="fe-cat" style="width:100%;padding:10px 12px;border-radius:9px;border:1px solid var(--rv-panel-border);background:var(--rv-input-bg);font-family:\'DM Mono\',monospace;font-size:13px;color:rgba(220,230,240,0.8);outline:none">' + catOpts + '</select>';
   html += '</div>';
 
   html += fld('note', 'note / description', f?f.note:'', 'text', 'e.g. 1 slice, 1 bowl');
@@ -7371,7 +7472,7 @@ function showFoodEditForm(f) {
   if (!isNew) {
     html += '<button onclick="deleteFood(\'' + (f?encodeURIComponent(f.name):'') + '\')" style="padding:12px 16px;border-radius:9px;border:1px solid rgba(200,60,60,0.2);background:transparent;font-family:\'DM Mono\',monospace;font-size:10px;color:rgba(200,80,80,0.5);cursor:pointer">delete</button>';
   }
-  html += '<button onclick="renderFoodManager()" style="padding:12px 16px;border-radius:9px;border:1px solid rgba(255,255,255,0.08);background:transparent;font-family:\'DM Mono\',monospace;font-size:10px;color:rgba(255,255,255,0.3);cursor:pointer">cancel</button>';
+  html += '<button onclick="renderFoodManager()" style="padding:12px 16px;border-radius:9px;border:1px solid var(--rv-panel-border);background:transparent;font-family:\'DM Mono\',monospace;font-size:10px;color:var(--rv-text-muted);cursor:pointer">cancel</button>';
   html += '</div>';
 
   html += '</div>';
@@ -7762,7 +7863,7 @@ function openWhisper() {
     '<div style="max-width:340px;width:100%">' +
     '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px">' +
     '<div style="font-family:\'Fraunces\',serif;font-style:italic;font-weight:200;font-size:22px;color:rgba(180,220,200,0.7);letter-spacing:-.5px">ask the river</div>' +
-    '<button onclick="closeWhisper()" style="background:none;border:none;cursor:pointer;font-size:24px;color:rgba(255,255,255,0.25);padding:4px;line-height:1;touch-action:manipulation">×</button>' +
+    '<button onclick="closeWhisper()" style="background:none;border:none;cursor:pointer;font-size:24px;color:var(--rv-close-btn);padding:4px;line-height:1;touch-action:manipulation">×</button>' +
     '</div>' +
     '<div style="font-family:\'DM Mono\',monospace;font-size:9px;color:rgba(100,160,140,0.3);letter-spacing:1.5px;text-transform:uppercase;margin-bottom:24px">' +
       (dataAt ? dataAt(viewTime).bg.toFixed(1) + ' mmol · ' + new Date().toLocaleTimeString('en-GB',{hour:'2-digit',minute:'2-digit'}) : '') +
@@ -7920,7 +8021,7 @@ function openDebugPanel() {
   el.id  = 'debug-panel';
   el.style.cssText = (
     'position:fixed;bottom:80px;left:8px;right:8px;z-index:200;' +
-    'background:rgba(0,0,0,0.92);border:1px solid rgba(255,255,255,0.1);' +
+    'background:rgba(0,0,0,0.92);border:1px solid var(--rv-panel-border);' +
     'border-radius:10px;padding:10px;font-family:monospace;font-size:10px;' +
     'color:rgba(200,220,200,0.8);max-height:50vh;overflow-y:auto;' +
     'touch-action:pan-y;pointer-events:auto'
@@ -7941,7 +8042,7 @@ function openDebugPanel() {
       '<div style="display:flex;gap:6px;align-items:center">' +
         '<button onclick="deployToGitHub()" style="padding:3px 8px;border-radius:6px;border:1px solid rgba(62,207,160,0.3);background:rgba(62,207,160,0.08);color:rgba(62,207,160,0.8);font-family:monospace;font-size:9px;cursor:pointer">deploy</button>' +
         '<button onclick="document.getElementById(\'debug-panel\').remove()" ' +
-          'style="background:none;border:none;color:rgba(255,255,255,0.4);cursor:pointer;font-size:16px;padding:0">×</button>' +
+          'style="background:none;border:none;color:var(--rv-text-muted);cursor:pointer;font-size:16px;padding:0">×</button>' +
       '</div>' +
     '</div>' +
     '<div style="color:rgba(150,200,150,0.6);margin-bottom:6px;line-height:1.6">' +
@@ -8103,7 +8204,7 @@ function openDebugPanel() {
   el.id  = 'debug-panel';
   el.style.cssText = [
     'position:fixed', 'bottom:80px', 'left:8px', 'right:8px', 'z-index:200',
-    'background:rgba(0,0,0,0.95)', 'border:1px solid rgba(255,255,255,0.1)',
+    'background:rgba(0,0,0,0.95)', 'border:1px solid var(--rv-panel-border)',
     'border-radius:12px', 'padding:12px', 'font-family:monospace', 'font-size:10px',
     'color:rgba(200,220,200,0.85)', 'max-height:70vh', 'overflow-y:auto',
     'touch-action:pan-y', 'pointer-events:auto',
@@ -8115,7 +8216,7 @@ function openDebugPanel() {
       '<span style="color:rgba(62,207,160,0.9);font-weight:bold;font-size:11px">🌊 River Debug</span>' +
       '<div style="display:flex;gap:6px">' +
         '<button onclick="deployToGitHub()" style="padding:3px 8px;border-radius:6px;border:1px solid rgba(62,207,160,0.3);background:rgba(62,207,160,0.08);color:rgba(62,207,160,0.8);font-family:monospace;font-size:9px;cursor:pointer">⬆ deploy</button>' +
-        '<button onclick="document.getElementById(\'debug-panel\').remove()" style="background:none;border:none;color:rgba(255,255,255,0.4);cursor:pointer;font-size:18px;padding:0;line-height:1">×</button>' +
+        '<button onclick="document.getElementById(\'debug-panel\').remove()" style="background:none;border:none;color:var(--rv-text-muted);cursor:pointer;font-size:18px;padding:0;line-height:1">×</button>' +
       '</div>' +
     '</div>' +
 
@@ -8129,8 +8230,8 @@ function openDebugPanel() {
 
     // Error log with copy button
     '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px">' +
-      '<div style="font-size:8px;letter-spacing:1px;text-transform:uppercase;color:rgba(255,255,255,0.2)">log</div>' +
-      '<button id="copy-log-btn" onclick="var t=(window.__debugLog||[]).join(\"\\n\");navigator.clipboard.writeText(t).then(function(){var b=document.getElementById(\'copy-log-btn\');b.textContent=\'\u2713 copied\';setTimeout(function(){b.textContent=\'copy\'},1500)})" style="padding:2px 7px;border-radius:5px;border:1px solid rgba(255,255,255,0.1);background:rgba(255,255,255,0.04);color:rgba(255,255,255,0.35);font-family:monospace;font-size:8px;cursor:pointer">copy</button>' +
+      '<div style="font-size:8px;letter-spacing:1px;text-transform:uppercase;color:var(--rv-text-dim)">log</div>' +
+      '<button id="copy-log-btn" onclick="var t=(window.__debugLog||[]).join(\"\\n\");navigator.clipboard.writeText(t).then(function(){var b=document.getElementById(\'copy-log-btn\');b.textContent=\'\u2713 copied\';setTimeout(function(){b.textContent=\'copy\'},1500)})" style="padding:2px 7px;border-radius:5px;border:1px solid var(--rv-panel-border);background:var(--rv-input-bg);color:var(--rv-text-muted);font-family:monospace;font-size:8px;cursor:pointer">copy</button>' +
     '</div>' +
     '<div id="debug-content" style="margin-bottom:10px;min-height:20px;font-size:9px;line-height:1.5;user-select:text;-webkit-user-select:text"></div>' +
 
@@ -8139,7 +8240,7 @@ function openDebugPanel() {
 
     // Bug report
     '<div style="margin-bottom:8px">' +
-      '<div style="font-size:8px;letter-spacing:1px;text-transform:uppercase;color:rgba(255,255,255,0.3);margin-bottom:5px">report a bug</div>' +
+      '<div style="font-size:8px;letter-spacing:1px;text-transform:uppercase;color:var(--rv-text-muted);margin-bottom:5px">report a bug</div>' +
       '<div style="display:flex;gap:6px">' +
         '<input id="bug-input" type="text" placeholder="describe what broke..." ' +
           'style="flex:1;padding:6px 8px;border-radius:7px;border:1px solid rgba(255,80,80,0.25);background:rgba(255,80,80,0.05);font-family:monospace;font-size:10px;color:rgba(255,200,200,0.85);outline:none" ' +
@@ -8151,7 +8252,7 @@ function openDebugPanel() {
 
     // Feature request
     '<div style="margin-bottom:10px">' +
-      '<div style="font-size:8px;letter-spacing:1px;text-transform:uppercase;color:rgba(255,255,255,0.3);margin-bottom:5px">request a feature</div>' +
+      '<div style="font-size:8px;letter-spacing:1px;text-transform:uppercase;color:var(--rv-text-muted);margin-bottom:5px">request a feature</div>' +
       '<div style="display:flex;gap:6px">' +
         '<input id="feature-input" type="text" placeholder="describe what you want..." ' +
           'style="flex:1;padding:6px 8px;border-radius:7px;border:1px solid rgba(62,130,220,0.25);background:rgba(62,130,220,0.05);font-family:monospace;font-size:10px;color:rgba(150,180,255,0.85);outline:none" ' +
@@ -8162,7 +8263,7 @@ function openDebugPanel() {
     '</div>' +
 
     // Status line
-    '<div id="repair-status" style="font-size:9px;color:rgba(255,255,255,0.3);min-height:14px;text-align:center"></div>';
+    '<div id="repair-status" style="font-size:9px;color:var(--rv-text-muted);min-height:14px;text-align:center"></div>';
 
   document.body.appendChild(el);
   if (window.__updateDebugPanel) window.__updateDebugPanel();
@@ -8242,15 +8343,15 @@ function openEventEditor(eventIdx) {
       '<div style="font-family:\'Fraunces\',serif;font-style:italic;font-weight:200;font-size:20px;' +
         'color:rgba(180,220,200,0.8)">edit entry</div>' +
       '<button onclick="document.getElementById(\'event-edit-overlay\').remove()" ' +
-        'style="background:none;border:none;cursor:pointer;font-size:22px;color:rgba(255,255,255,0.3);padding:4px">×</button>' +
+        'style="background:none;border:none;cursor:pointer;font-size:22px;color:var(--rv-text-muted);padding:4px">×</button>' +
     '</div>' +
     // Time editor — editable for all event types
     '<div style="margin-bottom:16px">' +
       '<div style="font-family:\'DM Mono\',monospace;font-size:8px;letter-spacing:1px;' +
-        'text-transform:uppercase;color:rgba(255,255,255,0.3);margin-bottom:6px">when</div>' +
+        'text-transform:uppercase;color:var(--rv-text-muted);margin-bottom:6px">when</div>' +
       '<input id="ee-time" type="datetime-local" value="' + dtLocalISO + '" ' +
-        'style="width:100%;padding:9px 12px;border-radius:8px;border:1px solid rgba(255,255,255,0.12);' +
-        'background:rgba(255,255,255,0.05);font-family:\'DM Mono\',monospace;font-size:13px;' +
+        'style="width:100%;padding:9px 12px;border-radius:8px;border:1px solid var(--rv-panel-border);' +
+        'background:var(--rv-input-bg);font-family:\'DM Mono\',monospace;font-size:13px;' +
         'color:rgba(200,220,240,0.8);outline:none;box-sizing:border-box">' +
     '</div>' +
     '<div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;margin-bottom:20px">' +
@@ -8272,10 +8373,10 @@ function openEventEditor(eventIdx) {
       '</div>' +
       '<div>' +
         '<div style="font-family:\'DM Mono\',monospace;font-size:8px;letter-spacing:1px;' +
-          'text-transform:uppercase;color:rgba(255,255,255,0.3);margin-bottom:5px">wait (min)</div>' +
+          'text-transform:uppercase;color:var(--rv-text-muted);margin-bottom:5px">wait (min)</div>' +
         '<input id="ee-wait" type="number" value="' + (ev.waitMins||0) + '" min="0" max="60" step="5" ' +
-          'style="width:100%;padding:10px;border-radius:8px;border:1px solid rgba(255,255,255,0.12);' +
-          'background:rgba(255,255,255,0.05);font-family:\'DM Mono\',monospace;font-size:16px;' +
+          'style="width:100%;padding:10px;border-radius:8px;border:1px solid var(--rv-panel-border);' +
+          'background:var(--rv-input-bg);font-family:\'DM Mono\',monospace;font-size:16px;' +
           'color:rgba(200,200,200,0.9);text-align:center;outline:none">' +
       '</div>' +
     '</div>' +
@@ -8289,9 +8390,9 @@ function openEventEditor(eventIdx) {
         'background:transparent;font-family:\'DM Mono\',monospace;font-size:10px;' +
         'color:rgba(200,80,80,0.5);cursor:pointer">delete</button>' +
       '<button onclick="document.getElementById(\'event-edit-overlay\').remove()" ' +
-        'style="padding:12px 14px;border-radius:10px;border:1px solid rgba(255,255,255,0.08);' +
+        'style="padding:12px 14px;border-radius:10px;border:1px solid var(--rv-panel-border);' +
         'background:transparent;font-family:\'DM Mono\',monospace;font-size:10px;' +
-        'color:rgba(255,255,255,0.25);cursor:pointer">cancel</button>' +
+        'color:var(--rv-close-btn);cursor:pointer">cancel</button>' +
     '</div></div>';
 
   document.body.appendChild(el);
@@ -8421,14 +8522,14 @@ function openSettingsTray() {
       'padding:9px 14px 9px 10px',
       'border-radius:20px',
       'border:1px solid ' + item.col.replace('0.8','0.25'),
-      'background:rgba(4,6,18,0.92)',
+      'background:var(--rv-panel-bg)',
       'backdrop-filter:blur(14px)',
       'cursor:pointer',
       "font-family:'DM Mono',monospace",
       'font-size:10px',
       'letter-spacing:0.5px',
       'text-transform:uppercase',
-      'color:rgba(200,220,240,0.75)',
+      'color:var(--rv-text-secondary)',
       'white-space:nowrap',
       'opacity:0',
       'transform:translateX(-8px)',
@@ -8465,7 +8566,7 @@ function openVisualSettings() {
   el.id = 'visual-settings-overlay';
   el.style.cssText = [
     'position:fixed', 'inset:0', 'z-index:80',
-    'background:rgba(3,5,18,0.97)',
+    'background:var(--rv-panel-bg)',
     'backdrop-filter:blur(18px)',
     'overflow-y:auto', '-webkit-overflow-scrolling:touch',
     'display:flex', 'flex-direction:column', 'align-items:center',
@@ -8498,27 +8599,27 @@ function openVisualSettings() {
   var html = '';
   html += '<div style="width:100%;max-width:420px">';
   html += '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:28px">';
-  html += '<div style="font-family:\'Fraunces\',serif;font-weight:200;font-style:italic;font-size:22px;color:rgba(200,220,240,0.85)">visual settings</div>';
-  html += '<button onclick="document.getElementById(\'visual-settings-overlay\').remove()" style="background:none;border:none;cursor:pointer;font-size:22px;color:rgba(255,255,255,0.25);padding:4px">×</button>';
+  html += '<div style="font-family:\'Fraunces\',serif;font-weight:200;font-style:italic;font-size:22px;color:var(--rv-text-primary)">visual settings</div>';
+  html += '<button onclick="document.getElementById(\'visual-settings-overlay\').remove()" style="background:none;border:none;cursor:pointer;font-size:22px;color:var(--rv-close-btn);padding:4px">×</button>';
   html += '</div>';
 
   // ── section helper ────────────────────────────────────────────────
   function section(label, content) {
     return '<div style="margin-bottom:24px">' +
-      '<div style="' + mono(9) + ';letter-spacing:1px;text-transform:uppercase;color:rgba(255,255,255,0.25);margin-bottom:10px">' + label + '</div>' +
+      '<div style="' + mono(9) + ';letter-spacing:1px;text-transform:uppercase;color:var(--rv-close-btn);margin-bottom:10px">' + label + '</div>' +
       content +
       '</div>';
   }
   function swatchRow(id, label, value, note) {
     return '<div style="display:flex;align-items:center;justify-content:space-between;' +
-      'padding:11px 14px;border-radius:10px;background:rgba(255,255,255,0.03);' +
-      'border:1px solid rgba(255,255,255,0.06);margin-bottom:8px">' +
+      'padding:11px 14px;border-radius:10px;background:var(--rv-input-bg);' +
+      'border:1px solid var(--rv-panel-border);margin-bottom:8px">' +
       '<div>' +
-        '<div style="' + mono(11) + ';color:rgba(200,220,240,0.75)">' + label + '</div>' +
-        (note ? '<div style="' + mono(9) + ';color:rgba(255,255,255,0.25);margin-top:2px">' + note + '</div>' : '') +
+        '<div style="' + mono(11) + ';color:var(--rv-text-secondary)">' + label + '</div>' +
+        (note ? '<div style="' + mono(9) + ';color:var(--rv-close-btn);margin-top:2px">' + note + '</div>' : '') +
       '</div>' +
       '<div style="display:flex;align-items:center;gap:8px">' +
-        '<div style="width:26px;height:26px;border-radius:6px;background:' + value + ';border:1px solid rgba(255,255,255,0.12);cursor:pointer" onclick="document.getElementById(\'' + id + '-picker\').click()"></div>' +
+        '<div style="width:26px;height:26px;border-radius:6px;background:' + value + ';border:1px solid var(--rv-panel-border);cursor:pointer" onclick="document.getElementById(\'' + id + '-picker\').click()"></div>' +
         '<input type="color" id="' + id + '-picker" value="' + value + '" style="width:0;height:0;opacity:0;border:none;padding:0">' +
       '</div>' +
       '</div>';
@@ -8530,7 +8631,7 @@ function openVisualSettings() {
   // Trend line
   html += section('glucose trend line',
     swatchRow('line', 'in-range colour', curLine, 'colour when BG is within target') +
-    '<div style="' + mono(9) + ';color:rgba(255,255,255,0.2);padding:4px 4px 0">low → amber, high → warm white — these adapt automatically</div>'
+    '<div style="' + mono(9) + ';color:var(--rv-text-dim);padding:4px 4px 0">low → amber, high → warm white — these adapt automatically</div>'
   );
 
   // Insulin
@@ -8542,9 +8643,28 @@ function openVisualSettings() {
       swatchRow('carbHot', 'fast carbs (GI 100)', curCarbHot, 'jelly beans, glucose tabs, juice') +
       swatchRow('carbCool', 'slow carbs (GI 0)', curCarbCool, 'lentils, whole grain, low-GI foods') +
     '</div>' +
-    '<div id="gi-ramp-preview" style="height:10px;border-radius:5px;margin-bottom:6px;border:1px solid rgba(255,255,255,0.08)"></div>' +
-    '<div style="display:flex;justify-content:space-between;' + mono(8) + ';color:rgba(255,255,255,0.2)">' +
+    '<div id="gi-ramp-preview" style="height:10px;border-radius:5px;margin-bottom:6px;border:1px solid var(--rv-panel-border)"></div>' +
+    '<div style="display:flex;justify-content:space-between;' + mono(8) + ';color:var(--rv-text-dim)">' +
       '<span>GI 100</span><span>GI 50</span><span>GI 0</span>' +
+    '</div>'
+  );
+
+  // Label opacity
+  var curOpacity = vp.labelOpacity !== undefined ? vp.labelOpacity : 0.7;
+  html += section('canvas labels',
+    '<div style="display:flex;align-items:center;justify-content:space-between;' +
+    'padding:11px 14px;border-radius:10px;background:var(--rv-input-bg);' +
+    'border:1px solid var(--rv-panel-border);margin-bottom:8px">' +
+      '<div>' +
+        '<div style="font-family:\'DM Mono\',monospace;font-size:11px;color:var(--rv-text-secondary)">label weight</div>' +
+        '<div style="font-family:\'DM Mono\',monospace;font-size:9px;color:var(--rv-text-muted);margin-top:2px">BG number, time labels, pebble text</div>' +
+      '</div>' +
+      '<div style="display:flex;align-items:center;gap:8px">' +
+        '<span style="font-family:\'DM Mono\',monospace;font-size:9px;color:var(--rv-text-muted)">ghost</span>' +
+        '<input type="range" id="label-opacity" min="0.1" max="1" step="0.05" value="' + curOpacity + '" ' +
+          'style="width:80px;accent-color:var(--rv-text-secondary)">' +
+        '<span style="font-family:\'DM Mono\',monospace;font-size:9px;color:var(--rv-text-muted)">full</span>' +
+      '</div>' +
     '</div>'
   );
 
@@ -8562,7 +8682,7 @@ function openVisualSettings() {
 
   html += '<div style="display:flex;gap:10px;margin-top:8px">';
   html += '<button onclick="applyVisualSettings()" style="flex:1;padding:13px;border-radius:10px;border:1px solid rgba(62,180,120,0.3);background:rgba(62,180,120,0.08);font-family:\'Fraunces\',serif;font-style:italic;font-weight:200;font-size:16px;color:rgba(62,180,120,0.9);cursor:pointer">apply</button>';
-  html += '<button onclick="resetVisualSettings()" style="padding:13px 16px;border-radius:10px;border:1px solid rgba(255,255,255,0.08);background:transparent;' + mono(10) + ';color:rgba(255,255,255,0.3);cursor:pointer">reset</button>';
+  html += '<button onclick="resetVisualSettings()" style="padding:13px 16px;border-radius:10px;border:1px solid var(--rv-panel-border);background:transparent;' + mono(10) + ';color:var(--rv-text-muted);cursor:pointer">reset</button>';
   html += '</div>';
   html += '</div>';
 
@@ -8577,10 +8697,11 @@ function openVisualSettings() {
     var picker = document.getElementById(id+'-picker');
     if (!picker) return;
     picker.addEventListener('input', function() {
-      // Update swatch dot
       var swatch = picker.previousElementSibling;
       if (swatch) swatch.style.background = picker.value;
       if (id==='carbHot'||id==='carbCool') _vsUpdateRampPreview();
+      // Live token update — re-skin the overlay as bg changes
+      if (id==='bg') applyUITokens(picker.value);
     });
   });
 }
@@ -8590,10 +8711,10 @@ function _vsThemeBtn(name, bg, line, iob, carbHot, carbCool) {
     return '<div style="width:8px;height:8px;border-radius:50%;background:'+c+'"></div>';
   }).join('');
   return '<button onclick="_vsApplyTheme(\''+bg+'\',\''+line+'\',\''+iob+'\',\''+carbHot+'\',\''+carbCool+'\')" ' +
-    'style="padding:10px 8px;border-radius:9px;border:1px solid rgba(255,255,255,0.08);' +
+    'style="padding:10px 8px;border-radius:9px;border:1px solid var(--rv-panel-border);' +
     'background:'+bg+';cursor:pointer;display:flex;flex-direction:column;align-items:center;gap:5px">' +
     '<div style="display:flex;gap:4px">'+dots+'</div>' +
-    '<div style="font-family:\'DM Mono\',monospace;font-size:8px;color:rgba(255,255,255,0.4)">'+name+'</div>' +
+    '<div style="font-family:\'DM Mono\',monospace;font-size:8px;color:var(--rv-text-muted)">'+name+'</div>' +
     '</button>';
 }
 
@@ -8633,8 +8754,11 @@ function applyVisualSettings() {
   vp.iobR     = hexToRgbA('iob');
   vp.carbHot  = hexToRgbA('carbHot');
   vp.carbCool = hexToRgbA('carbCool');
+  var lop = document.getElementById('label-opacity');
+  if (lop) vp.labelOpacity = parseFloat(lop.value);
   RIVER_VISUAL_PREFS = vp;
   saveVisualPrefs();
+  applyUITokens(vp.bgTint || '#060914');
   var el = document.getElementById('visual-settings-overlay');
   if (el) { el.style.opacity='0'; setTimeout(function(){ el.remove(); }, 200); }
 }
@@ -8642,6 +8766,7 @@ function applyVisualSettings() {
 function resetVisualSettings() {
   RIVER_VISUAL_PREFS = {};
   saveVisualPrefs();
+  applyUITokens('#060914');
   var el = document.getElementById('visual-settings-overlay');
   if (el) { el.style.opacity='0'; setTimeout(function(){ el.remove(); }, 200); }
 }
@@ -8678,7 +8803,7 @@ function openTreatmentPanel() {
 
   var el = document.createElement('div');
   el.id  = 'treatment-overlay';
-  el.style.cssText = 'position:fixed;inset:0;z-index:70;background:rgba(3,5,18,0.96);' +
+  el.style.cssText = 'position:fixed;inset:0;z-index:70;background:var(--rv-panel-bg);' +
     'backdrop-filter:blur(16px);overflow-y:auto;-webkit-overflow-scrolling:touch;' +
     'display:flex;flex-direction:column;align-items:center;padding:48px 20px 40px;' +
     'opacity:0;transition:opacity .2s;pointer-events:auto';
@@ -8686,8 +8811,8 @@ function openTreatmentPanel() {
 
   function rowStyle(col) {
     return 'display:flex;align-items:center;justify-content:space-between;' +
-      'padding:10px 14px;border-radius:10px;background:rgba(255,255,255,0.03);' +
-      'border:1px solid rgba(255,255,255,0.06);margin-bottom:8px;' +
+      'padding:10px 14px;border-radius:10px;background:var(--rv-input-bg);' +
+      'border:1px solid var(--rv-panel-border);margin-bottom:8px;' +
       "font-family:'DM Mono',monospace;font-size:11px;color:" + col;
   }
 
@@ -8712,7 +8837,7 @@ function openTreatmentPanel() {
     '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:24px">' +
       '<div style="font-family:\'Fraunces\',serif;font-style:italic;font-weight:200;font-size:22px;color:rgba(180,220,200,0.8)">treatment</div>' +
       '<button onclick="document.getElementById(\'treatment-overlay\').remove()" ' +
-        'style="background:none;border:none;cursor:pointer;font-size:22px;color:rgba(255,255,255,0.25);padding:4px">×</button>' +
+        'style="background:none;border:none;cursor:pointer;font-size:22px;color:var(--rv-close-btn);padding:4px">×</button>' +
     '</div>' +
 
     // Basal
