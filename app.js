@@ -338,27 +338,45 @@ const COL_HYPO  = [255, 210,  40];  // golden yellow — hypo lightning
 const COL_BGLOW = [80,  130, 220];  // blue when low
 const COL_BGHIGH= [230, 140,  40];  // amber when high
 
+// ── VISUAL PREFERENCES — user-configurable overrides ─────────────────
+// Stored in localStorage. Merged on top of the time-of-day palette.
+// null = use palette default. Set via openVisualSettings().
+var RIVER_VISUAL_PREFS = (function() {
+  try { return JSON.parse(localStorage.getItem('river_visual_prefs') || 'null') || {}; }
+  catch(e) { return {}; }
+})();
+
+function saveVisualPrefs() {
+  try { localStorage.setItem('river_visual_prefs', JSON.stringify(RIVER_VISUAL_PREFS)); }
+  catch(e) {}
+}
+
 // GI colour ramp — continuous interpolation from hot (fast carbs) to cool (slow carbs)
 // Each stop: [gi_threshold, r, g, b]
-// GI 100 = jelly bean hot yellow / GI 10 = cool lavender-blue
-const GI_COLOUR_RAMP = [
-  [100, 255, 210,  40],   // hot yellow  — pure glucose, jelly beans
-  [ 75, 255, 140,  50],   // warm orange — white bread, sports drink
-  [ 55, 230, 100,  80],   // coral       — ripe banana, rice
-  [ 35, 160, 180,  90],   // sage green  — pasta, oats
-  [ 20, 110, 160, 190],   // slate blue  — lentils, whole grain
-  [  0,  90, 100, 200],   // cool lavender-blue — lowest GI foods
+// The hot and cool ends are configurable via visual settings.
+const GI_COLOUR_RAMP_DEFAULT = [
+  [100, 255, 210,  40],
+  [ 75, 255, 140,  50],
+  [ 55, 230, 100,  80],
+  [ 35, 160, 180,  90],
+  [ 20, 110, 160, 190],
+  [  0,  90, 100, 200],
 ];
 
-// Pure function — maps any GI value to [r, g, b] by interpolating the ramp
+function _buildGIRamp() {
+  var ramp = GI_COLOUR_RAMP_DEFAULT.map(function(s){ return s.slice(); });
+  if (RIVER_VISUAL_PREFS.carbHot)  { var h=RIVER_VISUAL_PREFS.carbHot;  ramp[0][1]=h[0];ramp[0][2]=h[1];ramp[0][3]=h[2]; }
+  if (RIVER_VISUAL_PREFS.carbCool) { var c=RIVER_VISUAL_PREFS.carbCool; ramp[ramp.length-1][1]=c[0];ramp[ramp.length-1][2]=c[1];ramp[ramp.length-1][3]=c[2]; }
+  return ramp;
+}
+
 function giToColour(gi) {
   gi = Math.max(0, Math.min(100, gi || 55));
-  var ramp = GI_COLOUR_RAMP;
-  // Find the two stops that bracket this GI value
+  var ramp = _buildGIRamp();
   for (var i = 0; i < ramp.length - 1; i++) {
     var hi = ramp[i], lo = ramp[i + 1];
     if (gi >= lo[0]) {
-      var f = (gi - lo[0]) / (hi[0] - lo[0]); // 0=lo, 1=hi
+      var f = (gi - lo[0]) / (hi[0] - lo[0]);
       return [
         Math.round(lo[1] + f * (hi[1] - lo[1])),
         Math.round(lo[2] + f * (hi[2] - lo[2])),
@@ -508,8 +526,8 @@ function palette(t) {
     if (h >= PALETTES[i].h && h < PALETTES[i+1].h) { lo=PALETTES[i]; hi=PALETTES[i+1]; break; }
   }
   const f = lo.h===hi.h ? 0 : (h-lo.h)/(hi.h-lo.h);
-  return {
-    bg0:  lo.bg0,   // not interpolating hex strings — snap to nearest keyframe is fine for bg
+  var p = {
+    bg0:  lo.bg0,
     bg1:  lo.bg1,
     cobR: lerpC(lo.cobR, hi.cobR, f),
     iobR: lerpC(lo.iobR, hi.iobR, f),
@@ -519,6 +537,13 @@ function palette(t) {
     name: f < 0.5 ? lo.name : hi.name,
     isNight: (f < 0.5 ? lo.name : hi.name) === 'night',
   };
+  // Merge user visual preferences on top of the time-of-day palette
+  var vp = RIVER_VISUAL_PREFS;
+  if (vp.bgTint)  { p.bg0 = vp.bgTint; p.bg1 = vp.bgTint; }
+  if (vp.cobR)    { p.cobR = vp.cobR; }
+  if (vp.iobR)    { p.iobR = vp.iobR; }
+  if (vp.bgLine)  { p.bgLine = vp.bgLine; }
+  return p;
 }
 
 // ── VOID BACKGROUND ────────────────────────────────────────────────────
@@ -1003,9 +1028,8 @@ function _drawCOBReservoir() {
       var remaining  = _cobFgi(elapsedMin, gi);
       if (remaining < 0.02) return;
 
-      // GI → colour via continuous ramp
-      var giCol = giToColour(gi);
-      var rv = giCol[0], gv = giCol[1], bv = giCol[2];
+      // GI \u2192 colour via continuous ramp (user-configurable)
+      var giCol=giToColour(gi), rv=giCol[0], gv=giCol[1], bv=giCol[2];
 
       // Zoom-aware bell width — faster GI = narrower bell
       var sigmaFactor = gi >= 70 ? 0.6 : gi >= 55 ? 1.0 : 1.5;
@@ -1161,11 +1185,9 @@ function _spawnForceParticle(type, gi) {
   var level = isCob ? _cobReservoir : _iobReservoir;
   if (level < 0.02) return;
   var r = 2.8 + Math.random()*2.5;
-  // Carry GI colour for COB particles; IOB uses its own fixed colour
-  var col = isCob ? giToColour(gi || 55) : COL_IOB;
+  var col = isCob ? giToColour(gi || 55) : (RIVER_VISUAL_PREFS.iobR || COL_IOB);
   _forceParticles.push({
-    type:type, r:r, baseR:r,
-    col:col,   // per-particle colour [r,g,b]
+    type:type, r:r, baseR:r, col:col,
     x: NOW_X*W + (Math.random()-0.5)*28,
     y: isCob ? H+4 : -4,
     vy: isCob ? -(1.6+Math.random()*0.7) : (1.6+Math.random()*0.7),
@@ -1227,7 +1249,7 @@ function _drawMists() {
   _forceMists.forEach(function(m){
     var t=m.life/m.maxLife;
     var a=t<0.2?m.maxAlpha*(t/0.2):m.maxAlpha*(1-(t-0.2)/0.8);
-    var col=m.col || (m.type==='cob'?COL_COB:COL_IOB);
+    var col=m.col||(m.type==='cob'?COL_COB:COL_IOB);
     CX.beginPath();
     CX.arc(m.x+Math.sin(_forceFrame*0.025+m.phase)*5, m.y, m.r*(0.7+t*0.5), 0, Math.PI*2);
     CX.fillStyle='rgba('+col[0]+','+col[1]+','+col[2]+','+Math.max(0,a)+')';
@@ -1239,7 +1261,6 @@ function _drawForceParticles(lineY) {
   var nx=NOW_X*W;
   _forceParticles.forEach(function(p){
     var isCob=p.type==='cob';
-    // Use per-particle colour (carries GI colour for COB, fixed blue for IOB)
     var col=p.col||(isCob?COL_COB:COL_IOB);
     var rv=col[0],gv=col[1],bv=col[2];
     var wobX=Math.sin(_forceFrame*0.045+p.phase)*1.8;
@@ -1260,12 +1281,11 @@ function _drawForceParticles(lineY) {
     }
 
     if(isCob){
-      // Bubble — colour from GI ramp
+      // Bubble
       CX.beginPath(); CX.arc(px,py,rad,0,Math.PI*2);
       CX.fillStyle='rgba('+rv+','+gv+','+bv+','+(a*0.15)+')'; CX.fill();
       CX.strokeStyle='rgba('+rv+','+gv+','+bv+','+(a*0.88)+')';
       CX.lineWidth=1.3; CX.stroke();
-      // Highlight — warm for hot GI, cool for slow GI
       var hlR=rv>200?255:200, hlG=gv>150?228:210, hlB=bv<100?175:220;
       CX.beginPath(); CX.arc(px-rad*0.28,py-rad*0.32,rad*0.25,0,Math.PI*2);
       CX.fillStyle='rgba('+hlR+','+hlG+','+hlB+','+(a*0.48)+')'; CX.fill();
@@ -1281,7 +1301,7 @@ function _drawForceParticles(lineY) {
         CX.fillStyle='rgba('+rv+','+gv+','+bv+','+(a*0.35)+')'; CX.fill();
       }
     } else {
-      // Teardrop — IOB fixed blue unchanged
+      // Teardrop
       var s=rad;
       CX.beginPath();
       CX.moveTo(px,py-s*1.4);
@@ -1319,36 +1339,30 @@ function _drawSparks() {
 
 function _drawPressureGlow(lineY) {
   var nx=NOW_X*W, cobC=0, iobC=0;
-  var cobR=COL_COB[0], cobG=COL_COB[1], cobB=COL_COB[2];
-  var cobColWeight=0;
+  var cobR=COL_COB[0],cobG=COL_COB[1],cobB=COL_COB[2],cobW=0;
+  var iobCol=RIVER_VISUAL_PREFS.iobR||COL_IOB;
   _forceParticles.forEach(function(p){
     if(p.state==='traveling') return;
     var a=p.state==='fading'?p.fadeAlpha:1;
-    if(p.type==='cob') {
+    if(p.type==='cob'){
       cobC+=a*p.baseR;
-      // Weighted average colour of sitting COB particles
-      if (p.col && a > 0.1) {
-        var w = a * p.baseR;
-        cobR = (cobR * cobColWeight + p.col[0] * w) / (cobColWeight + w);
-        cobG = (cobG * cobColWeight + p.col[1] * w) / (cobColWeight + w);
-        cobB = (cobB * cobColWeight + p.col[2] * w) / (cobColWeight + w);
-        cobColWeight += w;
-      }
+      if(p.col&&a>0.1){var w=a*p.baseR;cobR=(cobR*cobW+p.col[0]*w)/(cobW+w);cobG=(cobG*cobW+p.col[1]*w)/(cobW+w);cobB=(cobB*cobW+p.col[2]*w)/(cobW+w);cobW+=w;}
     } else iobC+=a*p.baseR;
   });
   if(cobC>0.5){
     var h=Math.min(cobC*2.4,52);
+    var cr=Math.round(cobR),cg=Math.round(cobG),cb=Math.round(cobB);
     var gr=CX.createLinearGradient(0,lineY,0,lineY+h);
-    gr.addColorStop(0,'rgba('+Math.round(cobR)+','+Math.round(cobG)+','+Math.round(cobB)+',0.3)');
-    gr.addColorStop(1,'rgba('+Math.round(cobR)+','+Math.round(cobG)+','+Math.round(cobB)+',0)');
+    gr.addColorStop(0,'rgba('+cr+','+cg+','+cb+',0.3)');
+    gr.addColorStop(1,'rgba('+cr+','+cg+','+cb+',0)');
     CX.beginPath(); CX.ellipse(nx,lineY+h/2,44,h/2,0,0,Math.PI*2);
     CX.fillStyle=gr; CX.fill();
   }
   if(iobC>0.5){
     var h=Math.min(iobC*2.4,52);
     var gr=CX.createLinearGradient(0,lineY,0,lineY-h);
-    gr.addColorStop(0,'rgba('+COL_IOB[0]+','+COL_IOB[1]+','+COL_IOB[2]+',0.3)');
-    gr.addColorStop(1,'rgba('+COL_IOB[0]+','+COL_IOB[1]+','+COL_IOB[2]+',0)');
+    gr.addColorStop(0,'rgba('+iobCol[0]+','+iobCol[1]+','+iobCol[2]+',0.3)');
+    gr.addColorStop(1,'rgba('+iobCol[0]+','+iobCol[1]+','+iobCol[2]+',0)');
     CX.beginPath(); CX.ellipse(nx,lineY-h/2,44,h/2,0,0,Math.PI*2);
     CX.fillStyle=gr; CX.fill();
   }
@@ -1368,22 +1382,21 @@ function drawGasCloud(cobPts, col, direction, d) {
       _iobReservoir  = Math.max(0,Math.min(1,_iobReservoir));
     }
     if(_forceFrame%20===0){
-      // Pick dominant active food's GI for the spawned particle colour
-      var _activeMeals = _getActiveMealEvents();
-      var _domGI = 55;
-      if (_activeMeals.length > 0) {
-        var _bestFood = null, _bestCarbs = 0;
-        _activeMeals.forEach(function(meal) {
-          if (!meal.items) return;
-          meal.items.forEach(function(food) {
-            var elapsed = (viewTime - meal.t) / 60000;
-            var rem = _cobFgi(elapsed, food.gi || 55) * (food.carbs || 0);
-            if (rem > _bestCarbs) { _bestCarbs = rem; _bestFood = food; }
+      // Pick dominant active food GI for particle colour
+      var _am=_getActiveMealEvents(), _domGI=55;
+      if(_am.length>0){
+        var _bf=null,_bc=0;
+        _am.forEach(function(meal){
+          if(!meal.items) return;
+          meal.items.forEach(function(food){
+            var e=(viewTime-meal.t)/60000;
+            var rem=_cobFgi(e,food.gi||55)*(food.carbs||0);
+            if(rem>_bc){_bc=rem;_bf=food;}
           });
         });
-        if (_bestFood) _domGI = _bestFood.gi || 55;
+        if(_bf) _domGI=_bf.gi||55;
       }
-      if(Math.random()<_cobReservoir*0.88) _spawnForceParticle('cob', _domGI);
+      if(Math.random()<_cobReservoir*0.88) _spawnForceParticle('cob',_domGI);
       if(Math.random()<_iobReservoir*0.82) _spawnForceParticle('iob');
     }
     if(_forceFrame%15===0){
@@ -1399,10 +1412,9 @@ function drawGasCloud(cobPts, col, direction, d) {
       p.age++;
       var isCobP=p.type==='cob';
       if(p.state==='traveling'){
-        // Scrub-aware: scale alpha by COB reservoir so particles materialise
-        // when scrubbing into a meal and dissolve when scrubbing past absorption
-        var presenceScale = isCobP ? Math.max(0.15, _cobReservoir) : Math.max(0.15, _iobReservoir);
-        p.alpha=Math.min(presenceScale, p.alpha+0.065*presenceScale);
+        // Scrub-aware: scale alpha by reservoir so particles materialise/dissolve with scrub direction
+        var _pres=isCobP?Math.max(0.15,_cobReservoir):Math.max(0.15,_iobReservoir);
+        p.alpha=Math.min(_pres,p.alpha+0.065*_pres);
         p.y+=p.vy;
         p.x+=(NOW_X*W-p.x)*0.015;
         if(isCobP?p.y<=lineY:p.y>=lineY){p.state='sitting';p.y=lineY;}
@@ -8395,6 +8407,7 @@ function openSettingsTray() {
     { label: 'cgm',          icon: '◎', fn: function(){ closeSettingsTray(); openCGMSettings(); },      col: 'rgba(80,200,180,0.8)'  },
     { label: 'food library', icon: '◌', fn: function(){ closeSettingsTray(); openFoodManager(); },      col: 'rgba(220,150,60,0.8)'  },
     { label: 'treatment',    icon: '◈', fn: function(){ closeSettingsTray(); openTreatmentPanel(); },   col: 'rgba(180,100,220,0.8)' },
+    { label: 'visuals',      icon: '◐', fn: function(){ openVisualSettings(); },                         col: 'rgba(180,140,240,0.8)' },
   ];
 
   // Build items in reverse so they stack upward
@@ -8439,6 +8452,198 @@ function openSettingsTray() {
 
   document.body.appendChild(tray);
   setTimeout(function(){ tray.style.opacity='1'; tray.style.transform='translateY(0)'; }, 10);
+}
+
+
+// ── VISUAL SETTINGS — background, trend line, carb palette, insulin colour ──
+function openVisualSettings() {
+  closeSettingsTray();
+  var ex = document.getElementById('visual-settings-overlay');
+  if (ex) { ex.remove(); return; }
+
+  var el = document.createElement('div');
+  el.id = 'visual-settings-overlay';
+  el.style.cssText = [
+    'position:fixed', 'inset:0', 'z-index:80',
+    'background:rgba(3,5,18,0.97)',
+    'backdrop-filter:blur(18px)',
+    'overflow-y:auto', '-webkit-overflow-scrolling:touch',
+    'display:flex', 'flex-direction:column', 'align-items:center',
+    'padding:48px 20px 60px',
+    'opacity:0', 'transition:opacity .2s', 'pointer-events:auto',
+  ].join(';');
+  el.addEventListener('touchstart', function(e){ e.stopPropagation(); }, {passive:true});
+
+  // ── helpers ──────────────────────────────────────────────────────
+  function mono(s) { return "font-family:'DM Mono',monospace;font-size:" + (s||10) + "px"; }
+
+  function hexToRgb(hex) {
+    var r = parseInt(hex.slice(1,3),16), g = parseInt(hex.slice(3,5),16), b = parseInt(hex.slice(5,7),16);
+    return [r,g,b];
+  }
+  function rgbToHex(arr) {
+    return '#' + arr.map(function(v){ return Math.round(Math.max(0,Math.min(255,v))).toString(16).padStart(2,'0'); }).join('');
+  }
+
+  var vp = RIVER_VISUAL_PREFS;
+
+  // Current/default values
+  var curBg      = vp.bgTint  || '#060914';
+  var curLine    = vp.bgLine  ? rgbToHex(vp.bgLine)  : '#64dca0';
+  var curIOB     = vp.iobR    ? rgbToHex(vp.iobR)    : '#3c82dc';
+  var curCarbHot = vp.carbHot ? rgbToHex(vp.carbHot) : '#ffd228';
+  var curCarbCool= vp.carbCool? rgbToHex(vp.carbCool): '#5a64c8';
+
+  // ── heading ──────────────────────────────────────────────────────
+  var html = '';
+  html += '<div style="width:100%;max-width:420px">';
+  html += '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:28px">';
+  html += '<div style="font-family:\'Fraunces\',serif;font-weight:200;font-style:italic;font-size:22px;color:rgba(200,220,240,0.85)">visual settings</div>';
+  html += '<button onclick="document.getElementById(\'visual-settings-overlay\').remove()" style="background:none;border:none;cursor:pointer;font-size:22px;color:rgba(255,255,255,0.25);padding:4px">×</button>';
+  html += '</div>';
+
+  // ── section helper ────────────────────────────────────────────────
+  function section(label, content) {
+    return '<div style="margin-bottom:24px">' +
+      '<div style="' + mono(9) + ';letter-spacing:1px;text-transform:uppercase;color:rgba(255,255,255,0.25);margin-bottom:10px">' + label + '</div>' +
+      content +
+      '</div>';
+  }
+  function swatchRow(id, label, value, note) {
+    return '<div style="display:flex;align-items:center;justify-content:space-between;' +
+      'padding:11px 14px;border-radius:10px;background:rgba(255,255,255,0.03);' +
+      'border:1px solid rgba(255,255,255,0.06);margin-bottom:8px">' +
+      '<div>' +
+        '<div style="' + mono(11) + ';color:rgba(200,220,240,0.75)">' + label + '</div>' +
+        (note ? '<div style="' + mono(9) + ';color:rgba(255,255,255,0.25);margin-top:2px">' + note + '</div>' : '') +
+      '</div>' +
+      '<div style="display:flex;align-items:center;gap:8px">' +
+        '<div style="width:26px;height:26px;border-radius:6px;background:' + value + ';border:1px solid rgba(255,255,255,0.12);cursor:pointer" onclick="document.getElementById(\'' + id + '-picker\').click()"></div>' +
+        '<input type="color" id="' + id + '-picker" value="' + value + '" style="width:0;height:0;opacity:0;border:none;padding:0">' +
+      '</div>' +
+      '</div>';
+  }
+
+  // Background tint
+  html += section('background', swatchRow('bg', 'void colour', curBg, 'overall canvas dark tone'));
+
+  // Trend line
+  html += section('glucose trend line',
+    swatchRow('line', 'in-range colour', curLine, 'colour when BG is within target') +
+    '<div style="' + mono(9) + ';color:rgba(255,255,255,0.2);padding:4px 4px 0">low → amber, high → warm white — these adapt automatically</div>'
+  );
+
+  // Insulin
+  html += section('insulin (iob)', swatchRow('iob', 'insulin colour', curIOB, 'teardrops and reservoir'));
+
+  // Carb palette
+  html += section('carb palette',
+    '<div style="margin-bottom:8px">' +
+      swatchRow('carbHot', 'fast carbs (GI 100)', curCarbHot, 'jelly beans, glucose tabs, juice') +
+      swatchRow('carbCool', 'slow carbs (GI 0)', curCarbCool, 'lentils, whole grain, low-GI foods') +
+    '</div>' +
+    '<div id="gi-ramp-preview" style="height:10px;border-radius:5px;margin-bottom:6px;border:1px solid rgba(255,255,255,0.08)"></div>' +
+    '<div style="display:flex;justify-content:space-between;' + mono(8) + ';color:rgba(255,255,255,0.2)">' +
+      '<span>GI 100</span><span>GI 50</span><span>GI 0</span>' +
+    '</div>'
+  );
+
+  // Preset themes
+  html += section('quick themes',
+    '<div style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px">' +
+      _vsThemeBtn('river (default)', '#060914', '#64dca0', '#3c82dc', '#ffd228', '#5a64c8') +
+      _vsThemeBtn('woodcut', '#100a06', '#c8b090', '#7060b0', '#e8c060', '#8090b0') +
+      _vsThemeBtn('ink', '#080808', '#d0d0d0', '#404060', '#e0e0e0', '#606080') +
+      _vsThemeBtn('dawn', '#100810', '#f0a080', '#4060c0', '#f8c040', '#a070d0') +
+      _vsThemeBtn('ocean', '#040e18', '#40c8e0', '#2060c0', '#60e0c0', '#2080a0') +
+      _vsThemeBtn('forest', '#040c06', '#80d070', '#306050', '#c0d040', '#405030') +
+    '</div>'
+  );
+
+  html += '<div style="display:flex;gap:10px;margin-top:8px">';
+  html += '<button onclick="applyVisualSettings()" style="flex:1;padding:13px;border-radius:10px;border:1px solid rgba(62,180,120,0.3);background:rgba(62,180,120,0.08);font-family:\'Fraunces\',serif;font-style:italic;font-weight:200;font-size:16px;color:rgba(62,180,120,0.9);cursor:pointer">apply</button>';
+  html += '<button onclick="resetVisualSettings()" style="padding:13px 16px;border-radius:10px;border:1px solid rgba(255,255,255,0.08);background:transparent;' + mono(10) + ';color:rgba(255,255,255,0.3);cursor:pointer">reset</button>';
+  html += '</div>';
+  html += '</div>';
+
+  el.innerHTML = html;
+  document.body.appendChild(el);
+  setTimeout(function(){ el.style.opacity='1'; }, 10);
+
+  _vsUpdateRampPreview();
+
+  // Live preview on swatch change
+  ['bg','line','iob','carbHot','carbCool'].forEach(function(id){
+    var picker = document.getElementById(id+'-picker');
+    if (!picker) return;
+    picker.addEventListener('input', function() {
+      // Update swatch dot
+      var swatch = picker.previousElementSibling;
+      if (swatch) swatch.style.background = picker.value;
+      if (id==='carbHot'||id==='carbCool') _vsUpdateRampPreview();
+    });
+  });
+}
+
+function _vsThemeBtn(name, bg, line, iob, carbHot, carbCool) {
+  var dots = [carbHot, line, iob].map(function(c){
+    return '<div style="width:8px;height:8px;border-radius:50%;background:'+c+'"></div>';
+  }).join('');
+  return '<button onclick="_vsApplyTheme(\''+bg+'\',\''+line+'\',\''+iob+'\',\''+carbHot+'\',\''+carbCool+'\')" ' +
+    'style="padding:10px 8px;border-radius:9px;border:1px solid rgba(255,255,255,0.08);' +
+    'background:'+bg+';cursor:pointer;display:flex;flex-direction:column;align-items:center;gap:5px">' +
+    '<div style="display:flex;gap:4px">'+dots+'</div>' +
+    '<div style="font-family:\'DM Mono\',monospace;font-size:8px;color:rgba(255,255,255,0.4)">'+name+'</div>' +
+    '</button>';
+}
+
+function _vsApplyTheme(bg, line, iob, carbHot, carbCool) {
+  function setP(id, val) {
+    var p = document.getElementById(id+'-picker');
+    var s = p ? p.previousElementSibling : null;
+    if (p) p.value = val;
+    if (s) s.style.background = val;
+  }
+  setP('bg', bg); setP('line', line); setP('iob', iob);
+  setP('carbHot', carbHot); setP('carbCool', carbCool);
+  _vsUpdateRampPreview();
+}
+
+function _vsUpdateRampPreview() {
+  var preview = document.getElementById('gi-ramp-preview');
+  if (!preview) return;
+  var hotPicker = document.getElementById('carbHot-picker');
+  var coolPicker = document.getElementById('carbCool-picker');
+  var hot = hotPicker ? hotPicker.value : '#ffd228';
+  var cool = coolPicker ? coolPicker.value : '#5a64c8';
+  preview.style.background = 'linear-gradient(to left, '+cool+', #6cb05a, #e06450, #ff8c32, '+hot+')';
+}
+
+function applyVisualSettings() {
+  function hexToRgbA(id) {
+    var p = document.getElementById(id+'-picker');
+    if (!p) return null;
+    var h = p.value;
+    return [parseInt(h.slice(1,3),16), parseInt(h.slice(3,5),16), parseInt(h.slice(5,7),16)];
+  }
+  var vp = {};
+  var bg = document.getElementById('bg-picker');
+  if (bg) vp.bgTint = bg.value;
+  vp.bgLine   = hexToRgbA('line');
+  vp.iobR     = hexToRgbA('iob');
+  vp.carbHot  = hexToRgbA('carbHot');
+  vp.carbCool = hexToRgbA('carbCool');
+  RIVER_VISUAL_PREFS = vp;
+  saveVisualPrefs();
+  var el = document.getElementById('visual-settings-overlay');
+  if (el) { el.style.opacity='0'; setTimeout(function(){ el.remove(); }, 200); }
+}
+
+function resetVisualSettings() {
+  RIVER_VISUAL_PREFS = {};
+  saveVisualPrefs();
+  var el = document.getElementById('visual-settings-overlay');
+  if (el) { el.style.opacity='0'; setTimeout(function(){ el.remove(); }, 200); }
 }
 
 function closeSettingsTray() {
