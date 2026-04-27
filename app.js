@@ -337,6 +337,37 @@ const COL_COB   = [255, 140,  50];  // warm orange  — carb buoyancy
 const COL_HYPO  = [255, 210,  40];  // golden yellow — hypo lightning
 const COL_BGLOW = [80,  130, 220];  // blue when low
 const COL_BGHIGH= [230, 140,  40];  // amber when high
+
+// GI colour ramp — continuous interpolation from hot (fast carbs) to cool (slow carbs)
+// Each stop: [gi_threshold, r, g, b]
+// GI 100 = jelly bean hot yellow / GI 10 = cool lavender-blue
+const GI_COLOUR_RAMP = [
+  [100, 255, 210,  40],   // hot yellow  — pure glucose, jelly beans
+  [ 75, 255, 140,  50],   // warm orange — white bread, sports drink
+  [ 55, 230, 100,  80],   // coral       — ripe banana, rice
+  [ 35, 160, 180,  90],   // sage green  — pasta, oats
+  [ 20, 110, 160, 190],   // slate blue  — lentils, whole grain
+  [  0,  90, 100, 200],   // cool lavender-blue — lowest GI foods
+];
+
+// Pure function — maps any GI value to [r, g, b] by interpolating the ramp
+function giToColour(gi) {
+  gi = Math.max(0, Math.min(100, gi || 55));
+  var ramp = GI_COLOUR_RAMP;
+  // Find the two stops that bracket this GI value
+  for (var i = 0; i < ramp.length - 1; i++) {
+    var hi = ramp[i], lo = ramp[i + 1];
+    if (gi >= lo[0]) {
+      var f = (gi - lo[0]) / (hi[0] - lo[0]); // 0=lo, 1=hi
+      return [
+        Math.round(lo[1] + f * (hi[1] - lo[1])),
+        Math.round(lo[2] + f * (hi[2] - lo[2])),
+        Math.round(lo[3] + f * (hi[3] - lo[3])),
+      ];
+    }
+  }
+  return ramp[ramp.length - 1].slice(1);
+}
 const BG_MIN  = 2.0, BG_MAX  = 18.0;
 const MAX_IOB = 6.0, MAX_COB = 80.0;
 const NOW_X   = 0.62;
@@ -972,11 +1003,9 @@ function _drawCOBReservoir() {
       var remaining  = _cobFgi(elapsedMin, gi);
       if (remaining < 0.02) return;
 
-      // GI speed → colour
-      var rv, gv, bv;
-      if      (gi >= 70) { rv=255; gv=90;  bv=30;  }  // hot red-orange: fast
-      else if (gi >= 55) { rv=255; gv=150; bv=40;  }  // warm orange: medium
-      else               { rv=180; gv=200; bv=60;  }  // olive-green: slow
+      // GI → colour via continuous ramp
+      var giCol = giToColour(gi);
+      var rv = giCol[0], gv = giCol[1], bv = giCol[2];
 
       // Zoom-aware bell width — faster GI = narrower bell
       var sigmaFactor = gi >= 70 ? 0.6 : gi >= 55 ? 1.0 : 1.5;
@@ -1127,13 +1156,16 @@ function buildSmartForecast() {
 
 // ── PARTICLES ────────────────────────────────────────────────────────
 
-function _spawnForceParticle(type) {
+function _spawnForceParticle(type, gi) {
   var isCob = type==='cob';
   var level = isCob ? _cobReservoir : _iobReservoir;
   if (level < 0.02) return;
   var r = 2.8 + Math.random()*2.5;
+  // Carry GI colour for COB particles; IOB uses its own fixed colour
+  var col = isCob ? giToColour(gi || 55) : COL_IOB;
   _forceParticles.push({
     type:type, r:r, baseR:r,
+    col:col,   // per-particle colour [r,g,b]
     x: NOW_X*W + (Math.random()-0.5)*28,
     y: isCob ? H+4 : -4,
     vy: isCob ? -(1.6+Math.random()*0.7) : (1.6+Math.random()*0.7),
@@ -1144,9 +1176,10 @@ function _spawnForceParticle(type) {
   });
 }
 
-function _spawnMist(type, x, y) {
+function _spawnMist(type, x, y, col) {
   _forceMists.push({
     type:type, x:x, y:y,
+    col: col || (type==='cob' ? COL_COB : COL_IOB),
     r:7+Math.random()*14, life:0, maxLife:180+Math.random()*200,
     vx:(Math.random()-0.5)*0.2,
     vy:type==='cob' ? -(0.06+Math.random()*0.1) : (0.06+Math.random()*0.1),
@@ -1194,7 +1227,7 @@ function _drawMists() {
   _forceMists.forEach(function(m){
     var t=m.life/m.maxLife;
     var a=t<0.2?m.maxAlpha*(t/0.2):m.maxAlpha*(1-(t-0.2)/0.8);
-    var col=m.type==='cob'?COL_COB:COL_IOB;
+    var col=m.col || (m.type==='cob'?COL_COB:COL_IOB);
     CX.beginPath();
     CX.arc(m.x+Math.sin(_forceFrame*0.025+m.phase)*5, m.y, m.r*(0.7+t*0.5), 0, Math.PI*2);
     CX.fillStyle='rgba('+col[0]+','+col[1]+','+col[2]+','+Math.max(0,a)+')';
@@ -1206,7 +1239,8 @@ function _drawForceParticles(lineY) {
   var nx=NOW_X*W;
   _forceParticles.forEach(function(p){
     var isCob=p.type==='cob';
-    var col=isCob?COL_COB:COL_IOB;
+    // Use per-particle colour (carries GI colour for COB, fixed blue for IOB)
+    var col=p.col||(isCob?COL_COB:COL_IOB);
     var rv=col[0],gv=col[1],bv=col[2];
     var wobX=Math.sin(_forceFrame*0.045+p.phase)*1.8;
     var wobY=p.state==='sitting'?Math.sin(_forceFrame*0.07+p.phase*1.2)*1.0:0;
@@ -1226,13 +1260,15 @@ function _drawForceParticles(lineY) {
     }
 
     if(isCob){
-      // Bubble
+      // Bubble — colour from GI ramp
       CX.beginPath(); CX.arc(px,py,rad,0,Math.PI*2);
       CX.fillStyle='rgba('+rv+','+gv+','+bv+','+(a*0.15)+')'; CX.fill();
       CX.strokeStyle='rgba('+rv+','+gv+','+bv+','+(a*0.88)+')';
       CX.lineWidth=1.3; CX.stroke();
+      // Highlight — warm for hot GI, cool for slow GI
+      var hlR=rv>200?255:200, hlG=gv>150?228:210, hlB=bv<100?175:220;
       CX.beginPath(); CX.arc(px-rad*0.28,py-rad*0.32,rad*0.25,0,Math.PI*2);
-      CX.fillStyle='rgba(255,228,175,'+(a*0.48)+')'; CX.fill();
+      CX.fillStyle='rgba('+hlR+','+hlG+','+hlB+','+(a*0.48)+')'; CX.fill();
       if(p.age>120){
         var haze=Math.min((p.age-120)/150,0.6);
         CX.beginPath(); CX.arc(px,py,rad*1.6,0,Math.PI*2);
@@ -1245,7 +1281,7 @@ function _drawForceParticles(lineY) {
         CX.fillStyle='rgba('+rv+','+gv+','+bv+','+(a*0.35)+')'; CX.fill();
       }
     } else {
-      // Teardrop
+      // Teardrop — IOB fixed blue unchanged
       var s=rad;
       CX.beginPath();
       CX.moveTo(px,py-s*1.4);
@@ -1283,16 +1319,28 @@ function _drawSparks() {
 
 function _drawPressureGlow(lineY) {
   var nx=NOW_X*W, cobC=0, iobC=0;
+  var cobR=COL_COB[0], cobG=COL_COB[1], cobB=COL_COB[2];
+  var cobColWeight=0;
   _forceParticles.forEach(function(p){
     if(p.state==='traveling') return;
     var a=p.state==='fading'?p.fadeAlpha:1;
-    if(p.type==='cob') cobC+=a*p.baseR; else iobC+=a*p.baseR;
+    if(p.type==='cob') {
+      cobC+=a*p.baseR;
+      // Weighted average colour of sitting COB particles
+      if (p.col && a > 0.1) {
+        var w = a * p.baseR;
+        cobR = (cobR * cobColWeight + p.col[0] * w) / (cobColWeight + w);
+        cobG = (cobG * cobColWeight + p.col[1] * w) / (cobColWeight + w);
+        cobB = (cobB * cobColWeight + p.col[2] * w) / (cobColWeight + w);
+        cobColWeight += w;
+      }
+    } else iobC+=a*p.baseR;
   });
   if(cobC>0.5){
     var h=Math.min(cobC*2.4,52);
     var gr=CX.createLinearGradient(0,lineY,0,lineY+h);
-    gr.addColorStop(0,'rgba('+COL_COB[0]+','+COL_COB[1]+','+COL_COB[2]+',0.3)');
-    gr.addColorStop(1,'rgba('+COL_COB[0]+','+COL_COB[1]+','+COL_COB[2]+',0)');
+    gr.addColorStop(0,'rgba('+Math.round(cobR)+','+Math.round(cobG)+','+Math.round(cobB)+',0.3)');
+    gr.addColorStop(1,'rgba('+Math.round(cobR)+','+Math.round(cobG)+','+Math.round(cobB)+',0)');
     CX.beginPath(); CX.ellipse(nx,lineY+h/2,44,h/2,0,0,Math.PI*2);
     CX.fillStyle=gr; CX.fill();
   }
@@ -1320,7 +1368,22 @@ function drawGasCloud(cobPts, col, direction, d) {
       _iobReservoir  = Math.max(0,Math.min(1,_iobReservoir));
     }
     if(_forceFrame%20===0){
-      if(Math.random()<_cobReservoir*0.88) _spawnForceParticle('cob');
+      // Pick dominant active food's GI for the spawned particle colour
+      var _activeMeals = _getActiveMealEvents();
+      var _domGI = 55;
+      if (_activeMeals.length > 0) {
+        var _bestFood = null, _bestCarbs = 0;
+        _activeMeals.forEach(function(meal) {
+          if (!meal.items) return;
+          meal.items.forEach(function(food) {
+            var elapsed = (viewTime - meal.t) / 60000;
+            var rem = _cobFgi(elapsed, food.gi || 55) * (food.carbs || 0);
+            if (rem > _bestCarbs) { _bestCarbs = rem; _bestFood = food; }
+          });
+        });
+        if (_bestFood) _domGI = _bestFood.gi || 55;
+      }
+      if(Math.random()<_cobReservoir*0.88) _spawnForceParticle('cob', _domGI);
       if(Math.random()<_iobReservoir*0.82) _spawnForceParticle('iob');
     }
     if(_forceFrame%15===0){
@@ -1328,7 +1391,7 @@ function drawGasCloud(cobPts, col, direction, d) {
       _forceParticles.forEach(function(p){
         if(p.state==='sitting'&&p.age>70&&Math.random()<0.065)
           _spawnMist(p.type, p.x+(Math.random()-0.5)*24,
-            lineY+(p.type==='cob'?1:-1)*(10+Math.random()*20));
+            lineY+(p.type==='cob'?1:-1)*(10+Math.random()*20), p.col);
       });
     }
     var lineY=d?bgToY(d.bg):H/2;
@@ -1336,7 +1399,10 @@ function drawGasCloud(cobPts, col, direction, d) {
       p.age++;
       var isCobP=p.type==='cob';
       if(p.state==='traveling'){
-        p.alpha=Math.min(1,p.alpha+0.065);
+        // Scrub-aware: scale alpha by COB reservoir so particles materialise
+        // when scrubbing into a meal and dissolve when scrubbing past absorption
+        var presenceScale = isCobP ? Math.max(0.15, _cobReservoir) : Math.max(0.15, _iobReservoir);
+        p.alpha=Math.min(presenceScale, p.alpha+0.065*presenceScale);
         p.y+=p.vy;
         p.x+=(NOW_X*W-p.x)*0.015;
         if(isCobP?p.y<=lineY:p.y>=lineY){p.state='sitting';p.y=lineY;}
