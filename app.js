@@ -5110,15 +5110,9 @@ async function _parseSpeechToFood(transcript) {
 
   _showFoodAIStatus('parsing meal\u2026');
   try {
-    var proxyUrl = 'https://orange-surf-6f98.john-king-uk.workers.dev/?url=' +
-      encodeURIComponent('https://api.anthropic.com/v1/messages');
-    var r = await fetch(proxyUrl, {
+    var r = await fetch('https://orange-surf-6f98.john-king-uk.workers.dev/claude', {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'anthropic-version': '2023-06-01',
-        'anthropic-dangerous-direct-browser-access': 'true',
-      },
+      headers: { 'Content-Type': 'application/json', 'anthropic-version': '2023-06-01' },
       body: JSON.stringify({
         model: 'claude-sonnet-4-20250514',
         max_tokens: 700,
@@ -5381,15 +5375,9 @@ async function handleFoodPhoto(inputEl) {
     });
 
     var mediaType = file.type || 'image/jpeg';
-    var proxyUrl = 'https://orange-surf-6f98.john-king-uk.workers.dev/?url=' +
-      encodeURIComponent('https://api.anthropic.com/v1/messages');
-    var r = await fetch(proxyUrl, {
+    var r = await fetch('https://orange-surf-6f98.john-king-uk.workers.dev/claude', {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'anthropic-version': '2023-06-01',
-        'anthropic-dangerous-direct-browser-access': 'true',
-      },
+      headers: { 'Content-Type': 'application/json', 'anthropic-version': '2023-06-01' },
       body: JSON.stringify({
         model: 'claude-sonnet-4-20250514',
         max_tokens: 400,
@@ -5442,8 +5430,7 @@ async function checkFoodPaste(val) {
 
   try {
     // Fetch via Worker to avoid CORS
-    var workerUrl = 'https://orange-surf-6f98.john-king-uk.workers.dev/?url=' +
-      encodeURIComponent('https://api.anthropic.com/v1/messages');
+    var workerUrl = 'https://orange-surf-6f98.john-king-uk.workers.dev/claude';
 
     // First fetch the page text via a simple proxy approach —
     // We ask Claude to use its knowledge about the URL domain to estimate,
@@ -5463,7 +5450,6 @@ async function checkFoodPaste(val) {
       headers: {
         'Content-Type': 'application/json',
         'anthropic-version': '2023-06-01',
-        'anthropic-dangerous-direct-browser-access': 'true',
       },
       body: JSON.stringify({
         model: 'claude-sonnet-4-20250514',
@@ -6949,8 +6935,8 @@ async function suggestGI(foodName, inputEl) {
   if (!foodName || foodName.length < 2) return 55;
   if (inputEl) inputEl.placeholder = '...';
   try {
-    var resp = await fetch('https://api.anthropic.com/v1/messages', {
-      method:'POST', headers:{'Content-Type':'application/json'},
+    var resp = await fetch('https://orange-surf-6f98.john-king-uk.workers.dev/claude', {
+      method:'POST', headers:{'Content-Type':'application/json','anthropic-version':'2023-06-01'},
       body: JSON.stringify({model:'claude-sonnet-4-20250514', max_tokens:60,
         messages:[{role:'user', content:'Single integer only: glycaemic index for "'+foodName+'". Just the number 1-100.'}]})
     });
@@ -8291,15 +8277,9 @@ async function sendWhisper() {
 
   try {
     // Route through Cloudflare proxy — add anthropic-version header
-    var proxyUrl = 'https://orange-surf-6f98.john-king-uk.workers.dev/?url=' +
-      encodeURIComponent('https://api.anthropic.com/v1/messages');
-    var r = await fetch(proxyUrl, {
+    var r = await fetch('https://orange-surf-6f98.john-king-uk.workers.dev/claude', {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'anthropic-version': '2023-06-01',
-        'anthropic-dangerous-direct-browser-access': 'true',
-      },
+      headers: { 'Content-Type': 'application/json', 'anthropic-version': '2023-06-01' },
       body: JSON.stringify({
         model: 'claude-sonnet-4-20250514',
         max_tokens: 180,
