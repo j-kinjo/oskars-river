@@ -1157,11 +1157,20 @@ function _drawCOBReservoir() {
       var minD  = Math.min(availableH * 0.12, 18);
       maxD = Math.max(minD * remaining, maxD);
 
+      // Draw bell in TIME-SPACE, not pixel-space.
+      // This correctly handles peakT off-screen left or right.
+      // For each pixel, compute its canvas time and evaluate distance to peakT.
+      var sigmaMins = peakMin / 2.2; // absorption width in minutes (mirrors _cobFgi sigma)
+      function bellH(px) {
+        var t_px = viewTime + (px - NOW_X*W) / W * viewSpan;
+        var minsDist = (t_px - peakT) / 60000;
+        return Math.exp(-0.5 * Math.pow(minsDist / sigmaMins, 2)) * maxD;
+      }
       CX.beginPath();
       CX.moveTo(0, H);
       for (var i = 0; i <= 280; i++) {
         var px = (i/280)*W;
-        CX.lineTo(px, H - Math.exp(-0.5*Math.pow((px-peakX)/sigma,2))*maxD);
+        CX.lineTo(px, H - bellH(px));
       }
       CX.lineTo(W, H); CX.closePath();
 
@@ -1175,20 +1184,25 @@ function _drawCOBReservoir() {
       CX.beginPath();
       for (var i = 0; i <= 280; i++) {
         var px = (i/280)*W;
-        var py = H - Math.exp(-0.5*Math.pow((px-peakX)/sigma,2))*maxD;
+        var py = H - bellH(px);
         i===0 ? CX.moveTo(px,py) : CX.lineTo(px,py);
       }
       CX.strokeStyle='rgba('+rv+','+gv+','+bv+','+(0.35+remaining*0.45)+')';
       CX.lineWidth=1.2; CX.stroke();
 
-      // Food label at peak
-      if (food.carbs >= 2 && peakX > 30 && peakX < W-30 && maxD > 14) {
-        CX.globalAlpha = remaining * 0.65;
-        CX.fillStyle   = 'rgba('+rv+','+gv+','+bv+',1)';
-        CX.font        = "300 8px 'DM Mono',monospace";
-        CX.textAlign   = 'center';
-        CX.fillText(food.name.slice(0,14)+' '+food.carbs.toFixed(0)+'g', peakX, H-maxD-6);
-        CX.globalAlpha = 1;
+      // Food label — at peak if on screen, else at visible maximum
+      if (food.carbs >= 2 && maxD > 14) {
+        // Find the pixel with highest bell value within screen bounds
+        var labelX = Math.max(30, Math.min(W-30, peakX));
+        var labelH = bellH(labelX);
+        if (labelH > maxD * 0.15) { // only label if bell is meaningfully tall here
+          CX.globalAlpha = remaining * 0.65;
+          CX.fillStyle   = 'rgba('+rv+','+gv+','+bv+',1)';
+          CX.font        = "300 8px 'DM Mono',monospace";
+          CX.textAlign   = 'center';
+          CX.fillText(food.name.slice(0,14)+' '+food.carbs.toFixed(0)+'g', labelX, H-labelH-6);
+          CX.globalAlpha = 1;
+        }
       }
       // Track peak Y for pill positioning (highest bell = closest to BG line)
       var thisPeakY = H - maxD;
