@@ -5138,7 +5138,18 @@ async function _parseSpeechToFood(transcript) {
       return { name: n, grams: Math.max(1, Math.round(Number(it.grams)||100)), dish: it.dish||null };
     });
     _hideFoodAIStatus();
-    if (!items.length) { showToast('Could not parse — try searching manually'); return; }
+    console.log('[voice] raw response text:', text.slice(0,300));
+    console.log('[voice] parsed items:', JSON.stringify(items));
+    if (!items.length) {
+      _showVoicePanel(
+        '<div onclick="_closeVoicePanel()" style="padding:18px;font-family:\'DM Mono\',monospace;font-size:11px;color:rgba(220,200,160,0.8)">' +
+        '<div style="font-size:9px;color:rgba(62,200,140,0.7);margin-bottom:8px">heard · nothing matched</div>' +
+        '&ldquo;' + transcript.slice(0,120) + '&rdquo;' +
+        '<div style="font-size:9px;color:rgba(130,160,220,0.55);margin-top:8px">tap to dismiss</div>' +
+        '</div>'
+      );
+      return;
+    }
     _showVoiceResults(items, transcript);
   } catch(err) {
     console.warn('[voice food] parse error:', err);
