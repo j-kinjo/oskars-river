@@ -7321,6 +7321,18 @@ function ingestReadings(readings) {
   }
   if (changed) persistReadings();
   _historyIsStale = false; // live data has arrived — HUD can show real values
+
+  // Purge scenario-only BOLUS_EVENTS (have no matching LOGGED_EVENTS entry)
+  // Prevents equilibrium/demo data from showing as chips when live CGM connects
+  if (_activeDemoId) {
+    var loggedTs = new Set(LOGGED_EVENTS.map(function(e){ return e.t; }));
+    var before = BOLUS_EVENTS.length;
+    BOLUS_EVENTS = BOLUS_EVENTS.filter(function(b){ return loggedTs.has(b.t); });
+    SESSION      = SESSION.filter(function(s){ return loggedTs.has(s.t); });
+    if (BOLUS_EVENTS.length < before) {
+      _activeDemoId = null; // demo is no longer active
+    }
+  }
 }
 
 function formatAge(t) {
