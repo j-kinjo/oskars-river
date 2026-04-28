@@ -244,6 +244,7 @@ async function syncNow(silent) {
     var sinceT    = _lastSyncT || Date.now() - 7 * 86400000;
     var newRead   = await syncPullReadings(sinceT);
     var newEvents = await syncPullEvents(sinceT);
+    syncPullPricks(sinceT);
 
     _lastSyncT  = Date.now();
     _syncState  = 'ok';
@@ -3397,6 +3398,7 @@ function frame(ts) {
 
   // ── EVENT MARKERS — ripples where forces entered ───────────────
   drawBolusMarkers(pal);
+  drawBloodPricks();
   drawBasalReservoir(pal);  // subtle always-present basal drip
 
   // ── CONTEXT ─────────────────────────────────────────────────────
@@ -3477,10 +3479,20 @@ CV.addEventListener('mousedown',e=>{if(!e.target.closest('#sheet,#flow-dock,.doc
 CV.addEventListener('mousemove',e=>{if(md.on)viewTime=Math.max(CGM_START,Math.min(CGM_END,md.t0-(e.clientX-md.x0)*(viewSpan/W)))});
 CV.addEventListener('mouseup',()=>md.on=false);
 CV.addEventListener('click', function(e) {
-  if (!window._eventCards || _eventCards.length === 0) return;
   var rect = CV.getBoundingClientRect();
   var mx = e.clientX - rect.left;
   var my = e.clientY - rect.top;
+  // Check prick diamonds first
+  var pCards = window._prickCards || [];
+  for (var pi = 0; pi < pCards.length; pi++) {
+    var pc = pCards[pi];
+    if (Math.hypot(mx - pc.x, my - pc.y) < pc.r) {
+      openPrickEditor(pc.idx);
+      return;
+    }
+  }
+  // Check bolus/carb event cards
+  if (!window._eventCards || _eventCards.length === 0) return;
   for (var ci = 0; ci < _eventCards.length; ci++) {
     var c = _eventCards[ci];
     if (mx >= c.x - c.w/2 && mx <= c.x + c.w/2 && my >= c.y - 12 && my <= c.y + 12) {
@@ -3536,9 +3548,10 @@ function setTimeNow() {
   var el = document.getElementById('in-time');
   if (el) el.value = val;
 }
-var _entryTimeVal = null;
-var _bolusVal = null;
+var _entryTimeVal    = null;
+var _bolusVal        = null;
 var _eatWaitOverride = null; // preserved across renderSheet() calls
+var _radialDefaultT  = null; // river timestamp from long press — pre-fills modal time pickers
 
 function getEntryTime() {
   var el = document.getElementById('in-time');
@@ -4714,7 +4727,14 @@ function openSheet() {
     s.classList.add('open');
     requestAnimationFrame(function(){ s.style.opacity = '1'; });
   }
-  setTimeNow();
+  if (_radialDefaultT) {
+    var _rdt = new Date(_radialDefaultT);
+    var _rdtLocal = new Date(_rdt.getTime() - _rdt.getTimezoneOffset()*60000);
+    setEntryTime(_rdtLocal.toISOString().slice(0,16));
+    _radialDefaultT = null;
+  } else {
+    setTimeNow();
+  }
 }
 
 // Long-press food button → kitchen mode; tap → quick log
@@ -7072,7 +7092,8 @@ function openHypoLog() {
   el.style.cssText='position:fixed;inset:0;z-index:60;background:rgba(3,5,20,0.9);backdrop-filter:blur(14px);display:flex;flex-direction:column;align-items:center;justify-content:center;padding:24px;transition:opacity .25s;opacity:0;touch-action:pan-y;pointer-events:auto';
   el.addEventListener('touchstart',function(e){e.stopPropagation();},{passive:true});
   el.addEventListener('click',function(e){if(e.target===el)closeHypoLog();});
-  var _hypoDefault = new Date();
+  var _hypoDefault = (_radialDefaultT) ? new Date(_radialDefaultT) : new Date();
+  _radialDefaultT = null;
   var s='<div style="max-width:360px;width:100%">';
   s+='<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:4px">';
   s+='<div style="font-family:\'Fraunces\',serif;font-style:italic;font-weight:200;font-size:22px;color:rgba(255,210,40,0.9)">hypo treatment</div>';
@@ -7156,7 +7177,8 @@ function openCorrectionLog(){
   var ex=document.getElementById('corr-overlay');if(ex){ex.remove();return;}
   var el=document.createElement('div');el.id='corr-overlay';
   el.style.cssText='position:fixed;inset:0;z-index:60;background:rgba(3,5,20,0.9);backdrop-filter:blur(14px);display:flex;flex-direction:column;align-items:center;justify-content:center;padding:24px;transition:opacity .25s;opacity:0';
-  var _corrDefault = new Date();
+  var _corrDefault = (_radialDefaultT) ? new Date(_radialDefaultT) : new Date();
+  _radialDefaultT = null;
   var s='<div style="max-width:320px;width:100%">';
   s+='<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:4px">';
   s+='<div style="font-family:\'Fraunces\',serif;font-style:italic;font-weight:200;font-size:22px;color:rgba(100,160,255,0.9)">correction</div>';
@@ -8104,72 +8126,75 @@ function animateFlick() {
   else ctx.clearRect(0, 0, fc.width, fc.height);
 }
 
-// ── ORB LONG PRESS — whisper to the River ─────────────────────────────
+// ── ORB / CANVAS LONG PRESS ────────────────────────────────────────────────
+// Short press on orb → hint  |  Long press on orb → radial menu
+// Long press anywhere else on canvas → radial menu with time = river position at press x
 let _orbPressTimer = null;
 let _whisperOpen   = false;
+// _radialDefaultT declared at top of file
 
 function setupOrbLongPress() {
   const cv = document.getElementById('c');
   if (!cv) return;
 
   var _orbTouchStartT = 0;
+  var _pressClientX   = 0;
+  var _pressOnOrb     = false;
+
+  function _onPressStart(clientX, clientY) {
+    const orbX = NOW_X * W;
+    const d    = dataAt ? dataAt(viewTime) : null;
+    const orbY = d ? bgToY(d.bg) : H * 0.6;
+    const dist = Math.hypot(clientX - orbX, clientY - orbY);
+    _pressOnOrb     = dist < 44;
+    _pressClientX   = clientX;
+    _orbTouchStartT = Date.now();
+    // Compute river time at press x position
+    var rect = cv.getBoundingClientRect();
+    _radialDefaultT = Math.round(xT(clientX - rect.left));
+    if (_pressOnOrb) _orbLongPressHint = 1.0;
+    _orbPressTimer = setTimeout(function() {
+      if (navigator.vibrate) navigator.vibrate(30);
+      openOrbRadialMenu(_radialDefaultT);
+    }, 500);
+  }
+
+  function _onPressEnd() {
+    var dur = Date.now() - _orbTouchStartT;
+    if (_orbPressTimer) {
+      clearTimeout(_orbPressTimer);
+      _orbPressTimer = null;
+      // Short tap on orb (< 400ms) — show hint
+      if (_pressOnOrb && dur < 400 && _orbTouchStartT > 0) {
+        _orbTapHint  = 1.0;
+        _orbTapHintT = Date.now();
+      }
+    }
+    _orbTouchStartT = 0;
+    _pressOnOrb     = false;
+  }
 
   cv.addEventListener('touchstart', function(e) {
-    const t = e.touches[0];
-    const orbX = NOW_X * W;
-    const d    = dataAt ? dataAt(viewTime) : null;
-    const orbY = d ? bgToY(d.bg) : H * 0.6;
-    const dist = Math.hypot(t.clientX - orbX, t.clientY - orbY);
-    if (dist < 44) {
-      _orbTouchStartT = Date.now();
-      _orbLongPressHint = 1.0;
-      _orbPressTimer = setTimeout(function() {
-        if (navigator.vibrate) navigator.vibrate(30);
-        openOrbRadialMenu();
-      }, 500);
-    }
+    // Only single-finger, not on UI elements
+    if (e.touches.length !== 1) return;
+    _onPressStart(e.touches[0].clientX, e.touches[0].clientY);
   }, {passive:true});
-  cv.addEventListener('touchend', function() {
-    var dur = Date.now() - _orbTouchStartT;
-    if (_orbPressTimer) {
-      clearTimeout(_orbPressTimer);
-      _orbPressTimer = null;
-      // Short tap (< 400ms) — show the hint text
-      if (dur < 400 && _orbTouchStartT > 0) {
-        _orbTapHint = 1.0;
-        _orbTapHintT = Date.now();
-      }
-    }
-    _orbTouchStartT = 0;
+
+  cv.addEventListener('touchmove', function() {
+    // Cancel long press if finger moves (drag/scrub gesture)
+    if (_orbPressTimer) { clearTimeout(_orbPressTimer); _orbPressTimer = null; }
   }, {passive:true});
-  cv.addEventListener('mousedown', function(e) {
-    const orbX = NOW_X * W;
-    const d    = dataAt ? dataAt(viewTime) : null;
-    const orbY = d ? bgToY(d.bg) : H * 0.6;
-    const dist = Math.hypot(e.clientX - orbX, e.clientY - orbY);
-    if (dist < 44) {
-      _orbTouchStartT = Date.now();
-      _orbLongPressHint = 1.0;
-      _orbPressTimer = setTimeout(function() {
-        openOrbRadialMenu();
-      }, 500);
-    }
+
+  cv.addEventListener('touchend', function() { _onPressEnd(); }, {passive:true});
+
+  cv.addEventListener('mousedown', function(e) { _onPressStart(e.clientX, e.clientY); });
+  cv.addEventListener('mousemove', function() {
+    if (_orbPressTimer) { clearTimeout(_orbPressTimer); _orbPressTimer = null; }
   });
-  cv.addEventListener('mouseup', function() {
-    var dur = Date.now() - _orbTouchStartT;
-    if (_orbPressTimer) {
-      clearTimeout(_orbPressTimer);
-      _orbPressTimer = null;
-      if (dur < 400 && _orbTouchStartT > 0) {
-        _orbTapHint = 1.0;
-        _orbTapHintT = Date.now();
-      }
-    }
-    _orbTouchStartT = 0;
-  });
+  cv.addEventListener('mouseup', function() { _onPressEnd(); });
 }
 
-function openOrbRadialMenu() {
+function openOrbRadialMenu(defaultT) {
   var ex = document.getElementById('orb-radial-menu');
   if (ex) { ex.remove(); return; }
 
@@ -8177,13 +8202,20 @@ function openOrbRadialMenu() {
   var orbX  = NOW_X * W;
   var orbY  = d ? bgToY(d.bg) : window.innerHeight * 0.5;
 
+  // When opened from a river long press, center the menu at the press position
+  var menuX = (typeof defaultT !== 'undefined' && defaultT && typeof xT === 'function')
+    ? NOW_X * W + (defaultT - viewTime) / viewSpan * W
+    : orbX;
+
   // Items: label, icon, action, colour
+  // For prick and other modals, thread the defaultT so they pre-fill with river time
+  var _dT = (typeof defaultT !== 'undefined' && defaultT) ? defaultT : null;
   var items = [
-    { label: 'log food',   icon: '◉', fn: 'openSheet()',          col: 'rgba(255,150,50,0.9)'  },
-    { label: 'correct',    icon: '◎', fn: 'openCorrectionLog()',  col: 'rgba(80,130,220,0.9)'  },
-    { label: 'hypo',       icon: '⬡', fn: 'openHypoLog()',        col: 'rgba(255,210,40,0.9)'  },
-    { label: 'whisper',    icon: '◌', fn: 'openWhisper()',        col: 'rgba(140,200,180,0.9)' },
-    { label: 'kitchen',    icon: '◈', fn: 'openKitchen()',        col: 'rgba(200,120,80,0.9)'  },
+    { label: 'log food',   icon: '◉', fn: 'openSheet()',                                  col: 'rgba(255,150,50,0.9)'  },
+    { label: 'correct',    icon: '◎', fn: 'openCorrectionLog()',                           col: 'rgba(80,130,220,0.9)'  },
+    { label: 'hypo',       icon: '⬡', fn: 'openHypoLog()',                                 col: 'rgba(255,210,40,0.9)'  },
+    { label: 'whisper',    icon: '◌', fn: 'openWhisper()',                                 col: 'rgba(140,200,180,0.9)' },
+    { label: 'prick',      icon: '◆', fn: 'openBloodPrickLog(' + (_dT||'') + ')',          col: 'rgba(200,60,80,0.9)'   },
   ];
 
   var el = document.createElement('div');
@@ -8204,8 +8236,8 @@ function openOrbRadialMenu() {
   var radius   = Math.min(window.innerWidth, window.innerHeight) * 0.22;
   radius       = Math.max(90, Math.min(radius, 130));
 
-  // Clamp orb position to safe zone
-  var cx = Math.max(radius + 20, Math.min(window.innerWidth  - radius - 20, orbX));
+  // Clamp menu centre to safe zone — use press position if from river long press
+  var cx = Math.max(radius + 20, Math.min(window.innerWidth  - radius - 20, menuX));
   var cy = Math.max(radius + 60, Math.min(window.innerHeight - radius - 20, orbY));
 
   items.forEach(function(item, i) {
@@ -8922,6 +8954,262 @@ function deleteEvent(idx) {
   var el = document.getElementById('event-edit-overlay');
   if (el) el.remove();
   showToast('entry removed');
+}
+
+// ══════════════════════════════════════════════════════════════════════════
+//  BLOOD PRICK — finger prick readings, stored separately from CGM data
+//  Storage: localStorage river_pricks + Supabase events (note:'prick', gi=bg)
+//  Rendered as red diamonds pinned to the mmol trace at timestamp
+// ══════════════════════════════════════════════════════════════════════════
+
+var BLOOD_PRICKS = (function() {
+  try { return JSON.parse(localStorage.getItem('river_pricks') || '[]'); } catch(e) { return []; }
+})();
+
+function _savePricks() {
+  try { localStorage.setItem('river_pricks', JSON.stringify(BLOOD_PRICKS)); } catch(e) {}
+}
+
+// ── DRAW blood prick markers on the canvas ────────────────────────────────
+function drawBloodPricks() {
+  if (!BLOOD_PRICKS || BLOOD_PRICKS.length === 0) return;
+  if (!window._prickCards) window._prickCards = [];
+  window._prickCards = [];
+  CX.save();
+  var cutoff = (CGM_START || 0) - 60000;
+  var end    = (CGM_END || Date.now()) + 60000;
+  for (var i = 0; i < BLOOD_PRICKS.length; i++) {
+    var p = BLOOD_PRICKS[i];
+    if (!p || !p.t || !p.bg) continue;
+    if (p.t < cutoff || p.t > end) continue;
+    var x = tX(p.t);
+    if (x < -40 || x > W + 40) continue;
+    // Pin to the CGM trace at this timestamp
+    var d = dataAt ? dataAt(p.t) : null;
+    var cgmY = d ? bgToY(d.bg) : (H * 0.5);
+    // The prick reading pinned at its actual mmol value
+    var prickY = bgToY(p.bg);
+    // Delta line — connect CGM to prick reading
+    var hasDelta = Math.abs(p.bg - (d ? d.bg : p.bg)) > 0.1;
+    if (hasDelta && d) {
+      CX.globalAlpha = 0.4;
+      CX.strokeStyle = 'rgba(220,80,100,0.6)';
+      CX.lineWidth   = 1;
+      CX.setLineDash([2, 4]);
+      CX.beginPath(); CX.moveTo(x, cgmY); CX.lineTo(x, prickY); CX.stroke();
+      CX.setLineDash([]);
+    }
+    // Anchor dot on trace
+    CX.globalAlpha = 0.7;
+    CX.fillStyle   = 'rgba(220,60,80,0.9)';
+    CX.shadowColor = 'rgba(220,60,80,0.8)'; CX.shadowBlur = 6;
+    CX.beginPath(); CX.arc(x, cgmY, 3, 0, Math.PI * 2); CX.fill();
+    CX.shadowBlur = 0;
+    // Diamond shape at prick value
+    var ds = 7;
+    CX.globalAlpha = 1.0;
+    CX.fillStyle   = 'rgba(200,50,70,0.85)';
+    CX.strokeStyle = 'rgba(255,120,140,0.9)';
+    CX.lineWidth   = 1.2;
+    CX.shadowColor = 'rgba(220,60,80,0.7)'; CX.shadowBlur = 8;
+    CX.beginPath();
+    CX.moveTo(x,      prickY - ds);
+    CX.lineTo(x + ds, prickY);
+    CX.lineTo(x,      prickY + ds);
+    CX.lineTo(x - ds, prickY);
+    CX.closePath();
+    CX.fill(); CX.stroke();
+    CX.shadowBlur = 0;
+    // Label
+    CX.font = "500 10px 'DM Mono',monospace";
+    CX.textAlign = 'center';
+    CX.fillStyle = 'rgba(255,160,170,0.95)';
+    CX.globalAlpha = 1.0;
+    CX.fillText(p.bg.toFixed(1), x, prickY - ds - 4);
+    // Hitbox for tap-to-edit
+    window._prickCards.push({ x: x, y: prickY, r: ds + 8, idx: i });
+  }
+  CX.globalAlpha = 1; CX.restore();
+}
+
+// ── OPEN blood prick modal ─────────────────────────────────────────────────
+// defaultT — optional epoch ms to pre-fill (from long press on river)
+function openBloodPrickLog(defaultT) {
+  var ex = document.getElementById('prick-overlay'); if (ex) { ex.remove(); return; }
+  var el = document.createElement('div'); el.id = 'prick-overlay';
+  el.style.cssText = 'position:fixed;inset:0;z-index:60;background:rgba(3,5,20,0.92);backdrop-filter:blur(14px);display:flex;flex-direction:column;align-items:center;justify-content:center;padding:24px;transition:opacity .25s;opacity:0;touch-action:pan-y;pointer-events:auto';
+  el.addEventListener('touchstart', function(e){ e.stopPropagation(); }, {passive:true});
+  el.addEventListener('click', function(e){ if (e.target === el) closeBloodPrickLog(); });
+  var defDate = defaultT ? new Date(defaultT) : new Date();
+  var s = '<div style="max-width:320px;width:100%">';
+  s += '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:4px">';
+  s += '<div style="font-family:\'Fraunces\',serif;font-style:italic;font-weight:200;font-size:22px;color:rgba(220,80,100,0.9)">blood prick</div>';
+  s += '<button onclick="closeBloodPrickLog()" style="background:none;border:none;cursor:pointer;font-size:24px;color:rgba(200,220,240,0.4);padding:4px;touch-action:manipulation">×</button>';
+  s += '</div>';
+  s += '<div style="font-family:\'DM Mono\',monospace;font-size:9px;letter-spacing:1px;text-transform:uppercase;color:rgba(200,60,80,0.45);margin-bottom:14px">finger prick · pinned to flow at timestamp</div>';
+  s += timePickerHTML('prick-time', defDate, false);
+  // mmol input
+  s += '<div style="text-align:center;margin:10px 0 6px">';
+  s += '<div style="font-family:\'Fraunces\',serif;font-weight:200;font-size:14px;color:rgba(200,80,100,0.5);margin-bottom:12px;letter-spacing:.5px">reading</div>';
+  s += '<div style="display:flex;align-items:center;gap:10px;justify-content:center">';
+  s += '<button onclick="_prickStep(-0.1)" style="width:44px;height:44px;border-radius:50%;border:1px solid rgba(200,60,80,0.35);background:rgba(60,10,20,0.5);font-size:22px;color:rgba(220,100,120,0.9);cursor:pointer;touch-action:manipulation;display:flex;align-items:center;justify-content:center;line-height:1">−</button>';
+  s += '<div style="display:flex;flex-direction:column;align-items:center;gap:2px">';
+  s += '<input id="prick-bg" type="number" step="0.1" min="1.0" max="30.0" inputmode="decimal" value="" ';
+  s += 'placeholder="–.–" oninput="_prickValidate()" ';
+  s += 'style="width:90px;padding:10px;border-radius:8px;border:1px solid rgba(200,60,80,0.35);background:rgba(40,5,15,0.5);font-family:\'DM Mono\',monospace;font-size:26px;color:rgba(240,120,140,0.95);text-align:center;outline:none;transition:border-color .15s">';
+  s += '<span style="font-family:\'DM Mono\',monospace;font-size:10px;color:rgba(200,60,80,0.5);letter-spacing:.5px">mmol/L</span>';
+  s += '</div>';
+  s += '<button onclick="_prickStep(0.1)" style="width:44px;height:44px;border-radius:50%;border:1px solid rgba(200,60,80,0.35);background:rgba(60,10,20,0.5);font-size:22px;color:rgba(220,100,120,0.9);cursor:pointer;touch-action:manipulation;display:flex;align-items:center;justify-content:center;line-height:1">+</button>';
+  s += '</div></div>';
+  // Delta vs CGM hint
+  s += '<div id="prick-delta-hint" style="font-family:\'DM Mono\',monospace;font-size:9px;letter-spacing:.5px;color:rgba(200,80,100,0.5);text-align:center;min-height:16px;margin:8px 0 14px"></div>';
+  s += '<div id="prick-err" style="font-family:\'DM Mono\',monospace;font-size:10px;color:rgba(255,100,80,0.9);min-height:16px;margin-bottom:10px;text-align:center;letter-spacing:.3px"></div>';
+  s += '<button id="prick-log-btn" onclick="logBloodPrick()" style="width:100%;padding:14px;border-radius:10px;border:1px solid rgba(200,60,80,0.35);background:rgba(60,10,20,0.3);font-family:\'Fraunces\',serif;font-style:italic;font-weight:200;font-size:17px;color:rgba(240,120,140,0.9);cursor:pointer;margin-bottom:12px;transition:opacity .15s">log prick</button>';
+  s += '<div style="text-align:center"><button onclick="closeBloodPrickLog()" style="background:none;border:none;cursor:pointer;font-family:\'DM Mono\',monospace;font-size:9px;letter-spacing:1px;text-transform:uppercase;color:rgba(200,60,80,0.3);padding:4px">cancel</button></div></div>';
+  el.innerHTML = s;
+  document.body.appendChild(el);
+  requestAnimationFrame(function(){ el.style.opacity = '1'; });
+  // Focus after animation
+  setTimeout(function(){ var inp = document.getElementById('prick-bg'); if (inp) inp.focus(); }, 300);
+}
+
+function closeBloodPrickLog() {
+  var el = document.getElementById('prick-overlay');
+  if (el) { el.style.opacity = '0'; setTimeout(function(){ el.remove(); }, 250); }
+}
+
+function _prickStep(delta) {
+  var inp = document.getElementById('prick-bg');
+  if (!inp) return;
+  var v = Math.round(((parseFloat(inp.value) || 5.0) + delta) * 10) / 10;
+  v = Math.max(1.0, Math.min(30.0, v));
+  inp.value = v.toFixed(1);
+  _prickValidate();
+}
+
+function _prickValidate() {
+  var inp  = document.getElementById('prick-bg');
+  var err  = document.getElementById('prick-err');
+  var btn  = document.getElementById('prick-log-btn');
+  var hint = document.getElementById('prick-delta-hint');
+  if (!inp) return;
+  var v   = parseFloat(inp.value);
+  var bad = isNaN(v) || v < 1.0 || v > 30.0;
+  var warn = !bad && (v < 2.0 || v > 22.0);
+  if (err) err.textContent = bad ? 'enter a value between 1.0 and 30.0 mmol/L' : warn ? '⚠ unusual reading — double check' : '';
+  if (inp) inp.style.borderColor = bad ? 'rgba(255,80,60,0.7)' : warn ? 'rgba(255,160,40,0.6)' : 'rgba(200,60,80,0.35)';
+  if (btn) { btn.disabled = bad; btn.style.opacity = bad ? '0.3' : '1'; }
+  // Show delta vs CGM at current view time
+  if (hint && !bad && dataAt) {
+    var t  = getTimeVal('prick-time');
+    var d  = dataAt(t);
+    if (d && d.bg) {
+      var delta = v - d.bg;
+      var sign  = delta >= 0 ? '+' : '';
+      hint.textContent = 'CGM at this time: ' + d.bg.toFixed(1) + ' mmol  ·  delta ' + sign + delta.toFixed(1);
+    } else { hint.textContent = ''; }
+  }
+}
+
+function logBloodPrick() {
+  var bg = parseFloat(document.getElementById('prick-bg').value);
+  if (isNaN(bg) || bg < 1.0 || bg > 30.0) { showToast('invalid reading'); return; }
+  var t  = getTimeVal('prick-time');
+  var prick = { t: t, bg: bg, logged_by: _thisPersonId || 'unknown', local: true };
+  BLOOD_PRICKS.push(prick);
+  BLOOD_PRICKS.sort(function(a,b){ return a.t - b.t; });
+  _savePricks();
+  // Also push to Supabase events table: note='prick', gi=bg value (no schema change needed)
+  if (SUPABASE_READY) {
+    _sbFetch('events', {
+      method: 'POST', prefer: 'return=minimal',
+      body: [{ t: t, c: 0, u: 0, gi: bg, note: 'prick', device_id: _deviceId, updated_at: new Date().toISOString() }]
+    }).catch(function(e){ console.warn('[prick] sync failed:', e.message); });
+  }
+  closeBloodPrickLog();
+  var timeStr = document.getElementById('prick-time-display') ? document.getElementById('prick-time-display').textContent : '';
+  showToast('prick: ' + bg.toFixed(1) + ' mmol\n' + (timeStr || ''));
+}
+
+// Edit/delete blood prick
+function openPrickEditor(prickIdx) {
+  var p = BLOOD_PRICKS[prickIdx];
+  if (!p) return;
+  var ex = document.getElementById('prick-edit-overlay'); if (ex) ex.remove();
+  var el = document.createElement('div'); el.id = 'prick-edit-overlay';
+  el.style.cssText = 'position:fixed;inset:0;z-index:80;background:rgba(3,5,20,0.92);backdrop-filter:blur(16px);display:flex;flex-direction:column;align-items:center;justify-content:center;padding:32px;pointer-events:auto;touch-action:pan-y';
+  el.addEventListener('touchstart', function(e){ e.stopPropagation(); }, {passive:true});
+  el.addEventListener('click', function(e){ if (e.target === el) el.remove(); });
+  var dt = new Date(p.t);
+  var tzOffset = dt.getTimezoneOffset() * 60000;
+  var dtLocalISO = new Date(dt.getTime() - tzOffset).toISOString().slice(0,16);
+  el.innerHTML =
+    '<div style="max-width:300px;width:100%">' +
+    '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:20px">' +
+      '<div style="font-family:\'Fraunces\',serif;font-style:italic;font-weight:200;font-size:20px;color:rgba(220,80,100,0.85)">edit prick</div>' +
+      '<button onclick="document.getElementById(\'prick-edit-overlay\').remove()" style="background:none;border:none;cursor:pointer;font-size:22px;color:rgba(200,220,240,0.4);padding:4px">×</button>' +
+    '</div>' +
+    '<div style="margin-bottom:16px">' +
+      '<div style="font-family:\'DM Mono\',monospace;font-size:8px;letter-spacing:1px;text-transform:uppercase;color:rgba(200,60,80,0.5);margin-bottom:6px">when</div>' +
+      '<input id="pe-time" type="datetime-local" value="' + dtLocalISO + '" ' +
+        'style="width:100%;padding:9px 12px;border-radius:8px;border:1px solid rgba(200,60,80,0.25);background:rgba(40,5,15,0.5);font-family:\'DM Mono\',monospace;font-size:13px;color:rgba(240,120,140,0.8);outline:none;box-sizing:border-box">' +
+    '</div>' +
+    '<div style="margin-bottom:20px">' +
+      '<div style="font-family:\'DM Mono\',monospace;font-size:8px;letter-spacing:1px;text-transform:uppercase;color:rgba(200,60,80,0.5);margin-bottom:6px">mmol/L</div>' +
+      '<input id="pe-bg" type="number" step="0.1" min="1" max="30" value="' + p.bg.toFixed(1) + '" ' +
+        'style="width:100%;padding:10px;border-radius:8px;border:1px solid rgba(200,60,80,0.25);background:rgba(40,5,15,0.5);font-family:\'DM Mono\',monospace;font-size:22px;color:rgba(240,120,140,0.9);text-align:center;outline:none">' +
+    '</div>' +
+    '<div style="display:flex;gap:8px">' +
+      '<button onclick="savePrickEdit(' + prickIdx + ')" style="flex:1;padding:12px;border-radius:10px;border:1px solid rgba(220,80,100,0.3);background:rgba(60,10,20,0.3);font-family:\'Fraunces\',serif;font-style:italic;font-weight:200;font-size:16px;color:rgba(240,120,140,0.9);cursor:pointer">save</button>' +
+      '<button onclick="deletePrick(' + prickIdx + ')" style="padding:12px 16px;border-radius:10px;border:1px solid rgba(200,60,60,0.2);background:transparent;font-family:\'DM Mono\',monospace;font-size:10px;color:rgba(200,80,80,0.5);cursor:pointer">delete</button>' +
+      '<button onclick="document.getElementById(\'prick-edit-overlay\').remove()" style="padding:12px 14px;border-radius:10px;border:1px solid rgba(60,60,80,0.3);background:transparent;font-family:\'DM Mono\',monospace;font-size:10px;color:rgba(180,200,220,0.4);cursor:pointer">cancel</button>' +
+    '</div></div>';
+  document.body.appendChild(el);
+}
+
+function savePrickEdit(idx) {
+  var bg   = parseFloat(document.getElementById('pe-bg').value);
+  var tEl  = document.getElementById('pe-time');
+  var newT = tEl && tEl.value ? new Date(tEl.value).getTime() : null;
+  if (!BLOOD_PRICKS[idx]) { var el=document.getElementById('prick-edit-overlay'); if(el) el.remove(); return; }
+  if (!isNaN(bg) && bg >= 1.0 && bg <= 30.0) BLOOD_PRICKS[idx].bg = bg;
+  if (newT) BLOOD_PRICKS[idx].t = newT;
+  BLOOD_PRICKS.sort(function(a,b){ return a.t - b.t; });
+  _savePricks();
+  var el = document.getElementById('prick-edit-overlay'); if(el) el.remove();
+  showToast('prick updated');
+}
+
+function deletePrick(idx) {
+  var p = BLOOD_PRICKS[idx];
+  if (p && SUPABASE_READY) {
+    _sbFetch('events?t=eq.' + p.t + '&note=eq.prick', { method: 'DELETE', prefer: 'return=minimal' })
+      .catch(function(e){ console.warn('[prick] delete sync failed:', e.message); });
+  }
+  BLOOD_PRICKS.splice(idx, 1);
+  _savePricks();
+  var el = document.getElementById('prick-edit-overlay'); if(el) el.remove();
+  showToast('prick removed');
+}
+
+// ── Pull prick events from Supabase on sync ────────────────────────────────
+function syncPullPricks(sinceT) {
+  if (!SUPABASE_READY) return;
+  var since = sinceT || (Date.now() - 7 * 86400000);
+  _sbFetch('events?t=gte.' + since + '&note=eq.prick&order=t.asc&limit=200', { method: 'GET' })
+    .then(function(rows) {
+      if (!rows || rows.length === 0) return;
+      rows.forEach(function(row) {
+        if (!row.gi) return; // gi field holds the bg value
+        var exists = BLOOD_PRICKS.findIndex(function(p){ return Math.abs(p.t - row.t) < 30000; });
+        if (exists < 0) {
+          BLOOD_PRICKS.push({ t: row.t, bg: row.gi, local: false });
+        }
+      });
+      BLOOD_PRICKS.sort(function(a,b){ return a.t - b.t; });
+      _savePricks();
+    })
+    .catch(function(e){ console.warn('[prick] pull failed:', e.message); });
 }
 
 function openSettings() {
