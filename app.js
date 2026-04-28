@@ -9212,6 +9212,485 @@ function syncPullPricks(sinceT) {
     .catch(function(e){ console.warn('[prick] pull failed:', e.message); });
 }
 
+// ══════════════════════════════════════════════════════════════════════════════
+//  INSIGHTS PANEL — time-of-day profile, meal response, sensor lag, export
+// ══════════════════════════════════════════════════════════════════════════════
+function openInsightsPanel() {
+  var ex = document.getElementById('insights-overlay');
+  if (ex) { ex.remove(); return; }
+
+  var el = document.createElement('div');
+  el.id = 'insights-overlay';
+  el.style.cssText = [
+    'position:fixed','inset:0','z-index:80',
+    'background:var(--rv-panel-bg)',
+    'backdrop-filter:blur(18px)',
+    'overflow-y:auto','-webkit-overflow-scrolling:touch',
+    'display:flex','flex-direction:column','align-items:center',
+    'padding:48px 16px 80px',
+    'opacity:0','transition:opacity .22s','pointer-events:auto',
+  ].join(';');
+  el.addEventListener('touchstart', function(e){ e.stopPropagation(); }, {passive:true});
+
+  // ── helpers ──────────────────────────────────────────────────────────────
+  function mono(s,w) { return "font-family:'DM Mono',monospace;font-size:"+(s||10)+"px"+(w?';font-weight:'+w:''); }
+  function section(title, body) {
+    return '<div style="margin-bottom:28px;width:100%;max-width:440px">' +
+      '<div style="'+mono(9)+';letter-spacing:1.5px;text-transform:uppercase;color:rgba(255,180,80,0.6);margin-bottom:12px">'+title+'</div>' +
+      body + '</div>';
+  }
+  function statCard(label, value, sub, col) {
+    return '<div style="flex:1;min-width:90px;padding:12px 14px;border-radius:12px;background:var(--rv-input-bg);border:1px solid var(--rv-panel-border)">' +
+      '<div style="'+mono(20,'400')+';color:'+(col||'var(--rv-text-primary)')+';margin-bottom:3px">'+value+'</div>' +
+      '<div style="'+mono(10)+';color:var(--rv-text-secondary)">'+label+'</div>' +
+      (sub ? '<div style="'+mono(9)+';color:var(--rv-text-dim);margin-top:2px">'+sub+'</div>' : '') +
+    '</div>';
+  }
+
+  // ── compute data ─────────────────────────────────────────────────────────
+
+  // 1. Time-of-day BG profile: bucket CGM readings into 24 1-hour slots
+  var hourBuckets = Array.from({length:24}, function(){ return []; });
+  for (var ri = 0; ri < HISTORY_RAW.length; ri++) {
+    var r = HISTORY_RAW[ri];
+    if (r.bg >= 1 && r.bg <= 30) {
+      hourBuckets[new Date(r.t).getHours()].push(r.bg);
+    }
+  }
+  // Also include blood pricks in profile
+  var PRICKS = (function(){ try{ return JSON.parse(localStorage.getItem('river_pricks')||'[]'); }catch(e){ return []; } })();
+  for (var pi = 0; pi < PRICKS.length; pi++) {
+    var pk = PRICKS[pi];
+    if (pk.bg >= 1 && pk.bg <= 30) {
+      hourBuckets[new Date(pk.t).getHours()].push(pk.bg);
+    }
+  }
+
+  function mean(arr) { return arr.length ? arr.reduce(function(s,v){return s+v;},0)/arr.length : null; }
+  function sd(arr) {
+    if (arr.length < 2) return 0;
+    var m = mean(arr); var v = arr.reduce(function(s,x){return s+(x-m)*(x-m);},0)/arr.length;
+    return Math.sqrt(v);
+  }
+  function pct(arr, p) {
+    if (!arr.length) return null;
+    var s = arr.slice().sort(function(a,b){return a-b;});
+    return s[Math.floor(s.length*p)];
+  }
+  function inRange(arr) { return arr.filter(function(v){return v>=3.9&&v<=10;}).length; }
+
+  var hourStats = hourBuckets.map(function(b){
+    return { n: b.length, mean: mean(b), sd: sd(b), low: pct(b,0.1), high: pct(b,0.9), inRange: b.length ? inRange(b)/b.length : null };
+  });
+
+  // Overall stats
+  var allBG = HISTORY_RAW.filter(function(r){return r.bg>=1&&r.bg<=30;}).map(function(r){return r.bg;});
+  var overallMean = mean(allBG);
+  var overallSD   = sd(allBG);
+  var overallTIR  = allBG.length ? Math.round(inRange(allBG)/allBG.length*100) : null;
+  var overallBelow = allBG.length ? Math.round(allBG.filter(function(v){return v<3.9;}).length/allBG.length*100) : null;
+  var overallAbove = allBG.length ? Math.round(allBG.filter(function(v){return v>10;}).length/allBG.length*100) : null;
+  var estimatedA1C = overallMean ? (overallMean + 2.59) / 1.59 : null; // mmol/mol → % approx
+
+  // 2. Sensor lag from pricks
+  var lagPoints = [];
+  for (var pki = 0; pki < PRICKS.length; pki++) {
+    var p2 = PRICKS[pki];
+    // Find nearest CGM reading within 5 mins
+    var nearest = null, nearDist = Infinity;
+    for (var ri2 = 0; ri2 < HISTORY_RAW.length; ri2++) {
+      var dist = Math.abs(HISTORY_RAW[ri2].t - p2.t);
+      if (dist < nearDist) { nearDist = dist; nearest = HISTORY_RAW[ri2]; }
+    }
+    if (nearest && nearDist < 5*60000) {
+      lagPoints.push({ t: p2.t, prick: p2.bg, cgm: nearest.bg, delta: p2.bg - nearest.bg });
+    }
+  }
+  var meanLag = lagPoints.length ? mean(lagPoints.map(function(l){return l.delta;})) : null;
+  var sdLag   = lagPoints.length >= 3 ? sd(lagPoints.map(function(l){return l.delta;})) : null;
+
+  // 3. Meal response — from MEAL_HISTORY, find peak BG in 2hr window after meal
+  var mealResponses = [];
+  for (var mi = 0; mi < MEAL_HISTORY.length; mi++) {
+    var m = MEAL_HISTORY[mi];
+    if (!m.t || !m.totalCarbs) continue;
+    var preBG = null, peakBG = null, peakMins = null;
+    // BG at meal time
+    for (var ri3 = 0; ri3 < HISTORY_RAW.length; ri3++) {
+      if (Math.abs(HISTORY_RAW[ri3].t - m.t) < 5*60000) { preBG = HISTORY_RAW[ri3].bg; break; }
+    }
+    // Peak in next 90 min
+    for (var ri4 = 0; ri4 < HISTORY_RAW.length; ri4++) {
+      var dt = HISTORY_RAW[ri4].t - m.t;
+      if (dt >= 0 && dt <= 90*60000) {
+        if (peakBG === null || HISTORY_RAW[ri4].bg > peakBG) {
+          peakBG = HISTORY_RAW[ri4].bg;
+          peakMins = Math.round(dt/60000);
+        }
+      }
+    }
+    if (preBG && peakBG) {
+      mealResponses.push({ name: m.name, carbs: m.totalCarbs, u: m.u, preBG: preBG, peakBG: peakBG, rise: peakBG - preBG, peakMins: peakMins, t: m.t });
+    }
+  }
+  var avgRise = mealResponses.length ? mean(mealResponses.map(function(m){return m.rise;})) : null;
+  var avgPeak = mealResponses.length ? mean(mealResponses.map(function(m){return m.peakMins;})) : null;
+
+  // Hypo count
+  var hypoEvents = LOGGED_EVENTS.filter(function(e){ return e.note && e.note.indexOf('hypo') === 0; });
+
+  // ── build HTML ───────────────────────────────────────────────────────────
+  var html = '<div style="width:100%;max-width:440px">';
+
+  // Header
+  html += '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:28px">';
+  html += '<div style="font-family:\'Fraunces\',serif;font-weight:200;font-style:italic;font-size:22px;color:var(--rv-text-primary)">insights</div>';
+  html += '<div style="display:flex;gap:10px;align-items:center">';
+  html += '<button id="insights-export-btn" onclick="insightsExport()" style="padding:7px 14px;border-radius:20px;border:1px solid rgba(255,180,80,0.3);background:rgba(255,180,80,0.08);cursor:pointer;'+mono(9)+';letter-spacing:1px;text-transform:uppercase;color:rgba(255,180,80,0.8)">↓ export</button>';
+  html += '<button onclick="document.getElementById(\'insights-overlay\').remove()" style="background:none;border:none;cursor:pointer;font-size:22px;color:var(--rv-close-btn);padding:4px">×</button>';
+  html += '</div></div>';
+
+  // ── Overview stat row ────────────────────────────────────────────────────
+  if (allBG.length > 0) {
+    html += section('overview', '<div style="display:flex;gap:8px;flex-wrap:wrap">' +
+      statCard('avg BG', overallMean ? overallMean.toFixed(1)+' mmol' : '—', allBG.length+' readings', 'var(--rv-text-primary)') +
+      statCard('time in range', overallTIR !== null ? overallTIR+'%' : '—', '3.9–10 mmol', overallTIR >= 70 ? 'rgba(100,220,160,0.9)' : overallTIR >= 50 ? 'rgba(255,210,40,0.9)' : 'rgba(255,100,80,0.9)') +
+      statCard('below range', overallBelow !== null ? overallBelow+'%' : '—', '< 3.9 mmol', overallBelow > 4 ? 'rgba(255,100,80,0.9)' : 'rgba(100,220,160,0.9)') +
+      statCard('above range', overallAbove !== null ? overallAbove+'%' : '—', '> 10 mmol', overallAbove > 25 ? 'rgba(255,180,80,0.9)' : 'rgba(100,220,160,0.9)') +
+    '</div>' +
+    (estimatedA1C ? '<div style="margin-top:10px;padding:10px 14px;border-radius:10px;background:var(--rv-input-bg);border:1px solid var(--rv-panel-border);display:flex;justify-content:space-between;align-items:center"><span style="'+mono(10)+';color:var(--rv-text-secondary)">estimated HbA1c (eA1C)</span><span style="'+mono(12,'500')+';color:var(--rv-text-primary)">'+estimatedA1C.toFixed(1)+'%</span></div>' : '') +
+    '<div style="'+mono(8)+';color:var(--rv-text-dim);margin-top:6px;padding:0 2px">eA1C derived from mean CGM — not a clinical measurement. Use lab values for clinical decisions.</div>'
+    );
+  } else {
+    html += section('overview', '<div style="'+mono(10)+';color:var(--rv-text-dim);padding:16px 0">No CGM data yet — connect your sensor to see glucose insights.</div>');
+  }
+
+  // ── Time-of-day chart ────────────────────────────────────────────────────
+  var todHtml = '<div style="position:relative;height:120px;background:var(--rv-input-bg);border-radius:12px;border:1px solid var(--rv-panel-border);overflow:hidden;margin-bottom:8px">';
+  todHtml += '<canvas id="tod-chart" style="position:absolute;inset:0;width:100%;height:100%"></canvas>';
+  todHtml += '</div>';
+  // Hour labels
+  todHtml += '<div style="display:flex;justify-content:space-between;'+mono(8)+';color:var(--rv-text-dim);padding:0 2px">';
+  ['00:00','04:00','08:00','12:00','16:00','20:00','24:00'].forEach(function(l){ todHtml += '<span>'+l+'</span>'; });
+  todHtml += '</div>';
+  // Legend
+  todHtml += '<div style="display:flex;gap:16px;margin-top:8px;'+mono(9)+';color:var(--rv-text-dim)">';
+  todHtml += '<span><span style="display:inline-block;width:8px;height:8px;border-radius:2px;background:rgba(100,220,160,0.5);margin-right:4px"></span>mean BG</span>';
+  todHtml += '<span><span style="display:inline-block;width:8px;height:8px;border-radius:2px;background:rgba(255,210,40,0.15);margin-right:4px"></span>10th–90th %ile</span>';
+  todHtml += '<span><span style="display:inline-block;width:8px;height:8px;border-radius:2px;background:rgba(100,160,255,0.4);margin-right:4px"></span>target zone</span>';
+  todHtml += '</div>';
+  // Store data for canvas rendering
+  todHtml += '<script id="tod-data" type="application/json">'+JSON.stringify(hourStats)+'<\/script>';
+  html += section('time of day — bg profile', todHtml);
+
+  // ── Meal response ────────────────────────────────────────────────────────
+  var mealHtml = '';
+  if (mealResponses.length === 0) {
+    mealHtml = '<div style="'+mono(10)+';color:var(--rv-text-dim);padding:12px 0">Log meals to see response patterns here.</div>';
+  } else {
+    mealHtml += '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px">' +
+      statCard('avg rise', avgRise !== null ? '+'+avgRise.toFixed(1)+' mmol' : '—', 'peak vs pre-meal', 'rgba(255,180,80,0.9)') +
+      statCard('avg peak time', avgPeak !== null ? Math.round(avgPeak)+' min' : '—', 'after eating', 'var(--rv-text-primary)') +
+      statCard('meals logged', mealResponses.length+'', 'with CGM match', 'var(--rv-text-secondary)') +
+    '</div>';
+    // Recent meals table
+    mealHtml += '<div style="border-radius:12px;border:1px solid var(--rv-panel-border);overflow:hidden">';
+    var recent = mealResponses.slice(0, 8);
+    recent.forEach(function(mr, idx) {
+      var dateStr = new Date(mr.t).toLocaleDateString('en-GB',{weekday:'short',day:'numeric',month:'short'});
+      var riseCol = mr.rise > 5 ? 'rgba(255,100,80,0.9)' : mr.rise > 3 ? 'rgba(255,180,80,0.9)' : 'rgba(100,220,160,0.9)';
+      mealHtml += '<div style="display:flex;justify-content:space-between;align-items:center;padding:10px 14px;'+
+        (idx < recent.length-1 ? 'border-bottom:1px solid var(--rv-panel-border);' : '')+
+        'background:var(--rv-input-bg)">';
+      mealHtml += '<div style="flex:1;min-width:0">';
+      mealHtml += '<div style="'+mono(10)+';color:var(--rv-text-secondary);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">'+mr.name+'</div>';
+      mealHtml += '<div style="'+mono(9)+';color:var(--rv-text-dim)">'+dateStr+' · '+mr.carbs+'g carbs'+(mr.u?' · '+mr.u+'U':'')+'</div>';
+      mealHtml += '</div>';
+      mealHtml += '<div style="display:flex;gap:14px;margin-left:10px">';
+      mealHtml += '<div style="text-align:right"><div style="'+mono(12)+';color:'+riseCol+'">'+
+        (mr.rise > 0 ? '+' : '')+mr.rise.toFixed(1)+'</div><div style="'+mono(8)+';color:var(--rv-text-dim)">rise</div></div>';
+      mealHtml += '<div style="text-align:right"><div style="'+mono(12)+';color:var(--rv-text-secondary)">'+mr.peakMins+'m</div><div style="'+mono(8)+';color:var(--rv-text-dim)">peak</div></div>';
+      mealHtml += '</div></div>';
+    });
+    mealHtml += '</div>';
+  }
+  html += section('meal response', mealHtml);
+
+  // ── Sensor lag ───────────────────────────────────────────────────────────
+  var lagHtml = '';
+  if (lagPoints.length === 0) {
+    lagHtml = '<div style="'+mono(10)+';color:var(--rv-text-dim);padding:12px 0">Log finger prick readings (◆ from the orb menu) to build your personal sensor lag profile.</div>';
+  } else {
+    lagHtml += '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px">' +
+      statCard('mean delta', meanLag !== null ? (meanLag >= 0 ? '+' : '')+meanLag.toFixed(2)+' mmol' : '—', 'prick − CGM', meanLag && Math.abs(meanLag) > 1.5 ? 'rgba(255,180,80,0.9)' : 'rgba(100,220,160,0.9)') +
+      (sdLag !== null ? statCard('variability', '±'+sdLag.toFixed(2)+' mmol', 'SD of deltas', 'var(--rv-text-secondary)') : '') +
+      statCard('readings', lagPoints.length+'', 'prick pairs', 'var(--rv-text-dim)') +
+    '</div>';
+    // Individual lag points
+    lagHtml += '<div style="border-radius:12px;border:1px solid var(--rv-panel-border);overflow:hidden">';
+    var recentLag = lagPoints.slice(-8).reverse();
+    recentLag.forEach(function(lp, idx) {
+      var dateStr = new Date(lp.t).toLocaleDateString('en-GB',{weekday:'short',day:'numeric',month:'short'});
+      var timeStr = new Date(lp.t).toLocaleTimeString('en-GB',{hour:'2-digit',minute:'2-digit'});
+      var deltaCol = Math.abs(lp.delta) > 2 ? 'rgba(255,100,80,0.9)' : Math.abs(lp.delta) > 1 ? 'rgba(255,180,80,0.9)' : 'rgba(100,220,160,0.9)';
+      lagHtml += '<div style="display:flex;justify-content:space-between;align-items:center;padding:9px 14px;'+
+        (idx < recentLag.length-1 ? 'border-bottom:1px solid var(--rv-panel-border);' : '')+
+        'background:var(--rv-input-bg)">';
+      lagHtml += '<div><div style="'+mono(10)+';color:var(--rv-text-secondary)">'+dateStr+' '+timeStr+'</div></div>';
+      lagHtml += '<div style="display:flex;gap:14px">';
+      lagHtml += '<div style="text-align:right"><div style="'+mono(11)+';color:var(--rv-text-secondary)">'+lp.prick.toFixed(1)+'</div><div style="'+mono(8)+';color:var(--rv-text-dim)">prick</div></div>';
+      lagHtml += '<div style="text-align:right"><div style="'+mono(11)+';color:var(--rv-text-secondary)">'+lp.cgm.toFixed(1)+'</div><div style="'+mono(8)+';color:var(--rv-text-dim)">CGM</div></div>';
+      lagHtml += '<div style="text-align:right"><div style="'+mono(11)+';color:'+deltaCol+'">'+(lp.delta >= 0?'+':'')+lp.delta.toFixed(2)+'</div><div style="'+mono(8)+';color:var(--rv-text-dim)">Δ</div></div>';
+      lagHtml += '</div></div>';
+    });
+    lagHtml += '</div>';
+    if (meanLag !== null && Math.abs(meanLag) > 1.0) {
+      lagHtml += '<div style="'+mono(9)+';color:rgba(255,180,80,0.7);margin-top:8px;padding:0 2px">Your CGM consistently reads '+(meanLag > 0 ? 'below' : 'above')+' your blood glucose by ~'+Math.abs(meanLag).toFixed(1)+' mmol. This is typical on '+( meanLag > 0 ? 'rising' : 'falling')+' glucose.</div>';
+    }
+  }
+  html += section('sensor lag — prick vs cgm', lagHtml);
+
+  // ── Events summary ───────────────────────────────────────────────────────
+  var eventsHtml = '<div style="display:flex;gap:8px;flex-wrap:wrap">';
+  var totalBolus  = LOGGED_EVENTS.filter(function(e){return e.u>0;}).length;
+  var totalCarbs2 = LOGGED_EVENTS.filter(function(e){return e.c>0;}).length;
+  var totalHypos  = hypoEvents.length;
+  var totalPricks2 = PRICKS.length;
+  eventsHtml += statCard('boluses', totalBolus+'', 'logged', 'rgba(100,160,255,0.9)');
+  eventsHtml += statCard('meals', totalCarbs2+'', 'logged', 'rgba(255,180,80,0.9)');
+  eventsHtml += statCard('hypos', totalHypos+'', 'treated', totalHypos > 3 ? 'rgba(255,100,80,0.9)' : 'rgba(100,220,160,0.9)');
+  eventsHtml += statCard('pricks', totalPricks2+'', 'logged', 'var(--rv-text-secondary)');
+  eventsHtml += '</div>';
+  html += section('events — this session', eventsHtml);
+
+  // ── Export section ───────────────────────────────────────────────────────
+  html += section('clinic export',
+    '<div style="'+mono(10)+';color:var(--rv-text-secondary);margin-bottom:12px">Download a structured summary for your diabetes team — includes glucose profile, meal log, bolus history, and prick readings.</div>' +
+    '<button onclick="insightsExport()" style="width:100%;padding:14px;border-radius:12px;border:1px solid rgba(255,180,80,0.3);background:rgba(255,180,80,0.08);cursor:pointer;'+mono(11)+';letter-spacing:0.5px;color:rgba(255,180,80,0.9)">Download clinic report (.txt)</button>'
+  );
+
+  html += '</div>'; // close max-width wrapper
+  el.innerHTML = html;
+  document.body.appendChild(el);
+  setTimeout(function(){ el.style.opacity='1'; }, 10);
+
+  // ── Render time-of-day canvas chart ─────────────────────────────────────
+  setTimeout(function() {
+    var canvas = document.getElementById('tod-chart');
+    if (!canvas) return;
+    var dataEl = document.getElementById('tod-data');
+    if (!dataEl) return;
+    var stats = JSON.parse(dataEl.textContent);
+    var dpr = window.devicePixelRatio || 1;
+    var W = canvas.offsetWidth, H = canvas.offsetHeight;
+    canvas.width = W * dpr; canvas.height = H * dpr;
+    var ctx2 = canvas.getContext('2d');
+    ctx2.scale(dpr, dpr);
+
+    var PAD = { l: 28, r: 8, t: 8, b: 8 };
+    var CW = W - PAD.l - PAD.r, CH = H - PAD.t - PAD.b;
+    var BG_MIN2 = 2.0, BG_MAX2 = 16.0;
+
+    function yp(bg) { return PAD.t + CH - (bg - BG_MIN2) / (BG_MAX2 - BG_MIN2) * CH; }
+    function xp(hr) { return PAD.l + (hr / 24) * CW; }
+
+    // Target band
+    ctx2.fillStyle = 'rgba(100,160,255,0.08)';
+    ctx2.fillRect(PAD.l, yp(10), CW, yp(3.9) - yp(10));
+    ctx2.strokeStyle = 'rgba(100,160,255,0.2)';
+    ctx2.lineWidth = 0.5;
+    [3.9, 10].forEach(function(v) {
+      ctx2.beginPath(); ctx2.moveTo(PAD.l, yp(v)); ctx2.lineTo(PAD.l + CW, yp(v)); ctx2.stroke();
+    });
+
+    // Y-axis labels
+    ctx2.font = "8px 'DM Mono', monospace";
+    ctx2.fillStyle = 'rgba(255,255,255,0.25)';
+    ctx2.textAlign = 'right';
+    [4, 7, 10, 14].forEach(function(v) {
+      ctx2.fillText(v, PAD.l - 3, yp(v) + 3);
+    });
+
+    // Percentile band
+    var hasData = stats.some(function(s){ return s.n > 0; });
+    if (hasData) {
+      ctx2.beginPath();
+      var first = true;
+      for (var h = 0; h < 24; h++) {
+        if (stats[h].low !== null) { if (first) { ctx2.moveTo(xp(h + 0.5), yp(stats[h].low)); first = false; } else { ctx2.lineTo(xp(h + 0.5), yp(stats[h].low)); } }
+      }
+      for (var h2 = 23; h2 >= 0; h2--) {
+        if (stats[h2].high !== null) { ctx2.lineTo(xp(h2 + 0.5), yp(stats[h2].high)); }
+      }
+      ctx2.closePath();
+      ctx2.fillStyle = 'rgba(255,210,40,0.1)';
+      ctx2.fill();
+
+      // Mean line
+      ctx2.beginPath();
+      var firstM = true;
+      for (var h3 = 0; h3 < 24; h3++) {
+        if (stats[h3].mean !== null) {
+          var xm = xp(h3 + 0.5), ym = yp(stats[h3].mean);
+          if (firstM) { ctx2.moveTo(xm, ym); firstM = false; } else { ctx2.lineTo(xm, ym); }
+        }
+      }
+      ctx2.strokeStyle = 'rgba(100,220,160,0.8)';
+      ctx2.lineWidth = 1.5;
+      ctx2.lineJoin = 'round';
+      ctx2.stroke();
+
+      // Dots where data exists
+      for (var h4 = 0; h4 < 24; h4++) {
+        if (stats[h4].mean !== null && stats[h4].n >= 2) {
+          ctx2.beginPath();
+          ctx2.arc(xp(h4 + 0.5), yp(stats[h4].mean), 2, 0, 2*Math.PI);
+          ctx2.fillStyle = 'rgba(100,220,160,0.9)';
+          ctx2.fill();
+        }
+      }
+    } else {
+      ctx2.font = "10px 'DM Mono', monospace";
+      ctx2.fillStyle = 'rgba(255,255,255,0.2)';
+      ctx2.textAlign = 'center';
+      ctx2.fillText('no data yet', W/2, H/2 + 4);
+    }
+  }, 80);
+}
+
+// ── Export function: structured clinic report ─────────────────────────────
+function insightsExport() {
+  var lines = [];
+  var now = new Date();
+  var dateStr = now.toLocaleDateString('en-GB', { weekday:'long', year:'numeric', month:'long', day:'numeric' });
+  lines.push("OSKAR'S RIVER — CLINIC REPORT");
+  lines.push('Generated: ' + dateStr + ' ' + now.toLocaleTimeString('en-GB'));
+  lines.push('Patient: Oskar · T1D · MDI · Libre 3');
+  lines.push('');
+  lines.push('════════════════════════════════════════');
+  lines.push('GLUCOSE SUMMARY');
+  lines.push('════════════════════════════════════════');
+
+  var allBGx = HISTORY_RAW.filter(function(r){return r.bg>=1&&r.bg<=30;}).map(function(r){return r.bg;});
+  if (allBGx.length > 0) {
+    var m = allBGx.reduce(function(s,v){return s+v;},0)/allBGx.length;
+    var tir = Math.round(allBGx.filter(function(v){return v>=3.9&&v<=10;}).length/allBGx.length*100);
+    var below = Math.round(allBGx.filter(function(v){return v<3.9;}).length/allBGx.length*100);
+    var above = Math.round(allBGx.filter(function(v){return v>10;}).length/allBGx.length*100);
+    var a1c = ((m + 2.59) / 1.59).toFixed(1);
+    lines.push('Readings:         ' + allBGx.length);
+    lines.push('Mean BG:          ' + m.toFixed(2) + ' mmol/L');
+    lines.push('Time in range:    ' + tir + '% (3.9–10.0 mmol)');
+    lines.push('Below range:      ' + below + '% (< 3.9 mmol)');
+    lines.push('Above range:      ' + above + '% (> 10.0 mmol)');
+    lines.push('Estimated eA1C:   ' + a1c + '% (derived from mean CGM — not a lab value)');
+    if (HISTORY_RAW.length > 0) {
+      var from = new Date(HISTORY_RAW[0].t).toLocaleDateString('en-GB');
+      var to   = new Date(HISTORY_RAW[HISTORY_RAW.length-1].t).toLocaleDateString('en-GB');
+      lines.push('Data range:       ' + from + ' → ' + to);
+    }
+  } else {
+    lines.push('No CGM readings available.');
+  }
+
+  lines.push('');
+  lines.push('════════════════════════════════════════');
+  lines.push('TIME-OF-DAY PROFILE');
+  lines.push('════════════════════════════════════════');
+  var hourBucketsX = Array.from({length:24}, function(){ return []; });
+  for (var ri = 0; ri < HISTORY_RAW.length; ri++) {
+    var r = HISTORY_RAW[ri];
+    if (r.bg >= 1 && r.bg <= 30) hourBucketsX[new Date(r.t).getHours()].push(r.bg);
+  }
+  lines.push('Hour  | Mean   | n   | In Range');
+  lines.push('------+--------+-----+---------');
+  for (var h = 0; h < 24; h++) {
+    var b = hourBucketsX[h];
+    if (!b.length) { lines.push(String(h).padStart(2,'0')+':00 | —      | 0   | —'); continue; }
+    var bm = (b.reduce(function(s,v){return s+v;},0)/b.length).toFixed(2);
+    var bir = Math.round(b.filter(function(v){return v>=3.9&&v<=10;}).length/b.length*100);
+    lines.push(String(h).padStart(2,'0')+':00 | '+bm+'  | '+b.length+'   | '+bir+'%');
+  }
+
+  lines.push('');
+  lines.push('════════════════════════════════════════');
+  lines.push('MEAL LOG');
+  lines.push('════════════════════════════════════════');
+  if (MEAL_HISTORY.length === 0) {
+    lines.push('No meals logged.');
+  } else {
+    MEAL_HISTORY.slice(0, 30).forEach(function(m) {
+      var d = new Date(m.t);
+      var ds = d.toLocaleDateString('en-GB',{weekday:'short',day:'numeric',month:'short'}) + ' ' + d.toLocaleTimeString('en-GB',{hour:'2-digit',minute:'2-digit'});
+      lines.push(ds + '  ' + m.totalCarbs + 'g carbs' + (m.u ? '  ' + m.u + 'U bolus' : ''));
+      if (m.items && m.items.length) {
+        m.items.forEach(function(i){ lines.push('  · ' + i.name + '  ' + (i.grams||'?') + 'g  ' + (i.carbs||'?') + 'g carbs'); });
+      }
+      lines.push('');
+    });
+  }
+
+  lines.push('════════════════════════════════════════');
+  lines.push('BOLUS / CORRECTION LOG');
+  lines.push('════════════════════════════════════════');
+  var bolusOnly = LOGGED_EVENTS.filter(function(e){return e.u>0;}).slice(0,30);
+  if (!bolusOnly.length) { lines.push('No boluses logged.'); }
+  else {
+    bolusOnly.forEach(function(e) {
+      var d = new Date(e.t);
+      var ds = d.toLocaleDateString('en-GB',{weekday:'short',day:'numeric',month:'short'}) + ' ' + d.toLocaleTimeString('en-GB',{hour:'2-digit',minute:'2-digit'});
+      lines.push(ds + '  ' + e.u.toFixed(1) + 'U  ' + (e.note||'') + (e.logged_by?' ['+e.logged_by+']':''));
+    });
+  }
+
+  lines.push('');
+  lines.push('════════════════════════════════════════');
+  lines.push('FINGER PRICK READINGS');
+  lines.push('════════════════════════════════════════');
+  var PRICKSX = (function(){ try{ return JSON.parse(localStorage.getItem('river_pricks')||'[]'); }catch(e){ return []; } })();
+  if (!PRICKSX.length) { lines.push('No finger pricks logged.'); }
+  else {
+    PRICKSX.forEach(function(p) {
+      var d = new Date(p.t);
+      var ds = d.toLocaleDateString('en-GB',{weekday:'short',day:'numeric',month:'short'}) + ' ' + d.toLocaleTimeString('en-GB',{hour:'2-digit',minute:'2-digit'});
+      lines.push(ds + '  ' + p.bg.toFixed(1) + ' mmol/L (finger prick)');
+    });
+  }
+
+  lines.push('');
+  lines.push('════════════════════════════════════════');
+  lines.push('HYPO EVENTS');
+  lines.push('════════════════════════════════════════');
+  var hyposX = LOGGED_EVENTS.filter(function(e){ return e.note && e.note.indexOf('hypo') === 0; });
+  if (!hyposX.length) { lines.push('No hypo treatments logged.'); }
+  else {
+    hyposX.forEach(function(e) {
+      var d = new Date(e.t);
+      var ds = d.toLocaleDateString('en-GB',{weekday:'short',day:'numeric',month:'short'}) + ' ' + d.toLocaleTimeString('en-GB',{hour:'2-digit',minute:'2-digit'});
+      lines.push(ds + '  ' + e.c + 'g treatment  ' + (e.note||'').replace('hypo:','') + (e.logged_by?' ['+e.logged_by+']':''));
+    });
+  }
+
+  lines.push('');
+  lines.push('════════════════════════════════════════');
+  lines.push('NOTES');
+  lines.push('────────────────────────────────────────');
+  lines.push('This report was generated by Oskar\'s River — a personal T1D management');
+  lines.push('app for one family. Data shown is for clinical context only. All dosing');
+  lines.push('decisions remain with the family and their medical team.');
+  lines.push('eA1C formula: (mean mmol + 2.59) / 1.59 — approximate only.');
+
+  var blob = new Blob([lines.join('\n')], { type: 'text/plain' });
+  var url  = URL.createObjectURL(blob);
+  var a = document.createElement('a');
+  a.href = url;
+  a.download = 'oskar-river-clinic-' + now.toISOString().slice(0,10) + '.txt';
+  document.body.appendChild(a); a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+  if (typeof showToast === 'function') showToast('Clinic report downloaded');
+}
+
 function openSettings() {
   // If tray already open, close it
   var ex = document.getElementById('settings-tray');
@@ -9247,6 +9726,7 @@ function openSettingsTray() {
     { label: 'cgm',          icon: '◎', fn: function(){ closeSettingsTray(); openCGMSettings(); },      col: 'rgba(80,200,180,0.8)'  },
     { label: 'food library', icon: '◌', fn: function(){ closeSettingsTray(); openFoodManager(); },      col: 'rgba(220,150,60,0.8)'  },
     { label: 'treatment',    icon: '◈', fn: function(){ closeSettingsTray(); openTreatmentPanel(); },   col: 'rgba(180,100,220,0.8)' },
+    { label: 'insights',     icon: '◧', fn: function(){ closeSettingsTray(); openInsightsPanel(); },    col: 'rgba(255,180,80,0.8)'  },
     { label: 'visuals',      icon: '◐', fn: function(){ openVisualSettings(); },                         col: 'rgba(180,140,240,0.8)' },
   ];
 
