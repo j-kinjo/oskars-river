@@ -3041,7 +3041,7 @@ var _cbFrame         = 0;    // animation frame counter
 // Find up to 3 local peaks and troughs in the visible BG curve
 function _findPeaksTroughs() {
   var now = Date.now();
-  if (_ptCache && (now - _ptCacheTime) < 5000 &&
+  if (_ptCache && (now - _ptCacheTime) < 2000 &&
       Math.abs(_ptCacheView - viewTime) < 2 * 60000) {
     return _ptCache;
   }
@@ -3100,9 +3100,30 @@ function _findPeaksTroughs() {
 function _spawnCurveBubbles(pt) {
   var isPeak = pt.type === 'peak';
   var count  = Math.max(3, Math.round(pt.magnitude * 14));
-  var darkCount = Math.min(4, Math.floor(Math.abs(pt.netForce) * 0.15 + 1));
 
-  // Dominant food GI at this moment
+  // ── Explanation model ─────────────────────────────────────────────────
+  // How much of this peak/trough is explained by active COB or IOB?
+  // cobExplained: 0–1 fraction of the move accounted for by active carbs
+  // iobExplained: 0–1 fraction accounted for by active insulin
+  // unexplained:  remainder → silver/grey bubbles
+  // When a meal is later logged, COB rises, cobExplained rises, grey→warm.
+
+  var d = dataAt(pt.t);
+  var activeCOB = d.cob || 0;
+  var activeIOB = d.iob || 0;
+
+  // Total "force" budget — rough normalisation
+  var totalForce = Math.max(0.1, activeCOB * 0.8 + activeIOB * 1.8);
+  var cobExplained = Math.min(1, (activeCOB * 0.8) / totalForce);
+  var iobExplained = Math.min(1, (activeIOB * 1.8) / totalForce);
+
+  // At a peak: carbs are the explaining force (buoyancy)
+  // At a trough: insulin is the explaining force (gravity)
+  var explainedFraction = isPeak ? cobExplained : iobExplained;
+  // If neither COB nor IOB is meaningful, everything is unknown
+  if (activeCOB < 0.5 && activeIOB < 0.1) explainedFraction = 0;
+
+  // Dominant GI for colour
   var domGI = 55;
   var meals = _getActiveMealEvents();
   if (meals.length > 0) {
@@ -3117,64 +3138,50 @@ function _spawnCurveBubbles(pt) {
     if (bestFood) domGI = bestFood.gi || 55;
   }
 
-  for (var i = 0; i < count; i++) {
-    // Physics: canvas Y increases downward.
-    // Carb (buoyancy) push from BELOW the line → positive oy offset
-    // IOB (gravity) press from ABOVE the line → negative oy offset
-    var isIOB = isPeak
-      ? (i < Math.round(count * Math.max(0, -pt.netForce / 15)))
-      : (i < Math.round(count * 0.65));
-    var col = isIOB
-      ? (RIVER_VISUAL_PREFS && RIVER_VISUAL_PREFS.iobR ? RIVER_VISUAL_PREFS.iobR : COL_IOB)
-      : giToColour(domGI + (Math.random() - 0.5) * 20);
-    var oyBase = isIOB ? -(3 + Math.random() * 18) : (3 + Math.random() * 22);
+  // Silver/grey colour for unknown force
+  var COL_UNKNOWN = [160, 168, 185]; // cool silver — the unnamed thing
 
+  // Colour for the explained force
+  var COL_EXPLAINED = isPeak
+    ? giToColour(domGI + (Math.random() - 0.5) * 20)  // carb: GI-warm
+    : (RIVER_VISUAL_PREFS && RIVER_VISUAL_PREFS.iobR ? RIVER_VISUAL_PREFS.iobR : COL_IOB); // IOB: blue
+
+  // Split count: explained vs unknown
+  var explainedCount = Math.round(count * explainedFraction);
+  var unknownCount   = count - explainedCount;
+
+  // ── Spawn explained bubbles (coloured) ─────────────────────────────────
+  for (var i = 0; i < explainedCount; i++) {
+    var isIOB  = !isPeak; // peak → carb below, trough → IOB above
+    var oyBase = isIOB ? -(3 + Math.random() * 18) : (3 + Math.random() * 22);
     _curveBubbles.push({
-      ptType:   pt.type,
-      ptX:      pt.x,
-      ptY:      pt.y,
-      ox:       (Math.random() - 0.5) * 38,
-      oy:       oyBase,
-      x:        pt.x + (Math.random() - 0.5) * 38,
-      y:        pt.y + oyBase,
-      vx:       (Math.random() - 0.5) * 0.12,
-      vy:       isIOB ? -(0.04 + Math.random() * 0.08) : (0.04 + Math.random() * 0.08),
-      r:        2.5 + Math.random() * 3.5,
-      col:      col,
-      isIOB:    isIOB,
-      isDark:   false,
-      alpha:    0,
-      phase:    Math.random() * Math.PI * 2,
-      lavaPhase:Math.random() * Math.PI * 2,
-      lavaSpeed:0.008 + Math.random() * 0.012,
-      ghosts:   [],
-      age:      0,
+      ptType: pt.type, ptX: pt.x, ptY: pt.y,
+      ox: (Math.random() - 0.5) * 38, oy: oyBase,
+      x: pt.x + (Math.random() - 0.5) * 38, y: pt.y + oyBase,
+      vx: (Math.random() - 0.5) * 0.12,
+      vy: isIOB ? -(0.04 + Math.random() * 0.08) : (0.04 + Math.random() * 0.08),
+      r: 2.5 + Math.random() * 3.5, col: COL_EXPLAINED,
+      isIOB: isIOB, isDark: false, alpha: 0,
+      phase: Math.random() * Math.PI * 2,
+      lavaPhase: Math.random() * Math.PI * 2, lavaSpeed: 0.008 + Math.random() * 0.012,
+      ghosts: [], age: 0,
     });
   }
 
-  // Dark unknown blobs — only when COB+IOB model doesn't explain the move
-  for (var j = 0; j < darkCount; j++) {
-    var oyDark = (Math.random() - 0.5) * 24;
+  // ── Spawn unknown bubbles (silver) ─────────────────────────────────────
+  for (var j = 0; j < unknownCount; j++) {
+    // Unknown force — no preferred side, cluster around the line
+    var oyUnk = (Math.random() - 0.5) * 28;
     _curveBubbles.push({
-      ptType:   pt.type,
-      ptX:      pt.x,
-      ptY:      pt.y,
-      ox:       (Math.random() - 0.5) * 30,
-      oy:       oyDark,
-      x:        pt.x + (Math.random() - 0.5) * 30,
-      y:        pt.y + oyDark,
-      vx:       (Math.random() - 0.5) * 0.08,
-      vy:       (Math.random() - 0.5) * 0.05,
-      r:        2.0 + Math.random() * 2.2,
-      col:      [40, 38, 42],
-      isIOB:    false,
-      isDark:   true,
-      alpha:    0,
-      phase:    Math.random() * Math.PI * 2,
-      lavaPhase:Math.random() * Math.PI * 2,
-      lavaSpeed:0.004 + Math.random() * 0.008,
-      ghosts:   [],
-      age:      0,
+      ptType: pt.type, ptX: pt.x, ptY: pt.y,
+      ox: (Math.random() - 0.5) * 32, oy: oyUnk,
+      x: pt.x + (Math.random() - 0.5) * 32, y: pt.y + oyUnk,
+      vx: (Math.random() - 0.5) * 0.07, vy: (Math.random() - 0.5) * 0.06,
+      r: 2.0 + Math.random() * 2.8, col: COL_UNKNOWN,
+      isIOB: false, isDark: false, isUnknown: true, alpha: 0,
+      phase: Math.random() * Math.PI * 2,
+      lavaPhase: Math.random() * Math.PI * 2, lavaSpeed: 0.005 + Math.random() * 0.008,
+      ghosts: [], age: 0,
     });
   }
 }
@@ -3198,9 +3205,14 @@ function _updateCurveBubbles() {
   // Mark all existing bubbles dying
   _curveBubbles.forEach(function(b) { b._dying = true; });
 
-  // Only spawn if there are actual peaks/troughs
+  // Only spawn for peaks/troughs with meaningful force or magnitude
+  // Prevents flat CGM-only wiggles from generating persistent bubbles
   if (pts.length > 0) {
-    pts.forEach(function(pt) { _spawnCurveBubbles(pt); });
+    pts.forEach(function(pt) {
+      if (Math.abs(pt.netForce) > 0.8 || pt.magnitude > 0.4) {
+        _spawnCurveBubbles(pt);
+      }
+    });
   }
 }
 
@@ -3218,9 +3230,12 @@ function _tickCurveBubbles() {
     // Fade in
     if (!b._dying) b.alpha = Math.min(0.82, b.alpha + 0.025);
 
+    // Max lifetime — bubbles older than 220 frames (~3.6s) start dying naturally
+    if (!b._dying && b.age > 220) b._dying = true;
+
     // Dying bubbles fade out and are removed
     if (b._dying) {
-      b.alpha -= 0.018;
+      b.alpha -= 0.022;
       return b.alpha > 0.01;
     }
 
@@ -3290,8 +3305,22 @@ function _drawCurveBubbles() {
     var rv = b.col[0], gv = b.col[1], bv = b.col[2];
     var a  = b.alpha;
 
-    if (b.isDark) {
-      // Dark blob — solid, slightly translucent, no highlight
+    if (b.isUnknown) {
+      // Unknown force — silver mist droplet. Soft, no hard edge. The unnamed thing.
+      CX.beginPath();
+      CX.arc(b.x, b.y, b.r * 1.1, 0, Math.PI * 2);
+      CX.fillStyle = 'rgba(' + rv + ',' + gv + ',' + bv + ',' + (a * 0.22) + ')';
+      CX.fill();
+      CX.strokeStyle = 'rgba(' + rv + ',' + gv + ',' + bv + ',' + (a * 0.55) + ')';
+      CX.lineWidth = 0.7;
+      CX.stroke();
+      // Faint inner glow
+      CX.beginPath();
+      CX.arc(b.x - b.r * 0.2, b.y - b.r * 0.2, b.r * 0.3, 0, Math.PI * 2);
+      CX.fillStyle = 'rgba(220,228,240,' + (a * 0.28) + ')';
+      CX.fill();
+    } else if (b.isDark) {
+      // Dark blob (legacy) — solid charcoal
       CX.beginPath();
       CX.arc(b.x, b.y, b.r, 0, Math.PI * 2);
       CX.fillStyle   = 'rgba(' + rv + ',' + gv + ',' + bv + ',' + (a * 0.72) + ')';
