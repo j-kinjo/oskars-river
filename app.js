@@ -197,11 +197,12 @@ async function syncPullEvents(sinceT) {
   var added = 0;
   rows.forEach(function(row) {
     // Merge into LOGGED_EVENTS
-    var existsL = LOGGED_EVENTS.findIndex(function(e){ return Math.abs(e.t - row.t) < 30000 && Math.abs((e.c||0) - (row.c||0)) < 0.5; });
+    // Exact timestamp match — 30s window caused legitimate events to be silently dropped.
+    var existsL = LOGGED_EVENTS.findIndex(function(e){ return e.t === row.t && Math.abs((e.c||0) - (row.c||0)) < 0.5; });
     if (existsL < 0) {
       var rowItems = row.items;
       if (typeof rowItems === 'string') { try { rowItems = JSON.parse(rowItems); } catch(_e) { rowItems = null; } }
-      var ev = { t: row.t, c: row.c||0, u: row.u||0, gi: row.gi, note: row.note, items: rowItems };
+      var ev = { t: row.t, c: row.c||0, u: row.u||0, gi: row.gi, note: row.note, items: rowItems, local: false };
       LOGGED_EVENTS.push(ev);
       BOLUS_EVENTS.push(ev);
       // Do NOT push into SESSION — historical Supabase events must not drive dataAt().
@@ -225,17 +226,23 @@ async function syncNow(silent) {
   _updateSyncIndicator();
 
   try {
-    // Push any pending local events first
-    var localEvents = LOGGED_EVENTS.filter(function(e){
-      return e.t > (_lastSyncT || Date.now() - 7*86400000);
-    });
-    if (localEvents.length > 0) await syncPushEvents(localEvents);
+    // Only push events that were logged locally (not pulled from Supabase).
+    // On first load (_lastSyncT===null) skip push entirely — avoids re-seeding stale cache.
+    // Events are marked local: true when logged by this device.
+    if (_lastSyncT) {
+      var localEvents = LOGGED_EVENTS.filter(function(e){
+        return e.local === true && e.t > _lastSyncT;
+      });
+      if (localEvents.length > 0) await syncPushEvents(localEvents);
+    }
 
-    // Push recent CGM readings (last hour)
-    var recentReadings = HISTORY_RAW.filter(function(h){
-      return h.t > Date.now() - 3600000 && h.bg > 0;
-    });
-    if (recentReadings.length > 0) await syncPushReadings(recentReadings);
+    // Push recent CGM readings — only after first sync (when we know we have real data)
+    if (_lastSyncT) {
+      var recentReadings = HISTORY_RAW.filter(function(h){
+        return h.t > Date.now() - 3600000 && h.bg > 0;
+      });
+      if (recentReadings.length > 0) await syncPushReadings(recentReadings);
+    }
 
     // Pull everything from other devices
     var sinceT    = _lastSyncT || Date.now() - 7 * 86400000;
@@ -6026,7 +6033,7 @@ function logMealEntry(carbsOnly) {
   if (u > 0) {
     SESSION.push({t: t, c: 0, u: u});
     BOLUS_EVENTS.push({t: t, c: 0, u: u});
-    LOGGED_EVENTS.push({t: t, c: 0, u: u, note: 'bolus'});
+    LOGGED_EVENTS.push({t: t, c: 0, u: u, note: 'bolus', local: true});
   }
 
   // Log carbs at eat time — include per-food breakdown for GI-aware rendering
@@ -6036,7 +6043,7 @@ function logMealEntry(carbsOnly) {
   if (totalCarbs > 0) {
     SESSION.push({t: carbT, c: totalCarbs, u: 0, gi: avgGI, items: foodItems});
     BOLUS_EVENTS.push({t: carbT, c: totalCarbs, u: 0, gi: avgGI, items: foodItems});
-    LOGGED_EVENTS.push({t: carbT, c: totalCarbs, u: 0, gi: avgGI, items: foodItems, note: 'carbs', logged_by: _thisPersonId||'unknown'});
+    LOGGED_EVENTS.push({t: carbT, c: totalCarbs, u: 0, gi: avgGI, items: foodItems, note: 'carbs', logged_by: _thisPersonId||'unknown', local: true});
   }
 
   try{localStorage.setItem('river_logged',JSON.stringify(LOGGED_EVENTS));}catch(err){}
@@ -7056,7 +7063,7 @@ function logHypoTreatment(id){
   SESSION.push({t:now,c:carbs,u:0,note:'hypo:'+id});
   try{localStorage.setItem('river_session',JSON.stringify(SESSION));}catch(e){}
   BOLUS_EVENTS.push({t:now,c:carbs,u:0,note:'hypo:'+id});
-  LOGGED_EVENTS.push({t:now,c:carbs,u:0,note:'hypo:'+id,logged_by:_thisPersonId||'unknown'});
+  LOGGED_EVENTS.push({t:now,c:carbs,u:0,note:'hypo:'+id,logged_by:_thisPersonId||'unknown', local:true});
   try{localStorage.setItem('river_logged',JSON.stringify(LOGGED_EVENTS));}catch(e){}
   syncAfterLog();
   closeHypoLog();
@@ -8484,6 +8491,11 @@ async function sendFeatureRequest(description) {
 
 // ── Nuclear data clear — wipes all local river state ─────────────────
 function nukeLocalData() {
+  // Stop all timers first — prevent sync firing during reload and re-pushing events
+  try{ if(typeof stopLivePolling==='function') stopLivePolling(); }catch(_e){}
+  try{ if(typeof _syncTimer!=='undefined' && _syncTimer) clearInterval(_syncTimer); }catch(_e){}
+  try{ if(typeof _pollTimer!=='undefined' && _pollTimer) clearInterval(_pollTimer); }catch(_e){}
+
   try {
     // Clear all river localStorage keys
     var keys = ['river_logged','river_session','river_meals','river_meal_hist',
@@ -8497,7 +8509,6 @@ function nukeLocalData() {
     try{ if(typeof MEAL_HISTORY!=='undefined')   MEAL_HISTORY.length=0;  }catch(_e){}
     try{ if(typeof HISTORY_RAW!=='undefined')    HISTORY_RAW.length=0;   }catch(_e){}
   } catch(_e) {}
-  // Reload regardless — the whole point is a clean start
   try { showToast('cache cleared — reloading'); } catch(_e){}
   setTimeout(function(){ window.location.reload(); }, 800);
 }
