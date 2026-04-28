@@ -3185,17 +3185,23 @@ function _updateCurveBubbles() {
   var pts = _findPeaksTroughs();
 
   // Build a signature to detect changes
-  var sig = pts.map(function(p) {
-    return p.type + Math.round(p.x) + Math.round(p.y);
-  }).join('|');
+  // Use a non-empty sentinel for empty pts so the first empty result still triggers a kill
+  var sig = pts.length > 0
+    ? pts.map(function(p){ return p.type+Math.round(p.x)+Math.round(p.y); }).join('|')
+    : ('__empty__' + Math.floor(Date.now() / 10000)); // changes every 10s to allow periodic recheck
 
-  if (sig === _lastPTSet) return;
+  // For empty state: only re-trigger if we previously had bubbles
+  if (sig.startsWith('__empty__') && _lastPTSet.startsWith('__empty__') && _curveBubbles.length === 0) return;
+  if (!sig.startsWith('__empty__') && sig === _lastPTSet) return;
   _lastPTSet = sig;
 
-  // Fade out old bubbles gracefully — don't hard-clear
+  // Mark all existing bubbles as dying
   _curveBubbles.forEach(function(b) { b._dying = true; });
 
-  pts.forEach(function(pt) { _spawnCurveBubbles(pt); });
+  // Only spawn new ones if there are actual peaks/troughs
+  if (pts.length > 0) {
+    pts.forEach(function(pt) { _spawnCurveBubbles(pt); });
+  }
 }
 
 function _tickCurveBubbles() {
@@ -3226,13 +3232,18 @@ function _tickCurveBubbles() {
     // Find current peak position (peaks move as BG changes)
     var anchorX = b.ptX;
     var anchorY = b.ptY;
-    // Re-anchor to nearest pt
+    // Re-anchor to nearest pt — if no pt within range, bubble is orphaned and dies
+    var reanchored = false;
     pts.forEach(function(pt) {
       if (Math.abs(pt.x - b.ptX) < 60) {
         b.ptX = pt.x; b.ptY = pt.y;
         anchorX = pt.x; anchorY = pt.y;
+        reanchored = true;
       }
     });
+    if (!reanchored && pts.length === 0) {
+      b._dying = true; // no peaks left — fade out
+    }
 
     // Target: orbital offset + lava motion around anchor
     var targetX = anchorX + b.ox + lavaWob;
