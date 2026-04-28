@@ -324,8 +324,8 @@ try { LOGGED_EVENTS = JSON.parse(localStorage.getItem('river_logged')||'[]');
 } catch(err) {}
 
 const POD_PAUSE_T  = 1773651600000;
-let CGM_START = HISTORY_RAW[0].t;
-let CGM_END   = HISTORY_RAW[HISTORY_RAW.length-1].t;
+let CGM_START = HISTORY_RAW.length > 0 ? HISTORY_RAW[0].t : Date.now() - 2*3600000;
+let CGM_END   = HISTORY_RAW.length > 0 ? HISTORY_RAW[HISTORY_RAW.length-1].t : Date.now();
 
 function updateCGMBounds() {
   if (HISTORY_RAW.length === 0) {
@@ -2900,7 +2900,7 @@ function updateHUD(d, pal) {
   var prev15 = dataAt(viewTime - 15*60000);
   var delta  = d.bg - prev15.bg;
   // Only use computed delta if we have ≥12 min of real span and we're near "now"
-  var haveSpan = latestRaw && (latestRaw.t - HISTORY_RAW[0].t) > 12*60000;
+  var haveSpan = latestRaw && HISTORY_RAW.length > 1 && (latestRaw.t - HISTORY_RAW[0].t) > 12*60000;
   var nearNow  = Math.abs(viewTime - (latestRaw ? latestRaw.t : 0)) < 10*60000;
   var arr;
   if (cgmTrend && !cgmStale && nearNow) {
@@ -2984,7 +2984,7 @@ function updateHUD(d, pal) {
 
 function returnToNow() {
   _isAtNow = true;
-  viewTime = HISTORY_RAW[HISTORY_RAW.length-1].t;
+  viewTime = HISTORY_RAW.length > 0 ? HISTORY_RAW[HISTORY_RAW.length-1].t : Date.now();
   viewSpan = 2 * 3600000; // fixed 2h
   document.getElementById('now-btn').style.display='none';
 }
@@ -3355,7 +3355,7 @@ function frame(ts) {
   }
 
   // Show "return to now" when scrolled away from latest data
-  const latestT = HISTORY_RAW[HISTORY_RAW.length-1].t;
+  const latestT = HISTORY_RAW.length > 0 ? HISTORY_RAW[HISTORY_RAW.length-1].t : Date.now();
   const awayFromNow = (latestT - viewTime) > 8 * 60000;
   const nowBtn = document.getElementById('now-btn');
   if (nowBtn) nowBtn.style.opacity = awayFromNow ? '0.85' : '0';
@@ -8504,11 +8504,16 @@ function nukeLocalData() {
 
 async function nukeSupabaseEvents() {
   if (!SUPABASE_READY) { showToast('Supabase not configured'); return; }
+  showToast('clearing Supabase events…');
   try {
-    await _sbFetch('events?t=gt.0', { method: 'DELETE', prefer: 'return=minimal' });
-    showToast('Supabase events cleared\nnuke local next');
+    // Delete all events — requires RLS to allow DELETE for anon key
+    // If this 400s, go to Supabase dashboard → Table Editor → events → delete all rows manually
+    await _sbFetch('events?t=gte.0', { method: 'DELETE', prefer: 'return=minimal',
+      headers: { 'Prefer': 'return=minimal' } });
+    showToast('Supabase events cleared\nnow nuke local on each device');
   } catch(e) {
-    showToast('Supabase clear failed:\n' + e.message.slice(0,60));
+    // 400 usually means RLS blocks DELETE for anon key
+    showToast('Supabase DELETE blocked (RLS)\nGo to Supabase dashboard →\nTable Editor → events →\ndelete all rows manually');
   }
 }
 
