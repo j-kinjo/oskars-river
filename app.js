@@ -504,6 +504,7 @@ const IOB_PEAK = 70; // "now" position — past to left, future to right
 
 // Session entries
 let SESSION = [];
+var _eatReminder = null; // timeout handle for eat-now reminder after bolus
 try { SESSION = JSON.parse(localStorage.getItem('river_session')||'[]'); SESSION=SESSION.filter(function(s){return (Date.now()-s.t)<6*3600000;}); } catch(e){}
 
 // ── CANVAS ───────────────────────────────────────────────────
@@ -1161,8 +1162,10 @@ function _drawCOBReservoir() {
       // This correctly handles peakT off-screen left or right.
       // For each pixel, compute its canvas time and evaluate distance to peakT.
       var sigmaMins = peakMin / 2.2; // absorption width in minutes (mirrors _cobFgi sigma)
+      var mealT_local = meal.t; // capture for closure — carbs cannot arrive before eat time
       function bellH(px) {
         var t_px = viewTime + (px - NOW_X*W) / W * viewSpan;
+        if (t_px < mealT_local) return 0; // no carb absorption before food is eaten
         var minsDist = (t_px - peakT) / 60000;
         return Math.exp(-0.5 * Math.pow(minsDist / sigmaMins, 2)) * maxD;
       }
