@@ -2906,18 +2906,14 @@ function drawHypoPulse(pal) {
 let lastHUD = 0;
 function updateHUD(d, pal) {
   if (Date.now()-lastHUD < 300) return; lastHUD = Date.now();
-  // If showing persisted history before live CGM connects, grey out the BG number
+  // Persisted history loaded but live CGM not yet connected — hide BG entirely
   if (typeof _historyIsStale !== 'undefined' && _historyIsStale) {
-    var bgEl2 = document.getElementById('bg-num');
-    if (bgEl2) { bgEl2.style.opacity = '0.3'; bgEl2.title = 'connecting…'; }
-    var bgUnit2 = document.getElementById('bg-unit');
-    if (bgUnit2) bgUnit2.style.opacity = '0.3';
-    return; // don't update values until live data arrives
+    var bgWrap2 = document.getElementById('bg-wrap');
+    if (bgWrap2) bgWrap2.style.opacity = '0';
+    return;
   } else {
-    var bgEl3 = document.getElementById('bg-num');
-    if (bgEl3) { bgEl3.style.opacity = ''; bgEl3.title = ''; }
-    var bgUnit3 = document.getElementById('bg-unit');
-    if (bgUnit3) bgUnit3.style.opacity = '';
+    var bgWrap3 = document.getElementById('bg-wrap');
+    if (bgWrap3) bgWrap3.style.opacity = '';
   }
   if (!d || !pal || typeof d.bg !== 'number' || isNaN(d.bg)) return;
 
