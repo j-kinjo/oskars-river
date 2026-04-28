@@ -244,7 +244,6 @@ async function syncNow(silent) {
     var sinceT    = _lastSyncT || Date.now() - 7 * 86400000;
     var newRead   = await syncPullReadings(sinceT);
     var newEvents = await syncPullEvents(sinceT);
-    syncPullPricks(sinceT);
 
     _lastSyncT  = Date.now();
     _syncState  = 'ok';
@@ -3399,7 +3398,6 @@ function frame(ts) {
 
   // ── EVENT MARKERS — ripples where forces entered ───────────────
   drawBolusMarkers(pal);
-  drawBloodPricks();
   drawBasalReservoir(pal);  // subtle always-present basal drip
 
   // ── CONTEXT ─────────────────────────────────────────────────────
@@ -3480,20 +3478,10 @@ CV.addEventListener('mousedown',e=>{if(!e.target.closest('#sheet,#flow-dock,.doc
 CV.addEventListener('mousemove',e=>{if(md.on)viewTime=Math.max(CGM_START,Math.min(CGM_END,md.t0-(e.clientX-md.x0)*(viewSpan/W)))});
 CV.addEventListener('mouseup',()=>md.on=false);
 CV.addEventListener('click', function(e) {
+  if (!window._eventCards || _eventCards.length === 0) return;
   var rect = CV.getBoundingClientRect();
   var mx = e.clientX - rect.left;
   var my = e.clientY - rect.top;
-  // Check prick diamonds first
-  var pCards = window._prickCards || [];
-  for (var pi = 0; pi < pCards.length; pi++) {
-    var pc = pCards[pi];
-    if (Math.hypot(mx - pc.x, my - pc.y) < pc.r) {
-      openPrickEditor(pc.idx);
-      return;
-    }
-  }
-  // Check bolus/carb event cards
-  if (!window._eventCards || _eventCards.length === 0) return;
   for (var ci = 0; ci < _eventCards.length; ci++) {
     var c = _eventCards[ci];
     if (mx >= c.x - c.w/2 && mx <= c.x + c.w/2 && my >= c.y - 12 && my <= c.y + 12) {
@@ -3549,10 +3537,9 @@ function setTimeNow() {
   var el = document.getElementById('in-time');
   if (el) el.value = val;
 }
-var _entryTimeVal    = null;
-var _bolusVal        = null;
+var _entryTimeVal = null;
+var _bolusVal = null;
 var _eatWaitOverride = null; // preserved across renderSheet() calls
-var _radialDefaultT  = null; // river timestamp from long press — pre-fills modal time pickers
 
 function getEntryTime() {
   var el = document.getElementById('in-time');
@@ -3696,14 +3683,12 @@ function saveFoodLibrary() {
 }
 
 // ── FOOD ALIASES — maps scanned/handwritten names to canonical library names ──
-// Format: { "lindor": "lindt", "benecol yogurt": "benecol drink", ... }
 var FOOD_ALIASES = (function() {
   try { return JSON.parse(localStorage.getItem('river_food_aliases') || '{}'); } catch(e) { return {}; }
 })();
 
 function saveFoodAliases() {
   try { localStorage.setItem('river_food_aliases', JSON.stringify(FOOD_ALIASES)); } catch(e) {}
-  // Best-effort Supabase sync — store as single events row with note='aliases'
   if (SUPABASE_READY) {
     var payload = { t: -1, c: 0, u: 0, note: 'aliases', items: [{ aliases: FOOD_ALIASES }] };
     _sbFetch('events?note=eq.aliases', { method: 'DELETE', prefer: 'return=minimal' })
@@ -3719,31 +3704,25 @@ function addFoodAlias(scanned, canonical) {
   saveFoodAliases();
 }
 
-// Resolve a scanned name → best matching food in library, applying aliases first
 function resolveScannedFood(name) {
   if (!name) return null;
   var key = name.toLowerCase().trim();
   var resolved = FOOD_ALIASES[key] || key;
   var all = FOOD_DB.concat(FOOD_LIBRARY);
-  // Exact match
   var exact = all.find(function(f){ return f.name.toLowerCase() === resolved; });
   if (exact) return exact;
-  // Partial match
   var partial = all.find(function(f){ return f.name.toLowerCase().includes(resolved) || resolved.includes(f.name.toLowerCase()); });
   return partial || null;
 }
 
-// Pull aliases from Supabase on startup
 function loadAliasesFromSupabase() {
   if (!SUPABASE_READY) return;
   _sbFetch('events?note=eq.aliases&limit=1', { method: 'GET' })
     .then(function(rows) {
       if (!Array.isArray(rows) || rows.length === 0) return;
       var row = rows[0];
-      var items = row.items;
-      if (items && items[0] && items[0].aliases) {
-        var remote = items[0].aliases;
-        FOOD_ALIASES = Object.assign({}, remote, FOOD_ALIASES); // local wins on conflict
+      if (row.items && row.items[0] && row.items[0].aliases) {
+        FOOD_ALIASES = Object.assign({}, row.items[0].aliases, FOOD_ALIASES);
         saveFoodAliases();
       }
     }).catch(function(e){ console.warn('[aliases] load failed:', e.message); });
@@ -4782,14 +4761,7 @@ function openSheet() {
     s.classList.add('open');
     requestAnimationFrame(function(){ s.style.opacity = '1'; });
   }
-  if (_radialDefaultT) {
-    var _rdt = new Date(_radialDefaultT);
-    var _rdtLocal = new Date(_rdt.getTime() - _rdt.getTimezoneOffset()*60000);
-    setEntryTime(_rdtLocal.toISOString().slice(0,16));
-    _radialDefaultT = null;
-  } else {
-    setTimeNow();
-  }
+  setTimeNow();
 }
 
 // Long-press food button → kitchen mode; tap → quick log
@@ -5581,9 +5553,7 @@ async function handlePadPhoto(inputEl) {
   var file = inputEl.files && inputEl.files[0];
   if (!file) return;
   inputEl.value = '';
-
   _showFoodAIStatus('reading pad…');
-
   try {
     var base64 = await new Promise(function(res, rej) {
       var r = new FileReader();
@@ -5591,9 +5561,7 @@ async function handlePadPhoto(inputEl) {
       r.onerror = function() { rej(new Error('Read failed')); };
       r.readAsDataURL(file);
     });
-
     var mediaType = file.type || 'image/jpeg';
-
     var systemPrompt = 'You read handwritten meal notes from a diabetes management notebook. ' +
       'The notes typically list food items with their carbohydrate weights in grams, sometimes with a total, ' +
       'a BG reading in mmol/L (e.g. "7.4"), insulin units given (e.g. "3U" or "3 units"), ' +
@@ -5610,7 +5578,6 @@ async function handlePadPhoto(inputEl) {
       '"items":[{"name":"food name as written","carbs_written":number,"weight_g":number_or_null}],' +
       '"notes":"any other text on the page or null"}. ' +
       'If carbs_written is not readable, omit the item. If nothing looks like meal notes, return {"error":"not meal notes"}.';
-
     var resp = await fetch('https://orange-surf-6f98.john-king-uk.workers.dev/claude', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'anthropic-version': '2023-06-01' },
@@ -5618,13 +5585,10 @@ async function handlePadPhoto(inputEl) {
         model: 'claude-sonnet-4-5',
         max_tokens: 600,
         system: systemPrompt,
-        messages: [{
-          role: 'user',
-          content: [
-            { type: 'image', source: { type: 'base64', media_type: mediaType, data: base64 } },
-            { type: 'text', text: 'Read the handwritten meal notes in this photo.' }
-          ]
-        }]
+        messages: [{ role: 'user', content: [
+          { type: 'image', source: { type: 'base64', media_type: mediaType, data: base64 } },
+          { type: 'text', text: 'Read the handwritten meal notes in this photo.' }
+        ]}]
       })
     });
     if (!resp.ok) throw new Error('API ' + resp.status);
@@ -5635,10 +5599,8 @@ async function handlePadPhoto(inputEl) {
     if (fi < 0 || li < 0) throw new Error('No JSON');
     var parsed = JSON.parse(clean.slice(fi, li + 1));
     _hideFoodAIStatus();
-
     if (parsed.error) { showToast('Could not read pad — try better lighting'); return; }
     if (!parsed.items || parsed.items.length === 0) { showToast('No food items found in photo'); return; }
-
     renderPadImportScreen(parsed);
   } catch(err) {
     _hideFoodAIStatus();
@@ -5647,16 +5609,13 @@ async function handlePadPhoto(inputEl) {
   }
 }
 
-// ── Pad import screen — editable review before committing to food log ──
-
-var _padImportData = null; // current parsed pad result
+var _padImportData = null;
+var _padInferredT  = 0;
 
 function renderPadImportScreen(parsed) {
   _padImportData = parsed;
-
   var el = document.getElementById('pad-import-overlay');
   if (el) el.remove();
-
   el = document.createElement('div');
   el.id = 'pad-import-overlay';
   el.style.cssText = 'position:fixed;inset:0;z-index:90;background:rgba(3,5,20,0.96);' +
@@ -5664,39 +5623,33 @@ function renderPadImportScreen(parsed) {
     'overflow-y:auto;padding:24px 0 60px;pointer-events:auto;touch-action:pan-y';
   el.addEventListener('touchstart', function(e){ e.stopPropagation(); }, { passive: true });
 
-  // Infer timestamp from meal_label + date_hint
   var inferredT = _inferPadTimestamp(parsed);
-  var inferredDate = new Date(inferredT);
-  var tzOff = inferredDate.getTimezoneOffset() * 60000;
+  _padInferredT = inferredT;
+  var tzOff = new Date(inferredT).getTimezoneOffset() * 60000;
   var dtISO = new Date(inferredT - tzOff).toISOString().slice(0, 16);
 
-  // Build items HTML — each row has name, carbs, match status, alias button
-  var itemsHtml = '';
-  parsed.items.forEach(function(item, idx) {
+  var itemsHtml = parsed.items.map(function(item, idx) {
     var match = resolveScannedFood(item.name);
     var matchInfo = match
       ? '<span style="color:rgba(62,200,140,0.8);font-size:9px">✓ ' + match.name + (match.gi ? ' GI' + match.gi : '') + '</span>'
       : '<button onclick="openAliasLinker(' + idx + ')" style="background:none;border:1px solid rgba(255,180,60,0.4);border-radius:5px;padding:2px 7px;cursor:pointer;font-family:\'DM Mono\',monospace;font-size:8px;color:rgba(255,180,60,0.8)">link to library</button>';
+    return '<div id="pad-item-' + idx + '" style="display:flex;align-items:center;gap:8px;padding:8px 0;border-bottom:1px solid rgba(255,255,255,0.05)">' +
+      '<button onclick="removePadItem(' + idx + ')" style="background:none;border:none;cursor:pointer;color:rgba(200,80,80,0.5);font-size:14px;padding:0 4px;flex-shrink:0">×</button>' +
+      '<input id="pad-name-' + idx + '" value="' + _esc(item.name) + '" ' +
+        'style="flex:1;background:rgba(255,255,255,0.05);border:1px solid rgba(255,255,255,0.1);border-radius:6px;' +
+        'padding:6px 8px;font-family:\'DM Mono\',monospace;font-size:11px;color:rgba(220,235,250,0.85);outline:none" ' +
+        'oninput="_padItemNameChanged(' + idx + ',this.value)">' +
+      '<div style="display:flex;align-items:center;gap:4px">' +
+        '<input id="pad-carbs-' + idx + '" type="number" value="' + (item.carbs_written || 0) + '" min="0" max="200" step="1" oninput="_updatePadTotal()" ' +
+          'style="width:52px;background:rgba(255,140,50,0.06);border:1px solid rgba(255,140,50,0.2);border-radius:6px;' +
+          'padding:6px 6px;font-family:\'DM Mono\',monospace;font-size:13px;color:rgba(255,140,50,0.9);text-align:center;outline:none">' +
+        '<span style="font-family:\'DM Mono\',monospace;font-size:9px;color:rgba(255,140,50,0.4)">g</span>' +
+      '</div>' +
+      '<div id="pad-match-' + idx + '" style="min-width:60px;text-align:right">' + matchInfo + '</div>' +
+    '</div>';
+  }).join('');
 
-    itemsHtml +=
-      '<div id="pad-item-' + idx + '" style="display:flex;align-items:center;gap:8px;padding:8px 0;border-bottom:1px solid rgba(255,255,255,0.05)">' +
-        '<button onclick="removePadItem(' + idx + ')" style="background:none;border:none;cursor:pointer;color:rgba(200,80,80,0.5);font-size:14px;padding:0 4px;flex-shrink:0">×</button>' +
-        '<input id="pad-name-' + idx + '" value="' + _esc(item.name) + '" ' +
-          'style="flex:1;background:rgba(255,255,255,0.05);border:1px solid rgba(255,255,255,0.1);border-radius:6px;' +
-          'padding:6px 8px;font-family:\'DM Mono\',monospace;font-size:11px;color:rgba(220,235,250,0.85);outline:none" ' +
-          'oninput="_padItemNameChanged(' + idx + ',this.value)">' +
-        '<div style="display:flex;align-items:center;gap:4px">' +
-          '<input id="pad-carbs-' + idx + '" type="number" value="' + (item.carbs_written || 0) + '" min="0" max="200" step="1" ' +
-            'style="width:52px;background:rgba(255,140,50,0.06);border:1px solid rgba(255,140,50,0.2);border-radius:6px;' +
-            'padding:6px 6px;font-family:\'DM Mono\',monospace;font-size:13px;color:rgba(255,140,50,0.9);text-align:center;outline:none">' +
-          '<span style="font-family:\'DM Mono\',monospace;font-size:9px;color:rgba(255,140,50,0.4)">g</span>' +
-        '</div>' +
-        '<div id="pad-match-' + idx + '" style="min-width:60px;text-align:right">' + matchInfo + '</div>' +
-      '</div>';
-  });
-
-  // Meal label buttons
-  var labels = ['breakfast', 'lunch', 'dinner', 'snack'];
+  var labels = ['breakfast','lunch','dinner','snack'];
   var currentLabel = (parsed.meal_label || '').toLowerCase();
   var labelBtns = labels.map(function(l) {
     var active = l === currentLabel;
@@ -5706,39 +5659,28 @@ function renderPadImportScreen(parsed) {
       'color:' + (active ? 'rgba(62,200,140,0.9)' : 'rgba(180,200,220,0.5)') + ';cursor:pointer">' + l + '</button>';
   }).join('');
 
-  var totalWritten = parsed.total_carbs_written || parsed.items.reduce(function(s, i){ return s + (i.carbs_written || 0); }, 0);
+  var totalWritten = parsed.total_carbs_written || parsed.items.reduce(function(s,i){ return s+(i.carbs_written||0); }, 0);
+  var nowISO = new Date(Date.now() - new Date().getTimezoneOffset()*60000).toISOString().slice(0,16);
 
   el.innerHTML =
     '<div style="max-width:380px;width:100%;padding:0 20px">' +
-
-    // Header
     '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:20px;padding-top:8px">' +
       '<div style="font-family:\'Fraunces\',serif;font-style:italic;font-weight:200;font-size:22px;color:rgba(255,200,120,0.9)">pad import</div>' +
-      '<button onclick="document.getElementById(\'pad-import-overlay\').remove()" ' +
-        'style="background:none;border:none;cursor:pointer;font-size:24px;color:rgba(180,200,220,0.4);padding:4px">×</button>' +
+      '<button onclick="document.getElementById(\'pad-import-overlay\').remove()" style="background:none;border:none;cursor:pointer;font-size:24px;color:rgba(180,200,220,0.4);padding:4px">×</button>' +
     '</div>' +
-
-    // Meal label
     '<div style="margin-bottom:14px">' +
       '<div style="font-family:\'DM Mono\',monospace;font-size:8px;letter-spacing:1px;text-transform:uppercase;color:rgba(180,200,220,0.4);margin-bottom:6px">meal</div>' +
       '<div style="display:flex;gap:6px;flex-wrap:wrap">' + labelBtns + '</div>' +
     '</div>' +
-
-    // Timestamp
     '<div style="margin-bottom:14px">' +
       '<div style="font-family:\'DM Mono\',monospace;font-size:8px;letter-spacing:1px;text-transform:uppercase;color:rgba(180,200,220,0.4);margin-bottom:6px">' +
         'when' + (parsed.date_hint ? ' · <span style="color:rgba(255,200,120,0.5)">' + _esc(parsed.date_hint) + '</span>' : '') + '</div>' +
       '<div style="display:flex;gap:8px;align-items:center">' +
         '<input id="pad-time" type="datetime-local" value="' + dtISO + '" ' +
-          'style="flex:1;padding:8px 10px;border-radius:8px;border:1px solid rgba(255,255,255,0.12);' +
-          'background:rgba(255,255,255,0.05);font-family:\'DM Mono\',monospace;font-size:12px;' +
-          'color:rgba(200,220,240,0.8);outline:none">' +
-        '<button onclick="document.getElementById(\'pad-time\').value=\'' + new Date(Date.now() - new Date().getTimezoneOffset()*60000).toISOString().slice(0,16) + '\'" ' +
-          'style="padding:6px 10px;border-radius:7px;border:1px solid rgba(255,255,255,0.1);background:rgba(255,255,255,0.04);font-family:\'DM Mono\',monospace;font-size:9px;color:rgba(180,200,220,0.5);cursor:pointer">now</button>' +
+          'style="flex:1;padding:8px 10px;border-radius:8px;border:1px solid rgba(255,255,255,0.12);background:rgba(255,255,255,0.05);font-family:\'DM Mono\',monospace;font-size:12px;color:rgba(200,220,240,0.8);outline:none">' +
+        '<button onclick="document.getElementById(\'pad-time\').value=\'' + nowISO + '\'" style="padding:6px 10px;border-radius:7px;border:1px solid rgba(255,255,255,0.1);background:rgba(255,255,255,0.04);font-family:\'DM Mono\',monospace;font-size:9px;color:rgba(180,200,220,0.5);cursor:pointer">now</button>' +
       '</div>' +
     '</div>' +
-
-    // BG / units row (from pad)
     ((parsed.bg_mmol || parsed.units) ?
     '<div style="display:flex;gap:10px;margin-bottom:14px">' +
       (parsed.bg_mmol ? '<div style="flex:1;padding:8px 10px;border-radius:8px;background:rgba(255,255,255,0.04);border:1px solid rgba(255,255,255,0.08)">' +
@@ -5747,112 +5689,79 @@ function renderPadImportScreen(parsed) {
       '</div>' : '') +
       (parsed.units ? '<div style="flex:1;padding:8px 10px;border-radius:8px;background:rgba(60,130,220,0.06);border:1px solid rgba(60,130,220,0.15)">' +
         '<div style="font-family:\'DM Mono\',monospace;font-size:8px;color:rgba(60,130,220,0.5);margin-bottom:3px">insulin on pad</div>' +
-        '<input id="pad-units" type="number" value="' + parsed.units + '" min="0" max="20" step="0.5" ' +
-          'style="width:100%;background:none;border:none;font-family:\'DM Mono\',monospace;font-size:16px;color:rgba(60,130,220,0.9);outline:none">' +
+        '<input id="pad-units" type="number" value="' + parsed.units + '" min="0" max="20" step="0.5" style="width:100%;background:none;border:none;font-family:\'DM Mono\',monospace;font-size:16px;color:rgba(60,130,220,0.9);outline:none">' +
       '</div>' : '') +
     '</div>' : '') +
-
-    // Items list
     '<div style="margin-bottom:14px">' +
-      '<div style="font-family:\'DM Mono\',monospace;font-size:8px;letter-spacing:1px;text-transform:uppercase;color:rgba(180,200,220,0.4);margin-bottom:8px">' +
-        'items — edit carbs or names as needed</div>' +
+      '<div style="font-family:\'DM Mono\',monospace;font-size:8px;letter-spacing:1px;text-transform:uppercase;color:rgba(180,200,220,0.4);margin-bottom:8px">items — edit carbs or names as needed</div>' +
       '<div id="pad-items-list">' + itemsHtml + '</div>' +
       '<button onclick="addPadItemRow()" style="margin-top:8px;width:100%;padding:6px;border-radius:8px;border:1px dashed rgba(255,255,255,0.1);background:transparent;font-family:\'DM Mono\',monospace;font-size:9px;color:rgba(180,200,220,0.4);cursor:pointer">+ add item</button>' +
     '</div>' +
-
-    // Total
-    '<div id="pad-total-row" style="padding:10px 12px;border-radius:8px;background:rgba(255,140,50,0.06);border:1px solid rgba(255,140,50,0.15);margin-bottom:20px;display:flex;justify-content:space-between;align-items:center">' +
+    '<div style="padding:10px 12px;border-radius:8px;background:rgba(255,140,50,0.06);border:1px solid rgba(255,140,50,0.15);margin-bottom:20px;display:flex;justify-content:space-between;align-items:center">' +
       '<span style="font-family:\'DM Mono\',monospace;font-size:9px;color:rgba(255,140,50,0.5)">total carbs</span>' +
       '<div>' +
         '<span id="pad-calc-total" style="font-family:\'DM Mono\',monospace;font-size:18px;color:rgba(255,140,50,0.9)">' + totalWritten.toFixed(0) + '</span>' +
         '<span style="font-family:\'DM Mono\',monospace;font-size:9px;color:rgba(255,140,50,0.4)">g</span>' +
-        (parsed.total_carbs_written && parsed.total_carbs_written !== totalWritten
-          ? '<span style="font-family:\'DM Mono\',monospace;font-size:9px;color:rgba(255,200,80,0.4);margin-left:8px">written: ' + parsed.total_carbs_written + 'g</span>'
-          : '') +
       '</div>' +
     '</div>' +
-
-    // Action buttons
     '<div style="display:flex;gap:8px">' +
-      '<button onclick="commitPadImport()" ' +
-        'style="flex:1;padding:13px;border-radius:10px;border:1px solid rgba(255,200,80,0.3);' +
-        'background:rgba(255,200,80,0.08);font-family:\'Fraunces\',serif;font-style:italic;' +
-        'font-weight:200;font-size:17px;color:rgba(255,200,120,0.9);cursor:pointer">add to log</button>' +
-      '<button onclick="document.getElementById(\'pad-import-overlay\').remove()" ' +
-        'style="padding:13px 16px;border-radius:10px;border:1px solid rgba(255,255,255,0.08);' +
-        'background:transparent;font-family:\'DM Mono\',monospace;font-size:10px;color:rgba(180,200,220,0.4);cursor:pointer">cancel</button>' +
+      '<button onclick="commitPadImport()" style="flex:1;padding:13px;border-radius:10px;border:1px solid rgba(255,200,80,0.3);background:rgba(255,200,80,0.08);font-family:\'Fraunces\',serif;font-style:italic;font-weight:200;font-size:17px;color:rgba(255,200,120,0.9);cursor:pointer">add to log</button>' +
+      '<button onclick="document.getElementById(\'pad-import-overlay\').remove()" style="padding:13px 16px;border-radius:10px;border:1px solid rgba(255,255,255,0.08);background:transparent;font-family:\'DM Mono\',monospace;font-size:10px;color:rgba(180,200,220,0.4);cursor:pointer">cancel</button>' +
     '</div>' +
-
     '</div>';
 
   document.body.appendChild(el);
-  _padInferredT = inferredT;
 }
-
-var _padInferredT = 0;
 
 function _inferPadTimestamp(parsed) {
   var label = (parsed.meal_label || '').toLowerCase();
-  var now = new Date();
-
-  // If date_hint has a parseable date, use it
   if (parsed.date_hint) {
     var d = new Date(parsed.date_hint);
     if (!isNaN(d.getTime())) {
-      // Assign time from meal label or time_hint
-      var hr = label === 'breakfast' ? 8 : label === 'lunch' ? 13 : label === 'dinner' ? 19 : label === 'snack' ? 15 : now.getHours();
-      if (parsed.time_hint) {
-        var tm = parsed.time_hint.match(/(\d{1,2}):(\d{2})/);
-        if (tm) { hr = parseInt(tm[1]); d.setMinutes(parseInt(tm[2])); }
-      }
+      var hr = label === 'breakfast' ? 8 : label === 'lunch' ? 13 : label === 'dinner' ? 19 : label === 'snack' ? 15 : new Date().getHours();
+      if (parsed.time_hint) { var tm = parsed.time_hint.match(/(\d{1,2}):(\d{2})/); if (tm) { hr = parseInt(tm[1]); d.setMinutes(parseInt(tm[2])); } }
       d.setHours(hr, 0, 0, 0);
       return d.getTime();
     }
   }
-
-  // No date — use today with label-based time
   var base = new Date();
-  base.setSeconds(0, 0);
-  if (label === 'breakfast') base.setHours(8, 0, 0, 0);
-  else if (label === 'lunch') base.setHours(13, 0, 0, 0);
-  else if (label === 'dinner') base.setHours(19, 0, 0, 0);
-  else if (label === 'snack') base.setHours(15, 30, 0, 0);
+  if (label === 'breakfast') base.setHours(8,0,0,0);
+  else if (label === 'lunch') base.setHours(13,0,0,0);
+  else if (label === 'dinner') base.setHours(19,0,0,0);
+  else if (label === 'snack') base.setHours(15,30,0,0);
   return base.getTime();
 }
 
 function _esc(str) {
-  return String(str || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');
+  return String(str||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');
 }
 
 function setPadLabel(label) {
   if (!_padImportData) return;
   _padImportData.meal_label = label;
-  var labels = ['breakfast','lunch','dinner','snack'];
-  labels.forEach(function(l) {
+  ['breakfast','lunch','dinner','snack'].forEach(function(l) {
     var btn = document.getElementById('pad-lbl-' + l);
     if (!btn) return;
-    var active = l === label;
-    btn.style.border = active ? '1px solid rgba(62,200,140,0.5)' : '1px solid rgba(255,255,255,0.1)';
-    btn.style.background = active ? 'rgba(62,200,140,0.1)' : 'transparent';
-    btn.style.color = active ? 'rgba(62,200,140,0.9)' : 'rgba(180,200,220,0.5)';
+    var a = l === label;
+    btn.style.border = a ? '1px solid rgba(62,200,140,0.5)' : '1px solid rgba(255,255,255,0.1)';
+    btn.style.background = a ? 'rgba(62,200,140,0.1)' : 'transparent';
+    btn.style.color = a ? 'rgba(62,200,140,0.9)' : 'rgba(180,200,220,0.5)';
   });
 }
 
 function removePadItem(idx) {
   var row = document.getElementById('pad-item-' + idx);
   if (row) row.style.display = 'none';
-  if (_padImportData && _padImportData.items[idx]) {
-    _padImportData.items[idx]._removed = true;
-  }
+  if (_padImportData && _padImportData.items[idx]) _padImportData.items[idx]._removed = true;
   _updatePadTotal();
 }
 
 function _updatePadTotal() {
   var items = _padImportData && _padImportData.items || [];
   var total = 0;
-  items.forEach(function(item, idx) {
+  items.forEach(function(item, i) {
     if (item._removed) return;
-    var inp = document.getElementById('pad-carbs-' + idx);
+    var inp = document.getElementById('pad-carbs-' + i);
     total += inp ? (parseFloat(inp.value) || 0) : (item.carbs_written || 0);
   });
   var el = document.getElementById('pad-calc-total');
@@ -5882,77 +5791,48 @@ function addPadItemRow() {
   row.style.cssText = 'display:flex;align-items:center;gap:8px;padding:8px 0;border-bottom:1px solid rgba(255,255,255,0.05)';
   row.innerHTML =
     '<button onclick="removePadItem(' + idx + ')" style="background:none;border:none;cursor:pointer;color:rgba(200,80,80,0.5);font-size:14px;padding:0 4px;flex-shrink:0">×</button>' +
-    '<input id="pad-name-' + idx + '" value="" placeholder="food name" ' +
-      'style="flex:1;background:rgba(255,255,255,0.05);border:1px solid rgba(255,255,255,0.1);border-radius:6px;' +
-      'padding:6px 8px;font-family:\'DM Mono\',monospace;font-size:11px;color:rgba(220,235,250,0.85);outline:none" ' +
-      'oninput="_padItemNameChanged(' + idx + ',this.value)">' +
+    '<input id="pad-name-' + idx + '" value="" placeholder="food name" oninput="_padItemNameChanged(' + idx + ',this.value)" ' +
+      'style="flex:1;background:rgba(255,255,255,0.05);border:1px solid rgba(255,255,255,0.1);border-radius:6px;padding:6px 8px;font-family:\'DM Mono\',monospace;font-size:11px;color:rgba(220,235,250,0.85);outline:none">' +
     '<div style="display:flex;align-items:center;gap:4px">' +
-      '<input id="pad-carbs-' + idx + '" type="number" value="0" min="0" max="200" step="1" ' +
-        'style="width:52px;background:rgba(255,140,50,0.06);border:1px solid rgba(255,140,50,0.2);border-radius:6px;' +
-        'padding:6px 6px;font-family:\'DM Mono\',monospace;font-size:13px;color:rgba(255,140,50,0.9);text-align:center;outline:none" ' +
-        'oninput="_updatePadTotal()">' +
+      '<input id="pad-carbs-' + idx + '" type="number" value="0" min="0" max="200" step="1" oninput="_updatePadTotal()" ' +
+        'style="width:52px;background:rgba(255,140,50,0.06);border:1px solid rgba(255,140,50,0.2);border-radius:6px;padding:6px 6px;font-family:\'DM Mono\',monospace;font-size:13px;color:rgba(255,140,50,0.9);text-align:center;outline:none">' +
       '<span style="font-family:\'DM Mono\',monospace;font-size:9px;color:rgba(255,140,50,0.4)">g</span>' +
     '</div>' +
-    '<div id="pad-match-' + idx + '" style="min-width:60px;text-align:right">' +
-      '<button onclick="openAliasLinker(' + idx + ')" style="background:none;border:1px solid rgba(255,180,60,0.4);border-radius:5px;padding:2px 7px;cursor:pointer;font-family:\'DM Mono\',monospace;font-size:8px;color:rgba(255,180,60,0.8)">link</button>' +
-    '</div>';
+    '<div id="pad-match-' + idx + '" style="min-width:60px;text-align:right"><button onclick="openAliasLinker(' + idx + ')" style="background:none;border:1px solid rgba(255,180,60,0.4);border-radius:5px;padding:2px 7px;cursor:pointer;font-family:\'DM Mono\',monospace;font-size:8px;color:rgba(255,180,60,0.8)">link</button></div>';
   list.appendChild(row);
-  // Also wire up the carbs input to update total
-  var carbsInp = document.getElementById('pad-carbs-' + idx);
-  if (carbsInp) carbsInp.addEventListener('input', _updatePadTotal);
 }
-
-// ── Alias linker — map a scanned name to a library food ──
 
 function openAliasLinker(itemIdx) {
   var item = _padImportData && _padImportData.items[itemIdx];
   if (!item) return;
   var scannedName = (document.getElementById('pad-name-' + itemIdx) || {}).value || item.name;
-
   var el = document.getElementById('alias-linker-overlay');
   if (el) el.remove();
-
   el = document.createElement('div');
   el.id = 'alias-linker-overlay';
-  el.style.cssText = 'position:fixed;inset:0;z-index:95;background:rgba(3,5,20,0.97);' +
-    'backdrop-filter:blur(16px);display:flex;flex-direction:column;align-items:center;' +
-    'justify-content:center;padding:32px;pointer-events:auto';
+  el.style.cssText = 'position:fixed;inset:0;z-index:95;background:rgba(3,5,20,0.97);backdrop-filter:blur(16px);display:flex;flex-direction:column;align-items:center;justify-content:center;padding:32px;pointer-events:auto';
   el.addEventListener('click', function(e){ if(e.target===el) el.remove(); });
-
   var all = FOOD_DB.concat(FOOD_LIBRARY);
-  var opts = all.slice(0, 8).map(function(f){ return f.name; }); // initial list
-
   el.innerHTML =
     '<div style="max-width:340px;width:100%">' +
     '<div style="font-family:\'Fraunces\',serif;font-style:italic;font-weight:200;font-size:20px;color:rgba(255,200,120,0.9);margin-bottom:6px">link to library</div>' +
-    '<div style="font-family:\'DM Mono\',monospace;font-size:10px;color:rgba(180,200,220,0.5);margin-bottom:16px">' +
-      '"<span style="color:rgba(255,200,120,0.7)">' + _esc(scannedName) + '</span>" will be treated as…</div>' +
+    '<div style="font-family:\'DM Mono\',monospace;font-size:10px;color:rgba(180,200,220,0.5);margin-bottom:16px">"<span style="color:rgba(255,200,120,0.7)">' + _esc(scannedName) + '</span>" will be treated as…</div>' +
     '<input id="alias-search" type="text" placeholder="search food library…" autocomplete="off" ' +
-      'style="width:100%;padding:9px 12px;border-radius:9px;border:1px solid rgba(255,255,255,0.12);' +
-      'background:rgba(255,255,255,0.06);font-family:\'DM Mono\',monospace;font-size:12px;' +
-      'color:rgba(220,235,250,0.85);outline:none;box-sizing:border-box;margin-bottom:10px" ' +
+      'style="width:100%;padding:9px 12px;border-radius:9px;border:1px solid rgba(255,255,255,0.12);background:rgba(255,255,255,0.06);font-family:\'DM Mono\',monospace;font-size:12px;color:rgba(220,235,250,0.85);outline:none;box-sizing:border-box;margin-bottom:10px" ' +
       'oninput="_aliasSearchChanged(' + itemIdx + ',\'' + _esc(scannedName) + '\',this.value)">' +
     '<div id="alias-results" style="max-height:220px;overflow-y:auto">' + _aliasResultsHtml(itemIdx, scannedName, all.slice(0,12)) + '</div>' +
-    '<div style="display:flex;gap:8px;margin-top:14px">' +
-      '<button onclick="document.getElementById(\'alias-linker-overlay\').remove()" ' +
-        'style="flex:1;padding:10px;border-radius:9px;border:1px solid rgba(255,255,255,0.1);' +
-        'background:transparent;font-family:\'DM Mono\',monospace;font-size:10px;color:rgba(180,200,220,0.4);cursor:pointer">cancel</button>' +
-    '</div>' +
+    '<div style="margin-top:14px"><button onclick="document.getElementById(\'alias-linker-overlay\').remove()" style="width:100%;padding:10px;border-radius:9px;border:1px solid rgba(255,255,255,0.1);background:transparent;font-family:\'DM Mono\',monospace;font-size:10px;color:rgba(180,200,220,0.4);cursor:pointer">cancel</button></div>' +
     '</div>';
-
   document.body.appendChild(el);
 }
 
 function _aliasResultsHtml(itemIdx, scannedName, foods) {
   return foods.map(function(f) {
     var name = typeof f === 'string' ? f : f.name;
-    var gi = typeof f === 'object' && f.gi ? ' GI' + f.gi : '';
+    var gi   = typeof f === 'object' && f.gi ? ' GI' + f.gi : '';
     return '<button onclick="confirmAlias(' + itemIdx + ',\'' + _esc(scannedName) + '\',\'' + _esc(name) + '\')" ' +
-      'style="display:block;width:100%;text-align:left;padding:9px 12px;border-radius:8px;' +
-      'border:none;background:rgba(255,255,255,0.04);margin-bottom:4px;cursor:pointer;' +
-      'font-family:\'DM Mono\',monospace;font-size:11px;color:rgba(220,235,250,0.8)" ' +
-      'onmouseover="this.style.background=\'rgba(255,200,80,0.08)\'" ' +
-      'onmouseout="this.style.background=\'rgba(255,255,255,0.04)\'">' +
+      'style="display:block;width:100%;text-align:left;padding:9px 12px;border-radius:8px;border:none;background:rgba(255,255,255,0.04);margin-bottom:4px;cursor:pointer;font-family:\'DM Mono\',monospace;font-size:11px;color:rgba(220,235,250,0.8)" ' +
+      'onmouseover="this.style.background=\'rgba(255,200,80,0.08)\'" onmouseout="this.style.background=\'rgba(255,255,255,0.04)\'">' +
       name + '<span style="color:rgba(180,200,220,0.35);font-size:9px">' + gi + '</span></button>';
   }).join('');
 }
@@ -5960,78 +5840,58 @@ function _aliasResultsHtml(itemIdx, scannedName, foods) {
 function _aliasSearchChanged(itemIdx, scannedName, query) {
   var all = FOOD_DB.concat(FOOD_LIBRARY);
   var q = query.toLowerCase();
-  var filtered = q ? all.filter(function(f){ return f.name.toLowerCase().includes(q); }) : all.slice(0, 12);
+  var filtered = q ? all.filter(function(f){ return f.name.toLowerCase().includes(q); }) : all.slice(0,12);
   var res = document.getElementById('alias-results');
-  if (res) res.innerHTML = _aliasResultsHtml(itemIdx, scannedName, filtered.slice(0, 12));
+  if (res) res.innerHTML = _aliasResultsHtml(itemIdx, scannedName, filtered.slice(0,12));
 }
 
 function confirmAlias(itemIdx, scannedName, canonicalName) {
   addFoodAlias(scannedName, canonicalName);
-  // Update the match display in the import screen
-  var matchEl = document.getElementById('pad-match-' + itemIdx);
   var match = resolveScannedFood(canonicalName);
-  if (matchEl && match) {
-    matchEl.innerHTML = '<span style="color:rgba(62,200,140,0.8);font-size:9px">✓ ' + match.name + (match.gi ? ' GI' + match.gi : '') + '</span>';
-  }
+  var matchEl = document.getElementById('pad-match-' + itemIdx);
+  if (matchEl && match) matchEl.innerHTML = '<span style="color:rgba(62,200,140,0.8);font-size:9px">✓ ' + match.name + (match.gi ? ' GI' + match.gi : '') + '</span>';
   var el = document.getElementById('alias-linker-overlay');
   if (el) el.remove();
   showToast('"' + scannedName + '" → ' + canonicalName + ' saved');
 }
 
-// ── Commit pad import to the food log ──
-
 function commitPadImport() {
   if (!_padImportData) return;
-
   var timeEl = document.getElementById('pad-time');
   var t = timeEl && timeEl.value ? new Date(timeEl.value).getTime() : (_padInferredT || Date.now());
-
   var items = _padImportData.items || [];
   var foodItems = [];
   var totalCarbs = 0;
-
   items.forEach(function(item, idx) {
     if (item._removed) return;
-    var nameEl = document.getElementById('pad-name-' + idx);
+    var nameEl  = document.getElementById('pad-name-' + idx);
     var carbsEl = document.getElementById('pad-carbs-' + idx);
-    var name = (nameEl ? nameEl.value : item.name) || '';
+    var name  = (nameEl ? nameEl.value : item.name) || '';
     var carbs = carbsEl ? (parseFloat(carbsEl.value) || 0) : (item.carbs_written || 0);
     if (!name && carbs === 0) return;
-
     var match = resolveScannedFood(name);
     var gi = match ? (match.gi || 55) : 55;
-    var g = item.weight_g || null;
-
-    // c_written = carbs as written on pad; carbs = same for pad import (no weight-derived calc)
-    foodItems.push({ name: name, carbs: carbs, gi: gi, g: g, c_written: carbs, source: 'pad' });
+    foodItems.push({ name: name, carbs: carbs, gi: gi, g: item.weight_g || null, c_written: carbs, source: 'pad' });
     totalCarbs += carbs;
   });
-
   if (foodItems.length === 0 && totalCarbs === 0) { showToast('No items to log'); return; }
-
   var avgGI = foodItems.length > 0
-    ? foodItems.reduce(function(s, i){ return s + (i.gi || 55) * i.carbs; }, 0) / Math.max(totalCarbs, 1)
+    ? foodItems.reduce(function(s,i){ return s+(i.gi||55)*i.carbs; },0) / Math.max(totalCarbs,1)
     : 55;
-
-  // Log insulin if written on pad
   var unitsEl = document.getElementById('pad-units');
-  var u = unitsEl ? (parseFloat(unitsEl.value) || 0) : (_padImportData.units || 0);
+  var u = unitsEl ? (parseFloat(unitsEl.value)||0) : (_padImportData.units||0);
   if (u > 0 && u <= 20) {
-    SESSION.push({ t: t, c: 0, u: u });
-    BOLUS_EVENTS.push({ t: t, c: 0, u: u });
-    LOGGED_EVENTS.push({ t: t, c: 0, u: u, note: 'bolus', local: true, source: 'pad' });
+    SESSION.push({ t:t, c:0, u:u });
+    BOLUS_EVENTS.push({ t:t, c:0, u:u });
+    LOGGED_EVENTS.push({ t:t, c:0, u:u, note:'bolus', local:true, source:'pad' });
   }
-
-  // Log carbs — use t directly (pad import has no wait time baked in)
   if (totalCarbs > 0) {
-    SESSION.push({ t: t, c: totalCarbs, u: 0, gi: avgGI, items: foodItems });
-    BOLUS_EVENTS.push({ t: t, c: totalCarbs, u: 0, gi: avgGI, items: foodItems });
-    LOGGED_EVENTS.push({ t: t, c: totalCarbs, u: 0, gi: avgGI, items: foodItems, note: 'carbs', source: 'pad', local: true });
+    SESSION.push({ t:t, c:totalCarbs, u:0, gi:avgGI, items:foodItems });
+    BOLUS_EVENTS.push({ t:t, c:totalCarbs, u:0, gi:avgGI, items:foodItems });
+    LOGGED_EVENTS.push({ t:t, c:totalCarbs, u:0, gi:avgGI, items:foodItems, note:'carbs', source:'pad', local:true });
   }
-
   try { localStorage.setItem('river_logged', JSON.stringify(LOGGED_EVENTS)); } catch(e) {}
   try { localStorage.setItem('river_session', JSON.stringify(SESSION)); } catch(e) {}
-
   syncAfterLog();
   var el = document.getElementById('pad-import-overlay');
   if (el) el.remove();
@@ -7620,8 +7480,7 @@ function openHypoLog() {
   el.style.cssText='position:fixed;inset:0;z-index:60;background:rgba(3,5,20,0.9);backdrop-filter:blur(14px);display:flex;flex-direction:column;align-items:center;justify-content:center;padding:24px;transition:opacity .25s;opacity:0;touch-action:pan-y;pointer-events:auto';
   el.addEventListener('touchstart',function(e){e.stopPropagation();},{passive:true});
   el.addEventListener('click',function(e){if(e.target===el)closeHypoLog();});
-  var _hypoDefault = (_radialDefaultT) ? new Date(_radialDefaultT) : new Date();
-  _radialDefaultT = null;
+  var _hypoDefault = new Date();
   var s='<div style="max-width:360px;width:100%">';
   s+='<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:4px">';
   s+='<div style="font-family:\'Fraunces\',serif;font-style:italic;font-weight:200;font-size:22px;color:rgba(255,210,40,0.9)">hypo treatment</div>';
@@ -7705,8 +7564,7 @@ function openCorrectionLog(){
   var ex=document.getElementById('corr-overlay');if(ex){ex.remove();return;}
   var el=document.createElement('div');el.id='corr-overlay';
   el.style.cssText='position:fixed;inset:0;z-index:60;background:rgba(3,5,20,0.9);backdrop-filter:blur(14px);display:flex;flex-direction:column;align-items:center;justify-content:center;padding:24px;transition:opacity .25s;opacity:0';
-  var _corrDefault = (_radialDefaultT) ? new Date(_radialDefaultT) : new Date();
-  _radialDefaultT = null;
+  var _corrDefault = new Date();
   var s='<div style="max-width:320px;width:100%">';
   s+='<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:4px">';
   s+='<div style="font-family:\'Fraunces\',serif;font-style:italic;font-weight:200;font-size:22px;color:rgba(100,160,255,0.9)">correction</div>';
@@ -8654,75 +8512,72 @@ function animateFlick() {
   else ctx.clearRect(0, 0, fc.width, fc.height);
 }
 
-// ── ORB / CANVAS LONG PRESS ────────────────────────────────────────────────
-// Short press on orb → hint  |  Long press on orb → radial menu
-// Long press anywhere else on canvas → radial menu with time = river position at press x
+// ── ORB LONG PRESS — whisper to the River ─────────────────────────────
 let _orbPressTimer = null;
 let _whisperOpen   = false;
-// _radialDefaultT declared at top of file
 
 function setupOrbLongPress() {
   const cv = document.getElementById('c');
   if (!cv) return;
 
   var _orbTouchStartT = 0;
-  var _pressClientX   = 0;
-  var _pressOnOrb     = false;
 
-  function _onPressStart(clientX, clientY) {
+  cv.addEventListener('touchstart', function(e) {
+    const t = e.touches[0];
     const orbX = NOW_X * W;
     const d    = dataAt ? dataAt(viewTime) : null;
     const orbY = d ? bgToY(d.bg) : H * 0.6;
-    const dist = Math.hypot(clientX - orbX, clientY - orbY);
-    _pressOnOrb     = dist < 44;
-    _pressClientX   = clientX;
-    _orbTouchStartT = Date.now();
-    // Compute river time at press x position
-    var rect = cv.getBoundingClientRect();
-    _radialDefaultT = Math.round(xT(clientX - rect.left));
-    if (_pressOnOrb) _orbLongPressHint = 1.0;
-    _orbPressTimer = setTimeout(function() {
-      if (navigator.vibrate) navigator.vibrate(30);
-      openOrbRadialMenu(_radialDefaultT);
-    }, 500);
-  }
-
-  function _onPressEnd() {
+    const dist = Math.hypot(t.clientX - orbX, t.clientY - orbY);
+    if (dist < 44) {
+      _orbTouchStartT = Date.now();
+      _orbLongPressHint = 1.0;
+      _orbPressTimer = setTimeout(function() {
+        if (navigator.vibrate) navigator.vibrate(30);
+        openOrbRadialMenu();
+      }, 500);
+    }
+  }, {passive:true});
+  cv.addEventListener('touchend', function() {
     var dur = Date.now() - _orbTouchStartT;
     if (_orbPressTimer) {
       clearTimeout(_orbPressTimer);
       _orbPressTimer = null;
-      // Short tap on orb (< 400ms) — show hint
-      if (_pressOnOrb && dur < 400 && _orbTouchStartT > 0) {
-        _orbTapHint  = 1.0;
+      // Short tap (< 400ms) — show the hint text
+      if (dur < 400 && _orbTouchStartT > 0) {
+        _orbTapHint = 1.0;
         _orbTapHintT = Date.now();
       }
     }
     _orbTouchStartT = 0;
-    _pressOnOrb     = false;
-  }
-
-  cv.addEventListener('touchstart', function(e) {
-    // Only single-finger, not on UI elements
-    if (e.touches.length !== 1) return;
-    _onPressStart(e.touches[0].clientX, e.touches[0].clientY);
   }, {passive:true});
-
-  cv.addEventListener('touchmove', function() {
-    // Cancel long press if finger moves (drag/scrub gesture)
-    if (_orbPressTimer) { clearTimeout(_orbPressTimer); _orbPressTimer = null; }
-  }, {passive:true});
-
-  cv.addEventListener('touchend', function() { _onPressEnd(); }, {passive:true});
-
-  cv.addEventListener('mousedown', function(e) { _onPressStart(e.clientX, e.clientY); });
-  cv.addEventListener('mousemove', function() {
-    if (_orbPressTimer) { clearTimeout(_orbPressTimer); _orbPressTimer = null; }
+  cv.addEventListener('mousedown', function(e) {
+    const orbX = NOW_X * W;
+    const d    = dataAt ? dataAt(viewTime) : null;
+    const orbY = d ? bgToY(d.bg) : H * 0.6;
+    const dist = Math.hypot(e.clientX - orbX, e.clientY - orbY);
+    if (dist < 44) {
+      _orbTouchStartT = Date.now();
+      _orbLongPressHint = 1.0;
+      _orbPressTimer = setTimeout(function() {
+        openOrbRadialMenu();
+      }, 500);
+    }
   });
-  cv.addEventListener('mouseup', function() { _onPressEnd(); });
+  cv.addEventListener('mouseup', function() {
+    var dur = Date.now() - _orbTouchStartT;
+    if (_orbPressTimer) {
+      clearTimeout(_orbPressTimer);
+      _orbPressTimer = null;
+      if (dur < 400 && _orbTouchStartT > 0) {
+        _orbTapHint = 1.0;
+        _orbTapHintT = Date.now();
+      }
+    }
+    _orbTouchStartT = 0;
+  });
 }
 
-function openOrbRadialMenu(defaultT) {
+function openOrbRadialMenu() {
   var ex = document.getElementById('orb-radial-menu');
   if (ex) { ex.remove(); return; }
 
@@ -8730,20 +8585,13 @@ function openOrbRadialMenu(defaultT) {
   var orbX  = NOW_X * W;
   var orbY  = d ? bgToY(d.bg) : window.innerHeight * 0.5;
 
-  // When opened from a river long press, center the menu at the press position
-  var menuX = (typeof defaultT !== 'undefined' && defaultT && typeof xT === 'function')
-    ? NOW_X * W + (defaultT - viewTime) / viewSpan * W
-    : orbX;
-
   // Items: label, icon, action, colour
-  // For prick and other modals, thread the defaultT so they pre-fill with river time
-  var _dT = (typeof defaultT !== 'undefined' && defaultT) ? defaultT : null;
   var items = [
-    { label: 'log food',   icon: '◉', fn: 'openSheet()',                                  col: 'rgba(255,150,50,0.9)'  },
-    { label: 'correct',    icon: '◎', fn: 'openCorrectionLog()',                           col: 'rgba(80,130,220,0.9)'  },
-    { label: 'hypo',       icon: '⬡', fn: 'openHypoLog()',                                 col: 'rgba(255,210,40,0.9)'  },
-    { label: 'whisper',    icon: '◌', fn: 'openWhisper()',                                 col: 'rgba(140,200,180,0.9)' },
-    { label: 'prick',      icon: '◆', fn: 'openBloodPrickLog(' + (_dT||'') + ')',          col: 'rgba(200,60,80,0.9)'   },
+    { label: 'log food',   icon: '◉', fn: 'openSheet()',          col: 'rgba(255,150,50,0.9)'  },
+    { label: 'correct',    icon: '◎', fn: 'openCorrectionLog()',  col: 'rgba(80,130,220,0.9)'  },
+    { label: 'hypo',       icon: '⬡', fn: 'openHypoLog()',        col: 'rgba(255,210,40,0.9)'  },
+    { label: 'whisper',    icon: '◌', fn: 'openWhisper()',        col: 'rgba(140,200,180,0.9)' },
+    { label: 'kitchen',    icon: '◈', fn: 'openKitchen()',        col: 'rgba(200,120,80,0.9)'  },
   ];
 
   var el = document.createElement('div');
@@ -8764,8 +8612,8 @@ function openOrbRadialMenu(defaultT) {
   var radius   = Math.min(window.innerWidth, window.innerHeight) * 0.22;
   radius       = Math.max(90, Math.min(radius, 130));
 
-  // Clamp menu centre to safe zone — use press position if from river long press
-  var cx = Math.max(radius + 20, Math.min(window.innerWidth  - radius - 20, menuX));
+  // Clamp orb position to safe zone
+  var cx = Math.max(radius + 20, Math.min(window.innerWidth  - radius - 20, orbX));
   var cy = Math.max(radius + 60, Math.min(window.innerHeight - radius - 20, orbY));
 
   items.forEach(function(item, i) {
@@ -9034,9 +8882,6 @@ function buildFunctionIndex() {
   var knownFns = [
     'renderSheet', 'renderKitchen', 'openSheet', 'closeSheet',
     'logMealEntry', 'logCorrection', 'logHypoTreatment',
-    'openScanPad', 'handlePadPhoto', 'renderPadImportScreen', 'commitPadImport',
-    'resolveScannedFood', 'addFoodAlias', 'openAliasLinker', 'confirmAlias',
-    'eeRemoveItem', 'eeAddItem', 'eeUpdateTotals',
     'addFoodItem', 'addCustomFood', 'saveCustomFood', 'searchFood',
     'drawGasCloud', 'drawBGTrail', 'drawOrb', 'drawEquilibriumZone',
     'buildSmartForecast', 'drawUnknownForce',
@@ -9295,7 +9140,6 @@ async function deployToGitHub() {
 }
 
 // ── EVENT EDITOR — edit or delete a logged event ─────────────────────
-// _eeItems: working copy of items for the event editor
 var _eeItems = [];
 
 function openEventEditor(eventIdx) {
@@ -9305,7 +9149,6 @@ function openEventEditor(eventIdx) {
   var ex = document.getElementById('event-edit-overlay');
   if (ex) ex.remove();
 
-  // Deep copy items for editing
   _eeItems = (ev.items || []).map(function(i){ return Object.assign({}, i); });
 
   var el = document.createElement('div');
@@ -9323,84 +9166,60 @@ function openEventEditor(eventIdx) {
   var hasItems = _eeItems.length > 0;
   var sourceTag = ev.source === 'pad' ? ' · <span style="color:rgba(255,200,80,0.5);font-size:8px">pad</span>' : '';
 
-  // Build meal items HTML
-  function eeItemsHtml() {
-    if (!hasItems) return '';
-    var rows = _eeItems.map(function(item, i) {
-      if (item._removed) return '';
-      return '<div id="ee-item-' + i + '" style="display:flex;align-items:center;gap:8px;padding:7px 0;border-bottom:1px solid rgba(255,255,255,0.04)">' +
-        '<button onclick="eeRemoveItem(' + i + ')" style="background:none;border:none;cursor:pointer;color:rgba(200,80,80,0.4);font-size:14px;padding:0 2px;flex-shrink:0">×</button>' +
-        '<input id="ee-iname-' + i + '" value="' + _esc(item.name || '') + '" ' +
-          'style="flex:1;background:rgba(255,255,255,0.04);border:1px solid rgba(255,255,255,0.08);border-radius:6px;' +
-          'padding:5px 8px;font-family:\'DM Mono\',monospace;font-size:11px;color:rgba(220,235,250,0.8);outline:none">' +
-        '<div style="display:flex;align-items:center;gap:3px">' +
-          '<input id="ee-icarbs-' + i + '" type="number" value="' + (item.carbs || 0) + '" min="0" max="200" step="1" ' +
-            'oninput="eeUpdateTotals()" ' +
-            'style="width:48px;background:rgba(255,140,50,0.05);border:1px solid rgba(255,140,50,0.18);border-radius:6px;' +
-            'padding:5px 4px;font-family:\'DM Mono\',monospace;font-size:12px;color:rgba(255,140,50,0.85);text-align:center;outline:none">' +
-          '<span style="font-family:\'DM Mono\',monospace;font-size:8px;color:rgba(255,140,50,0.3)">g</span>' +
-        '</div>' +
-        (item.gi ? '<span style="font-family:\'DM Mono\',monospace;font-size:8px;color:rgba(180,200,220,0.3);flex-shrink:0">GI' + item.gi + '</span>' : '') +
-      '</div>';
-    }).join('');
-
-    return '<div style="margin-bottom:14px">' +
-      '<div style="font-family:\'DM Mono\',monospace;font-size:8px;letter-spacing:1px;text-transform:uppercase;color:rgba(180,200,220,0.4);margin-bottom:8px">' +
-        'items' + sourceTag + '</div>' +
-      '<div id="ee-items-list">' + rows + '</div>' +
-      '<button onclick="eeAddItem()" style="margin-top:6px;width:100%;padding:5px;border-radius:7px;border:1px dashed rgba(255,255,255,0.08);background:transparent;font-family:\'DM Mono\',monospace;font-size:9px;color:rgba(180,200,220,0.35);cursor:pointer">+ add item</button>' +
+  var itemRows = _eeItems.map(function(item, i) {
+    if (item._removed) return '';
+    return '<div id="ee-item-' + i + '" style="display:flex;align-items:center;gap:8px;padding:7px 0;border-bottom:1px solid rgba(255,255,255,0.04)">' +
+      '<button onclick="eeRemoveItem(' + i + ')" style="background:none;border:none;cursor:pointer;color:rgba(200,80,80,0.4);font-size:14px;padding:0 2px;flex-shrink:0">×</button>' +
+      '<input id="ee-iname-' + i + '" value="' + _esc(item.name || '') + '" ' +
+        'style="flex:1;background:rgba(255,255,255,0.04);border:1px solid rgba(255,255,255,0.08);border-radius:6px;padding:5px 8px;font-family:\'DM Mono\',monospace;font-size:11px;color:rgba(220,235,250,0.8);outline:none">' +
+      '<div style="display:flex;align-items:center;gap:3px">' +
+        '<input id="ee-icarbs-' + i + '" type="number" value="' + (item.carbs || 0) + '" min="0" max="200" step="1" oninput="eeUpdateTotals()" ' +
+          'style="width:48px;background:rgba(255,140,50,0.05);border:1px solid rgba(255,140,50,0.18);border-radius:6px;padding:5px 4px;font-family:\'DM Mono\',monospace;font-size:12px;color:rgba(255,140,50,0.85);text-align:center;outline:none">' +
+        '<span style="font-family:\'DM Mono\',monospace;font-size:8px;color:rgba(255,140,50,0.3)">g</span>' +
+      '</div>' +
+      (item.gi ? '<span style="font-family:\'DM Mono\',monospace;font-size:8px;color:rgba(180,200,220,0.3);flex-shrink:0">GI' + item.gi + '</span>' : '') +
     '</div>';
-  }
+  }).join('');
+
+  var itemsSection = hasItems
+    ? '<div style="margin-bottom:14px">' +
+        '<div style="font-family:\'DM Mono\',monospace;font-size:8px;letter-spacing:1px;text-transform:uppercase;color:rgba(180,200,220,0.4);margin-bottom:8px">items' + sourceTag + '</div>' +
+        '<div id="ee-items-list">' + itemRows + '</div>' +
+        '<button onclick="eeAddItem()" style="margin-top:6px;width:100%;padding:5px;border-radius:7px;border:1px dashed rgba(255,255,255,0.08);background:transparent;font-family:\'DM Mono\',monospace;font-size:9px;color:rgba(180,200,220,0.35);cursor:pointer">+ add item</button>' +
+      '</div>'
+    : '';
 
   el.innerHTML =
     '<div style="max-width:360px;width:100%">' +
     '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:20px">' +
       '<div style="font-family:\'Fraunces\',serif;font-style:italic;font-weight:200;font-size:20px;color:rgba(180,220,200,0.8)">edit entry</div>' +
-      '<button onclick="document.getElementById(\'event-edit-overlay\').remove()" ' +
-        'style="background:none;border:none;cursor:pointer;font-size:22px;color:var(--rv-text-muted);padding:4px">×</button>' +
+      '<button onclick="document.getElementById(\'event-edit-overlay\').remove()" style="background:none;border:none;cursor:pointer;font-size:22px;color:var(--rv-text-muted);padding:4px">×</button>' +
     '</div>' +
-
     '<div style="margin-bottom:14px">' +
       '<div style="font-family:\'DM Mono\',monospace;font-size:8px;letter-spacing:1px;text-transform:uppercase;color:var(--rv-text-muted);margin-bottom:6px">when</div>' +
-      '<input id="ee-time" type="datetime-local" value="' + dtLocalISO + '" ' +
-        'style="width:100%;padding:9px 12px;border-radius:8px;border:1px solid var(--rv-panel-border);' +
-        'background:var(--rv-input-bg);font-family:\'DM Mono\',monospace;font-size:13px;' +
-        'color:rgba(200,220,240,0.8);outline:none;box-sizing:border-box">' +
+      '<input id="ee-time" type="datetime-local" value="' + dtLocalISO + '" style="width:100%;padding:9px 12px;border-radius:8px;border:1px solid var(--rv-panel-border);background:var(--rv-input-bg);font-family:\'DM Mono\',monospace;font-size:13px;color:rgba(200,220,240,0.8);outline:none;box-sizing:border-box">' +
     '</div>' +
-
-    eeItemsHtml() +
-
+    itemsSection +
     '<div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;margin-bottom:20px">' +
       '<div>' +
-        '<div style="font-family:\'DM Mono\',monospace;font-size:8px;letter-spacing:1px;text-transform:uppercase;color:rgba(255,140,50,0.5);margin-bottom:5px">' +
-          (hasItems ? 'total carbs' : 'carbs (g)') + '</div>' +
+        '<div style="font-family:\'DM Mono\',monospace;font-size:8px;letter-spacing:1px;text-transform:uppercase;color:rgba(255,140,50,0.5);margin-bottom:5px">' + (hasItems ? 'total carbs' : 'carbs (g)') + '</div>' +
         '<input id="ee-carbs" type="number" value="' + (ev.c||0) + '" min="0" max="300" step="1" ' +
-          (hasItems ? 'readonly style="width:100%;padding:10px;border-radius:8px;border:1px solid rgba(255,140,50,0.12);background:rgba(255,140,50,0.03);font-family:\'DM Mono\',monospace;font-size:16px;color:rgba(255,140,50,0.6);text-align:center;outline:none"'
-                    : 'style="width:100%;padding:10px;border-radius:8px;border:1px solid rgba(255,140,50,0.2);background:rgba(255,140,50,0.05);font-family:\'DM Mono\',monospace;font-size:16px;color:rgba(255,140,50,0.9);text-align:center;outline:none"') + '>' +
+          (hasItems ? 'readonly ' : '') +
+          'style="width:100%;padding:10px;border-radius:8px;border:1px solid rgba(255,140,50,' + (hasItems?'0.12':'0.2') + ');background:rgba(255,140,50,' + (hasItems?'0.03':'0.05') + ');font-family:\'DM Mono\',monospace;font-size:16px;color:rgba(255,140,50,' + (hasItems?'0.5':'0.9') + ');text-align:center;outline:none">' +
       '</div>' +
       '<div>' +
         '<div style="font-family:\'DM Mono\',monospace;font-size:8px;letter-spacing:1px;text-transform:uppercase;color:rgba(60,130,220,0.5);margin-bottom:5px">insulin (U)</div>' +
-        '<input id="ee-units" type="number" value="' + (ev.u||0) + '" min="0" max="20" step="0.5" ' +
-          'style="width:100%;padding:10px;border-radius:8px;border:1px solid rgba(60,130,220,0.2);background:rgba(60,130,220,0.05);font-family:\'DM Mono\',monospace;font-size:16px;color:rgba(60,130,220,0.9);text-align:center;outline:none">' +
+        '<input id="ee-units" type="number" value="' + (ev.u||0) + '" min="0" max="20" step="0.5" style="width:100%;padding:10px;border-radius:8px;border:1px solid rgba(60,130,220,0.2);background:rgba(60,130,220,0.05);font-family:\'DM Mono\',monospace;font-size:16px;color:rgba(60,130,220,0.9);text-align:center;outline:none">' +
       '</div>' +
       '<div>' +
         '<div style="font-family:\'DM Mono\',monospace;font-size:8px;letter-spacing:1px;text-transform:uppercase;color:var(--rv-text-muted);margin-bottom:5px">wait (min)</div>' +
-        '<input id="ee-wait" type="number" value="' + (ev.waitMins||0) + '" min="0" max="60" step="5" ' +
-          'style="width:100%;padding:10px;border-radius:8px;border:1px solid var(--rv-panel-border);background:var(--rv-input-bg);font-family:\'DM Mono\',monospace;font-size:16px;color:rgba(200,200,200,0.9);text-align:center;outline:none">' +
+        '<input id="ee-wait" type="number" value="' + (ev.waitMins||0) + '" min="0" max="60" step="5" style="width:100%;padding:10px;border-radius:8px;border:1px solid var(--rv-panel-border);background:var(--rv-input-bg);font-family:\'DM Mono\',monospace;font-size:16px;color:rgba(200,200,200,0.9);text-align:center;outline:none">' +
       '</div>' +
     '</div>' +
-
     '<div style="display:flex;gap:8px">' +
-      '<button onclick="saveEventEdit(' + eventIdx + ')" ' +
-        'style="flex:1;padding:12px;border-radius:10px;border:1px solid rgba(62,180,120,0.3);' +
-        'background:rgba(62,180,120,0.08);font-family:\'Fraunces\',serif;font-style:italic;' +
-        'font-weight:200;font-size:16px;color:rgba(62,180,120,0.9);cursor:pointer">save</button>' +
-      '<button onclick="deleteEvent(' + eventIdx + ')" ' +
-        'style="padding:12px 16px;border-radius:10px;border:1px solid rgba(200,60,60,0.2);' +
-        'background:transparent;font-family:\'DM Mono\',monospace;font-size:10px;color:rgba(200,80,80,0.5);cursor:pointer">delete</button>' +
-      '<button onclick="document.getElementById(\'event-edit-overlay\').remove()" ' +
-        'style="padding:12px 14px;border-radius:10px;border:1px solid var(--rv-panel-border);' +
-        'background:transparent;font-family:\'DM Mono\',monospace;font-size:10px;color:var(--rv-close-btn);cursor:pointer">cancel</button>' +
+      '<button onclick="saveEventEdit(' + eventIdx + ')" style="flex:1;padding:12px;border-radius:10px;border:1px solid rgba(62,180,120,0.3);background:rgba(62,180,120,0.08);font-family:\'Fraunces\',serif;font-style:italic;font-weight:200;font-size:16px;color:rgba(62,180,120,0.9);cursor:pointer">save</button>' +
+      '<button onclick="deleteEvent(' + eventIdx + ')" style="padding:12px 16px;border-radius:10px;border:1px solid rgba(200,60,60,0.2);background:transparent;font-family:\'DM Mono\',monospace;font-size:10px;color:rgba(200,80,80,0.5);cursor:pointer">delete</button>' +
+      '<button onclick="document.getElementById(\'event-edit-overlay\').remove()" style="padding:12px 14px;border-radius:10px;border:1px solid var(--rv-panel-border);background:transparent;font-family:\'DM Mono\',monospace;font-size:10px;color:var(--rv-close-btn);cursor:pointer">cancel</button>' +
     '</div></div>';
 
   document.body.appendChild(el);
@@ -9423,11 +9242,9 @@ function eeAddItem() {
   row.style.cssText = 'display:flex;align-items:center;gap:8px;padding:7px 0;border-bottom:1px solid rgba(255,255,255,0.04)';
   row.innerHTML =
     '<button onclick="eeRemoveItem(' + i + ')" style="background:none;border:none;cursor:pointer;color:rgba(200,80,80,0.4);font-size:14px;padding:0 2px;flex-shrink:0">×</button>' +
-    '<input id="ee-iname-' + i + '" value="" placeholder="food name" ' +
-      'style="flex:1;background:rgba(255,255,255,0.04);border:1px solid rgba(255,255,255,0.08);border-radius:6px;padding:5px 8px;font-family:\'DM Mono\',monospace;font-size:11px;color:rgba(220,235,250,0.8);outline:none">' +
+    '<input id="ee-iname-' + i + '" value="" placeholder="food name" style="flex:1;background:rgba(255,255,255,0.04);border:1px solid rgba(255,255,255,0.08);border-radius:6px;padding:5px 8px;font-family:\'DM Mono\',monospace;font-size:11px;color:rgba(220,235,250,0.8);outline:none">' +
     '<div style="display:flex;align-items:center;gap:3px">' +
-      '<input id="ee-icarbs-' + i + '" type="number" value="0" min="0" max="200" step="1" oninput="eeUpdateTotals()" ' +
-        'style="width:48px;background:rgba(255,140,50,0.05);border:1px solid rgba(255,140,50,0.18);border-radius:6px;padding:5px 4px;font-family:\'DM Mono\',monospace;font-size:12px;color:rgba(255,140,50,0.85);text-align:center;outline:none">' +
+      '<input id="ee-icarbs-' + i + '" type="number" value="0" min="0" max="200" step="1" oninput="eeUpdateTotals()" style="width:48px;background:rgba(255,140,50,0.05);border:1px solid rgba(255,140,50,0.18);border-radius:6px;padding:5px 4px;font-family:\'DM Mono\',monospace;font-size:12px;color:rgba(255,140,50,0.85);text-align:center;outline:none">' +
       '<span style="font-family:\'DM Mono\',monospace;font-size:8px;color:rgba(255,140,50,0.3)">g</span>' +
     '</div>';
   list.appendChild(row);
@@ -9445,7 +9262,7 @@ function eeUpdateTotals() {
 }
 
 function saveEventEdit(idx) {
-  // Collect items from editor if present
+  // Collect edited items
   var editedItems = null;
   if (_eeItems && _eeItems.length > 0) {
     editedItems = _eeItems.filter(function(item, i) {
@@ -9458,13 +9275,9 @@ function saveEventEdit(idx) {
     });
   }
 
-  // Recalculate total carbs from items if they exist
-  var c;
-  if (editedItems && editedItems.length > 0) {
-    c = editedItems.reduce(function(s, i){ return s + (i.carbs || 0); }, 0);
-  } else {
-    c = parseFloat(document.getElementById('ee-carbs').value) || 0;
-  }
+  var c = (editedItems && editedItems.length > 0)
+    ? editedItems.reduce(function(s,i){ return s+(i.carbs||0); }, 0)
+    : (parseFloat(document.getElementById('ee-carbs').value) || 0);
   var u        = parseFloat(document.getElementById('ee-units').value) || 0;
   var waitMins = parseInt(document.getElementById('ee-wait').value)    || 0;
   var timeEl   = document.getElementById('ee-time');
@@ -9472,10 +9285,9 @@ function saveEventEdit(idx) {
 
   if (!BOLUS_EVENTS[idx]) { var el=document.getElementById('event-edit-overlay'); if(el) el.remove(); return; }
 
-  var oldT = BOLUS_EVENTS[idx].t;
+  var oldT    = BOLUS_EVENTS[idx].t;
   var oldWait = BOLUS_EVENTS[idx].waitMins || 0;
 
-  // --- Apply changes to BOLUS_EVENTS entry ---
   BOLUS_EVENTS[idx].c = c;
   BOLUS_EVENTS[idx].u = u;
   BOLUS_EVENTS[idx].waitMins = waitMins;
@@ -9483,7 +9295,6 @@ function saveEventEdit(idx) {
   if (newT && newT !== oldT) BOLUS_EVENTS[idx].t = newT;
   var updatedT = BOLUS_EVENTS[idx].t;
 
-  // --- If this is a bolus event (u > 0) and wait changed, reposition linked carb chip ---
   if (u > 0) {
     var oldCarbT = oldT + oldWait * 60000;
     var newCarbT = updatedT + waitMins * 60000;
@@ -9501,7 +9312,6 @@ function saveEventEdit(idx) {
     }
   }
 
-  // --- Sync the edited event through SESSION ---
   var si = SESSION.findIndex(function(s){ return Math.abs(s.t - oldT) < 60000; });
   if (si >= 0) {
     SESSION[si].c = c; SESSION[si].u = u;
@@ -9510,7 +9320,6 @@ function saveEventEdit(idx) {
   }
   try { localStorage.setItem('river_session', JSON.stringify(SESSION)); } catch(e) {}
 
-  // --- Sync through LOGGED_EVENTS ---
   var li = LOGGED_EVENTS.findIndex(function(s){ return Math.abs(s.t - oldT) < 60000; });
   if (li >= 0) {
     LOGGED_EVENTS[li].c = c; LOGGED_EVENTS[li].u = u;
@@ -9569,760 +9378,6 @@ function deleteEvent(idx) {
   showToast('entry removed');
 }
 
-// ══════════════════════════════════════════════════════════════════════════
-//  BLOOD PRICK — finger prick readings, stored separately from CGM data
-//  Storage: localStorage river_pricks + Supabase events (note:'prick', gi=bg)
-//  Rendered as red diamonds pinned to the mmol trace at timestamp
-// ══════════════════════════════════════════════════════════════════════════
-
-var BLOOD_PRICKS = (function() {
-  try { return JSON.parse(localStorage.getItem('river_pricks') || '[]'); } catch(e) { return []; }
-})();
-
-function _savePricks() {
-  try { localStorage.setItem('river_pricks', JSON.stringify(BLOOD_PRICKS)); } catch(e) {}
-}
-
-// ── DRAW blood prick markers on the canvas ────────────────────────────────
-function drawBloodPricks() {
-  if (!BLOOD_PRICKS || BLOOD_PRICKS.length === 0) return;
-  if (!window._prickCards) window._prickCards = [];
-  window._prickCards = [];
-  CX.save();
-  var cutoff = (CGM_START || 0) - 60000;
-  var end    = (CGM_END || Date.now()) + 60000;
-  for (var i = 0; i < BLOOD_PRICKS.length; i++) {
-    var p = BLOOD_PRICKS[i];
-    if (!p || !p.t || !p.bg) continue;
-    if (p.t < cutoff || p.t > end) continue;
-    var x = tX(p.t);
-    if (x < -40 || x > W + 40) continue;
-    // Pin to the CGM trace at this timestamp
-    var d = dataAt ? dataAt(p.t) : null;
-    var cgmY = d ? bgToY(d.bg) : (H * 0.5);
-    // The prick reading pinned at its actual mmol value
-    var prickY = bgToY(p.bg);
-    // Delta line — connect CGM to prick reading
-    var hasDelta = Math.abs(p.bg - (d ? d.bg : p.bg)) > 0.1;
-    if (hasDelta && d) {
-      CX.globalAlpha = 0.4;
-      CX.strokeStyle = 'rgba(220,80,100,0.6)';
-      CX.lineWidth   = 1;
-      CX.setLineDash([2, 4]);
-      CX.beginPath(); CX.moveTo(x, cgmY); CX.lineTo(x, prickY); CX.stroke();
-      CX.setLineDash([]);
-    }
-    // Anchor dot on trace
-    CX.globalAlpha = 0.7;
-    CX.fillStyle   = 'rgba(220,60,80,0.9)';
-    CX.shadowColor = 'rgba(220,60,80,0.8)'; CX.shadowBlur = 6;
-    CX.beginPath(); CX.arc(x, cgmY, 3, 0, Math.PI * 2); CX.fill();
-    CX.shadowBlur = 0;
-    // Diamond shape at prick value
-    var ds = 7;
-    CX.globalAlpha = 1.0;
-    CX.fillStyle   = 'rgba(200,50,70,0.85)';
-    CX.strokeStyle = 'rgba(255,120,140,0.9)';
-    CX.lineWidth   = 1.2;
-    CX.shadowColor = 'rgba(220,60,80,0.7)'; CX.shadowBlur = 8;
-    CX.beginPath();
-    CX.moveTo(x,      prickY - ds);
-    CX.lineTo(x + ds, prickY);
-    CX.lineTo(x,      prickY + ds);
-    CX.lineTo(x - ds, prickY);
-    CX.closePath();
-    CX.fill(); CX.stroke();
-    CX.shadowBlur = 0;
-    // Label
-    CX.font = "500 10px 'DM Mono',monospace";
-    CX.textAlign = 'center';
-    CX.fillStyle = 'rgba(255,160,170,0.95)';
-    CX.globalAlpha = 1.0;
-    CX.fillText(p.bg.toFixed(1), x, prickY - ds - 4);
-    // Hitbox for tap-to-edit
-    window._prickCards.push({ x: x, y: prickY, r: ds + 8, idx: i });
-  }
-  CX.globalAlpha = 1; CX.restore();
-}
-
-// ── OPEN blood prick modal ─────────────────────────────────────────────────
-// defaultT — optional epoch ms to pre-fill (from long press on river)
-function openBloodPrickLog(defaultT) {
-  var ex = document.getElementById('prick-overlay'); if (ex) { ex.remove(); return; }
-  var el = document.createElement('div'); el.id = 'prick-overlay';
-  el.style.cssText = 'position:fixed;inset:0;z-index:60;background:rgba(3,5,20,0.92);backdrop-filter:blur(14px);display:flex;flex-direction:column;align-items:center;justify-content:center;padding:24px;transition:opacity .25s;opacity:0;touch-action:pan-y;pointer-events:auto';
-  el.addEventListener('touchstart', function(e){ e.stopPropagation(); }, {passive:true});
-  el.addEventListener('click', function(e){ if (e.target === el) closeBloodPrickLog(); });
-  var defDate = defaultT ? new Date(defaultT) : new Date();
-  var s = '<div style="max-width:320px;width:100%">';
-  s += '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:4px">';
-  s += '<div style="font-family:\'Fraunces\',serif;font-style:italic;font-weight:200;font-size:22px;color:rgba(220,80,100,0.9)">blood prick</div>';
-  s += '<button onclick="closeBloodPrickLog()" style="background:none;border:none;cursor:pointer;font-size:24px;color:rgba(200,220,240,0.4);padding:4px;touch-action:manipulation">×</button>';
-  s += '</div>';
-  s += '<div style="font-family:\'DM Mono\',monospace;font-size:9px;letter-spacing:1px;text-transform:uppercase;color:rgba(200,60,80,0.45);margin-bottom:14px">finger prick · pinned to flow at timestamp</div>';
-  s += timePickerHTML('prick-time', defDate, false);
-  // mmol input
-  s += '<div style="text-align:center;margin:10px 0 6px">';
-  s += '<div style="font-family:\'Fraunces\',serif;font-weight:200;font-size:14px;color:rgba(200,80,100,0.5);margin-bottom:12px;letter-spacing:.5px">reading</div>';
-  s += '<div style="display:flex;align-items:center;gap:10px;justify-content:center">';
-  s += '<button onclick="_prickStep(-0.1)" style="width:44px;height:44px;border-radius:50%;border:1px solid rgba(200,60,80,0.35);background:rgba(60,10,20,0.5);font-size:22px;color:rgba(220,100,120,0.9);cursor:pointer;touch-action:manipulation;display:flex;align-items:center;justify-content:center;line-height:1">−</button>';
-  s += '<div style="display:flex;flex-direction:column;align-items:center;gap:2px">';
-  s += '<input id="prick-bg" type="number" step="0.1" min="1.0" max="30.0" inputmode="decimal" value="" ';
-  s += 'placeholder="–.–" oninput="_prickValidate()" ';
-  s += 'style="width:90px;padding:10px;border-radius:8px;border:1px solid rgba(200,60,80,0.35);background:rgba(40,5,15,0.5);font-family:\'DM Mono\',monospace;font-size:26px;color:rgba(240,120,140,0.95);text-align:center;outline:none;transition:border-color .15s">';
-  s += '<span style="font-family:\'DM Mono\',monospace;font-size:10px;color:rgba(200,60,80,0.5);letter-spacing:.5px">mmol/L</span>';
-  s += '</div>';
-  s += '<button onclick="_prickStep(0.1)" style="width:44px;height:44px;border-radius:50%;border:1px solid rgba(200,60,80,0.35);background:rgba(60,10,20,0.5);font-size:22px;color:rgba(220,100,120,0.9);cursor:pointer;touch-action:manipulation;display:flex;align-items:center;justify-content:center;line-height:1">+</button>';
-  s += '</div></div>';
-  // Delta vs CGM hint
-  s += '<div id="prick-delta-hint" style="font-family:\'DM Mono\',monospace;font-size:9px;letter-spacing:.5px;color:rgba(200,80,100,0.5);text-align:center;min-height:16px;margin:8px 0 14px"></div>';
-  s += '<div id="prick-err" style="font-family:\'DM Mono\',monospace;font-size:10px;color:rgba(255,100,80,0.9);min-height:16px;margin-bottom:10px;text-align:center;letter-spacing:.3px"></div>';
-  s += '<button id="prick-log-btn" onclick="logBloodPrick()" style="width:100%;padding:14px;border-radius:10px;border:1px solid rgba(200,60,80,0.35);background:rgba(60,10,20,0.3);font-family:\'Fraunces\',serif;font-style:italic;font-weight:200;font-size:17px;color:rgba(240,120,140,0.9);cursor:pointer;margin-bottom:12px;transition:opacity .15s">log prick</button>';
-  s += '<div style="text-align:center"><button onclick="closeBloodPrickLog()" style="background:none;border:none;cursor:pointer;font-family:\'DM Mono\',monospace;font-size:9px;letter-spacing:1px;text-transform:uppercase;color:rgba(200,60,80,0.3);padding:4px">cancel</button></div></div>';
-  el.innerHTML = s;
-  document.body.appendChild(el);
-  requestAnimationFrame(function(){ el.style.opacity = '1'; });
-  // Focus after animation
-  setTimeout(function(){ var inp = document.getElementById('prick-bg'); if (inp) inp.focus(); }, 300);
-}
-
-function closeBloodPrickLog() {
-  var el = document.getElementById('prick-overlay');
-  if (el) { el.style.opacity = '0'; setTimeout(function(){ el.remove(); }, 250); }
-}
-
-function _prickStep(delta) {
-  var inp = document.getElementById('prick-bg');
-  if (!inp) return;
-  var v = Math.round(((parseFloat(inp.value) || 5.0) + delta) * 10) / 10;
-  v = Math.max(1.0, Math.min(30.0, v));
-  inp.value = v.toFixed(1);
-  _prickValidate();
-}
-
-function _prickValidate() {
-  var inp  = document.getElementById('prick-bg');
-  var err  = document.getElementById('prick-err');
-  var btn  = document.getElementById('prick-log-btn');
-  var hint = document.getElementById('prick-delta-hint');
-  if (!inp) return;
-  var v   = parseFloat(inp.value);
-  var bad = isNaN(v) || v < 1.0 || v > 30.0;
-  var warn = !bad && (v < 2.0 || v > 22.0);
-  if (err) err.textContent = bad ? 'enter a value between 1.0 and 30.0 mmol/L' : warn ? '⚠ unusual reading — double check' : '';
-  if (inp) inp.style.borderColor = bad ? 'rgba(255,80,60,0.7)' : warn ? 'rgba(255,160,40,0.6)' : 'rgba(200,60,80,0.35)';
-  if (btn) { btn.disabled = bad; btn.style.opacity = bad ? '0.3' : '1'; }
-  // Show delta vs CGM at current view time
-  if (hint && !bad && dataAt) {
-    var t  = getTimeVal('prick-time');
-    var d  = dataAt(t);
-    if (d && d.bg) {
-      var delta = v - d.bg;
-      var sign  = delta >= 0 ? '+' : '';
-      hint.textContent = 'CGM at this time: ' + d.bg.toFixed(1) + ' mmol  ·  delta ' + sign + delta.toFixed(1);
-    } else { hint.textContent = ''; }
-  }
-}
-
-function logBloodPrick() {
-  var bg = parseFloat(document.getElementById('prick-bg').value);
-  if (isNaN(bg) || bg < 1.0 || bg > 30.0) { showToast('invalid reading'); return; }
-  var t  = getTimeVal('prick-time');
-  var prick = { t: t, bg: bg, logged_by: _thisPersonId || 'unknown', local: true };
-  BLOOD_PRICKS.push(prick);
-  BLOOD_PRICKS.sort(function(a,b){ return a.t - b.t; });
-  _savePricks();
-  // Also push to Supabase events table: note='prick', gi=bg value (no schema change needed)
-  if (SUPABASE_READY) {
-    _sbFetch('events', {
-      method: 'POST', prefer: 'return=minimal',
-      body: [{ t: t, c: 0, u: 0, gi: bg, note: 'prick', device_id: _deviceId, updated_at: new Date().toISOString() }]
-    }).catch(function(e){ console.warn('[prick] sync failed:', e.message); });
-  }
-  closeBloodPrickLog();
-  var timeStr = document.getElementById('prick-time-display') ? document.getElementById('prick-time-display').textContent : '';
-  showToast('prick: ' + bg.toFixed(1) + ' mmol\n' + (timeStr || ''));
-}
-
-// Edit/delete blood prick
-function openPrickEditor(prickIdx) {
-  var p = BLOOD_PRICKS[prickIdx];
-  if (!p) return;
-  var ex = document.getElementById('prick-edit-overlay'); if (ex) ex.remove();
-  var el = document.createElement('div'); el.id = 'prick-edit-overlay';
-  el.style.cssText = 'position:fixed;inset:0;z-index:80;background:rgba(3,5,20,0.92);backdrop-filter:blur(16px);display:flex;flex-direction:column;align-items:center;justify-content:center;padding:32px;pointer-events:auto;touch-action:pan-y';
-  el.addEventListener('touchstart', function(e){ e.stopPropagation(); }, {passive:true});
-  el.addEventListener('click', function(e){ if (e.target === el) el.remove(); });
-  var dt = new Date(p.t);
-  var tzOffset = dt.getTimezoneOffset() * 60000;
-  var dtLocalISO = new Date(dt.getTime() - tzOffset).toISOString().slice(0,16);
-  el.innerHTML =
-    '<div style="max-width:300px;width:100%">' +
-    '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:20px">' +
-      '<div style="font-family:\'Fraunces\',serif;font-style:italic;font-weight:200;font-size:20px;color:rgba(220,80,100,0.85)">edit prick</div>' +
-      '<button onclick="document.getElementById(\'prick-edit-overlay\').remove()" style="background:none;border:none;cursor:pointer;font-size:22px;color:rgba(200,220,240,0.4);padding:4px">×</button>' +
-    '</div>' +
-    '<div style="margin-bottom:16px">' +
-      '<div style="font-family:\'DM Mono\',monospace;font-size:8px;letter-spacing:1px;text-transform:uppercase;color:rgba(200,60,80,0.5);margin-bottom:6px">when</div>' +
-      '<input id="pe-time" type="datetime-local" value="' + dtLocalISO + '" ' +
-        'style="width:100%;padding:9px 12px;border-radius:8px;border:1px solid rgba(200,60,80,0.25);background:rgba(40,5,15,0.5);font-family:\'DM Mono\',monospace;font-size:13px;color:rgba(240,120,140,0.8);outline:none;box-sizing:border-box">' +
-    '</div>' +
-    '<div style="margin-bottom:20px">' +
-      '<div style="font-family:\'DM Mono\',monospace;font-size:8px;letter-spacing:1px;text-transform:uppercase;color:rgba(200,60,80,0.5);margin-bottom:6px">mmol/L</div>' +
-      '<input id="pe-bg" type="number" step="0.1" min="1" max="30" value="' + p.bg.toFixed(1) + '" ' +
-        'style="width:100%;padding:10px;border-radius:8px;border:1px solid rgba(200,60,80,0.25);background:rgba(40,5,15,0.5);font-family:\'DM Mono\',monospace;font-size:22px;color:rgba(240,120,140,0.9);text-align:center;outline:none">' +
-    '</div>' +
-    '<div style="display:flex;gap:8px">' +
-      '<button onclick="savePrickEdit(' + prickIdx + ')" style="flex:1;padding:12px;border-radius:10px;border:1px solid rgba(220,80,100,0.3);background:rgba(60,10,20,0.3);font-family:\'Fraunces\',serif;font-style:italic;font-weight:200;font-size:16px;color:rgba(240,120,140,0.9);cursor:pointer">save</button>' +
-      '<button onclick="deletePrick(' + prickIdx + ')" style="padding:12px 16px;border-radius:10px;border:1px solid rgba(200,60,60,0.2);background:transparent;font-family:\'DM Mono\',monospace;font-size:10px;color:rgba(200,80,80,0.5);cursor:pointer">delete</button>' +
-      '<button onclick="document.getElementById(\'prick-edit-overlay\').remove()" style="padding:12px 14px;border-radius:10px;border:1px solid rgba(60,60,80,0.3);background:transparent;font-family:\'DM Mono\',monospace;font-size:10px;color:rgba(180,200,220,0.4);cursor:pointer">cancel</button>' +
-    '</div></div>';
-  document.body.appendChild(el);
-}
-
-function savePrickEdit(idx) {
-  var bg   = parseFloat(document.getElementById('pe-bg').value);
-  var tEl  = document.getElementById('pe-time');
-  var newT = tEl && tEl.value ? new Date(tEl.value).getTime() : null;
-  if (!BLOOD_PRICKS[idx]) { var el=document.getElementById('prick-edit-overlay'); if(el) el.remove(); return; }
-  if (!isNaN(bg) && bg >= 1.0 && bg <= 30.0) BLOOD_PRICKS[idx].bg = bg;
-  if (newT) BLOOD_PRICKS[idx].t = newT;
-  BLOOD_PRICKS.sort(function(a,b){ return a.t - b.t; });
-  _savePricks();
-  var el = document.getElementById('prick-edit-overlay'); if(el) el.remove();
-  showToast('prick updated');
-}
-
-var _deletedPrickTs = (function() {
-  try { return new Set(JSON.parse(localStorage.getItem('river_deleted_pricks') || '[]')); }
-  catch(e) { return new Set(); }
-})();
-function _saveDeletedPrickTs() {
-  try {
-    var arr = Array.from(_deletedPrickTs).filter(function(t){ return Date.now() - t < 30 * 86400000; });
-    localStorage.setItem('river_deleted_pricks', JSON.stringify(arr));
-    _deletedPrickTs = new Set(arr);
-  } catch(e) {}
-}
-
-function deletePrick(idx) {
-  var p = BLOOD_PRICKS[idx];
-  if (!p) { var el=document.getElementById('prick-edit-overlay'); if(el) el.remove(); return; }
-  // Blocklist so syncPullPricks won't re-add it
-  _deletedPrickTs.add(p.t);
-  _saveDeletedPrickTs();
-  // Delete from Supabase
-  if (SUPABASE_READY) {
-    _sbFetch('events?t=eq.' + p.t + '&note=eq.prick', { method: 'DELETE', prefer: 'return=minimal' })
-      .catch(function(e){ console.warn('[prick] delete sync failed:', e.message); });
-  }
-  BLOOD_PRICKS.splice(idx, 1);
-  _savePricks();
-  var el = document.getElementById('prick-edit-overlay'); if(el) el.remove();
-  showToast('prick removed');
-}
-
-// ── Pull prick events from Supabase on sync ────────────────────────────────
-function syncPullPricks(sinceT) {
-  if (!SUPABASE_READY) return;
-  var since = sinceT || (Date.now() - 7 * 86400000);
-  _sbFetch('events?t=gte.' + since + '&note=eq.prick&order=t.asc&limit=200', { method: 'GET' })
-    .then(function(rows) {
-      if (!rows || rows.length === 0) return;
-      rows.forEach(function(row) {
-        if (!row.gi) return;
-        // Skip explicitly deleted pricks
-        if (_deletedPrickTs && _deletedPrickTs.has(row.t)) return;
-        var exists = BLOOD_PRICKS.findIndex(function(p){ return Math.abs(p.t - row.t) < 30000; });
-        if (exists < 0) {
-          BLOOD_PRICKS.push({ t: row.t, bg: row.gi, local: false });
-        }
-      });
-      BLOOD_PRICKS.sort(function(a,b){ return a.t - b.t; });
-      _savePricks();
-    })
-    .catch(function(e){ console.warn('[prick] pull failed:', e.message); });
-}
-
-// ══════════════════════════════════════════════════════════════════════════════
-//  INSIGHTS PANEL — time-of-day profile, meal response, sensor lag, export
-// ══════════════════════════════════════════════════════════════════════════════
-function openInsightsPanel() {
-  var ex = document.getElementById('insights-overlay');
-  if (ex) { ex.remove(); return; }
-
-  var el = document.createElement('div');
-  el.id = 'insights-overlay';
-  el.style.cssText = [
-    'position:fixed','inset:0','z-index:80',
-    'background:var(--rv-panel-bg)',
-    'backdrop-filter:blur(18px)',
-    'overflow-y:auto','-webkit-overflow-scrolling:touch',
-    'display:flex','flex-direction:column','align-items:center',
-    'padding:48px 16px 80px',
-    'opacity:0','transition:opacity .22s','pointer-events:auto',
-  ].join(';');
-  el.addEventListener('touchstart', function(e){ e.stopPropagation(); }, {passive:true});
-
-  // ── helpers ──────────────────────────────────────────────────────────────
-  function mono(s,w) { return "font-family:'DM Mono',monospace;font-size:"+(s||10)+"px"+(w?';font-weight:'+w:''); }
-  function section(title, body) {
-    return '<div style="margin-bottom:28px;width:100%;max-width:440px">' +
-      '<div style="'+mono(9)+';letter-spacing:1.5px;text-transform:uppercase;color:rgba(255,180,80,0.6);margin-bottom:12px">'+title+'</div>' +
-      body + '</div>';
-  }
-  function statCard(label, value, sub, col) {
-    return '<div style="flex:1;min-width:90px;padding:12px 14px;border-radius:12px;background:var(--rv-input-bg);border:1px solid var(--rv-panel-border)">' +
-      '<div style="'+mono(20,'400')+';color:'+(col||'var(--rv-text-primary)')+';margin-bottom:3px">'+value+'</div>' +
-      '<div style="'+mono(10)+';color:var(--rv-text-secondary)">'+label+'</div>' +
-      (sub ? '<div style="'+mono(9)+';color:var(--rv-text-dim);margin-top:2px">'+sub+'</div>' : '') +
-    '</div>';
-  }
-
-  // ── compute data ─────────────────────────────────────────────────────────
-
-  // 1. Time-of-day BG profile: bucket CGM readings into 24 1-hour slots
-  var hourBuckets = Array.from({length:24}, function(){ return []; });
-  for (var ri = 0; ri < HISTORY_RAW.length; ri++) {
-    var r = HISTORY_RAW[ri];
-    if (r.bg >= 1 && r.bg <= 30) {
-      hourBuckets[new Date(r.t).getHours()].push(r.bg);
-    }
-  }
-  // Also include blood pricks in profile
-  var PRICKS = (function(){ try{ return JSON.parse(localStorage.getItem('river_pricks')||'[]'); }catch(e){ return []; } })();
-  for (var pi = 0; pi < PRICKS.length; pi++) {
-    var pk = PRICKS[pi];
-    if (pk.bg >= 1 && pk.bg <= 30) {
-      hourBuckets[new Date(pk.t).getHours()].push(pk.bg);
-    }
-  }
-
-  function mean(arr) { return arr.length ? arr.reduce(function(s,v){return s+v;},0)/arr.length : null; }
-  function sd(arr) {
-    if (arr.length < 2) return 0;
-    var m = mean(arr); var v = arr.reduce(function(s,x){return s+(x-m)*(x-m);},0)/arr.length;
-    return Math.sqrt(v);
-  }
-  function pct(arr, p) {
-    if (!arr.length) return null;
-    var s = arr.slice().sort(function(a,b){return a-b;});
-    return s[Math.floor(s.length*p)];
-  }
-  function inRange(arr) { return arr.filter(function(v){return v>=3.9&&v<=10;}).length; }
-
-  var hourStats = hourBuckets.map(function(b){
-    return { n: b.length, mean: mean(b), sd: sd(b), low: pct(b,0.1), high: pct(b,0.9), inRange: b.length ? inRange(b)/b.length : null };
-  });
-
-  // Overall stats
-  var allBG = HISTORY_RAW.filter(function(r){return r.bg>=1&&r.bg<=30;}).map(function(r){return r.bg;});
-  var overallMean = mean(allBG);
-  var overallSD   = sd(allBG);
-  var overallTIR  = allBG.length ? Math.round(inRange(allBG)/allBG.length*100) : null;
-  var overallBelow = allBG.length ? Math.round(allBG.filter(function(v){return v<3.9;}).length/allBG.length*100) : null;
-  var overallAbove = allBG.length ? Math.round(allBG.filter(function(v){return v>10;}).length/allBG.length*100) : null;
-  var estimatedA1C = overallMean ? (overallMean + 2.59) / 1.59 : null; // mmol/mol → % approx
-
-  // 2. Sensor lag from pricks
-  var lagPoints = [];
-  for (var pki = 0; pki < PRICKS.length; pki++) {
-    var p2 = PRICKS[pki];
-    // Find nearest CGM reading within 5 mins
-    var nearest = null, nearDist = Infinity;
-    for (var ri2 = 0; ri2 < HISTORY_RAW.length; ri2++) {
-      var dist = Math.abs(HISTORY_RAW[ri2].t - p2.t);
-      if (dist < nearDist) { nearDist = dist; nearest = HISTORY_RAW[ri2]; }
-    }
-    if (nearest && nearDist < 5*60000) {
-      lagPoints.push({ t: p2.t, prick: p2.bg, cgm: nearest.bg, delta: p2.bg - nearest.bg });
-    }
-  }
-  var meanLag = lagPoints.length ? mean(lagPoints.map(function(l){return l.delta;})) : null;
-  var sdLag   = lagPoints.length >= 3 ? sd(lagPoints.map(function(l){return l.delta;})) : null;
-
-  // 3. Meal response — from MEAL_HISTORY, find peak BG in 2hr window after meal
-  var mealResponses = [];
-  for (var mi = 0; mi < MEAL_HISTORY.length; mi++) {
-    var m = MEAL_HISTORY[mi];
-    if (!m.t || !m.totalCarbs) continue;
-    var preBG = null, peakBG = null, peakMins = null;
-    // BG at meal time
-    for (var ri3 = 0; ri3 < HISTORY_RAW.length; ri3++) {
-      if (Math.abs(HISTORY_RAW[ri3].t - m.t) < 5*60000) { preBG = HISTORY_RAW[ri3].bg; break; }
-    }
-    // Peak in next 90 min
-    for (var ri4 = 0; ri4 < HISTORY_RAW.length; ri4++) {
-      var dt = HISTORY_RAW[ri4].t - m.t;
-      if (dt >= 0 && dt <= 90*60000) {
-        if (peakBG === null || HISTORY_RAW[ri4].bg > peakBG) {
-          peakBG = HISTORY_RAW[ri4].bg;
-          peakMins = Math.round(dt/60000);
-        }
-      }
-    }
-    if (preBG && peakBG) {
-      mealResponses.push({ name: m.name, carbs: m.totalCarbs, u: m.u, preBG: preBG, peakBG: peakBG, rise: peakBG - preBG, peakMins: peakMins, t: m.t });
-    }
-  }
-  var avgRise = mealResponses.length ? mean(mealResponses.map(function(m){return m.rise;})) : null;
-  var avgPeak = mealResponses.length ? mean(mealResponses.map(function(m){return m.peakMins;})) : null;
-
-  // Hypo count
-  var hypoEvents = LOGGED_EVENTS.filter(function(e){ return e.note && e.note.indexOf('hypo') === 0; });
-
-  // ── build HTML ───────────────────────────────────────────────────────────
-  var html = '<div style="width:100%;max-width:440px">';
-
-  // Header
-  html += '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:28px">';
-  html += '<div style="font-family:\'Fraunces\',serif;font-weight:200;font-style:italic;font-size:22px;color:var(--rv-text-primary)">insights</div>';
-  html += '<div style="display:flex;gap:10px;align-items:center">';
-  html += '<button id="insights-export-btn" onclick="insightsExport()" style="padding:7px 14px;border-radius:20px;border:1px solid rgba(255,180,80,0.3);background:rgba(255,180,80,0.08);cursor:pointer;'+mono(9)+';letter-spacing:1px;text-transform:uppercase;color:rgba(255,180,80,0.8)">↓ export</button>';
-  html += '<button onclick="document.getElementById(\'insights-overlay\').remove()" style="background:none;border:none;cursor:pointer;font-size:22px;color:var(--rv-close-btn);padding:4px">×</button>';
-  html += '</div></div>';
-
-  // ── Overview stat row ────────────────────────────────────────────────────
-  if (allBG.length > 0) {
-    html += section('overview', '<div style="display:flex;gap:8px;flex-wrap:wrap">' +
-      statCard('avg BG', overallMean ? overallMean.toFixed(1)+' mmol' : '—', allBG.length+' readings', 'var(--rv-text-primary)') +
-      statCard('time in range', overallTIR !== null ? overallTIR+'%' : '—', '3.9–10 mmol', overallTIR >= 70 ? 'rgba(100,220,160,0.9)' : overallTIR >= 50 ? 'rgba(255,210,40,0.9)' : 'rgba(255,100,80,0.9)') +
-      statCard('below range', overallBelow !== null ? overallBelow+'%' : '—', '< 3.9 mmol', overallBelow > 4 ? 'rgba(255,100,80,0.9)' : 'rgba(100,220,160,0.9)') +
-      statCard('above range', overallAbove !== null ? overallAbove+'%' : '—', '> 10 mmol', overallAbove > 25 ? 'rgba(255,180,80,0.9)' : 'rgba(100,220,160,0.9)') +
-    '</div>' +
-    (estimatedA1C ? '<div style="margin-top:10px;padding:10px 14px;border-radius:10px;background:var(--rv-input-bg);border:1px solid var(--rv-panel-border);display:flex;justify-content:space-between;align-items:center"><span style="'+mono(10)+';color:var(--rv-text-secondary)">estimated HbA1c (eA1C)</span><span style="'+mono(12,'500')+';color:var(--rv-text-primary)">'+estimatedA1C.toFixed(1)+'%</span></div>' : '') +
-    '<div style="'+mono(8)+';color:var(--rv-text-dim);margin-top:6px;padding:0 2px">eA1C derived from mean CGM — not a clinical measurement. Use lab values for clinical decisions.</div>'
-    );
-  } else {
-    html += section('overview', '<div style="'+mono(10)+';color:var(--rv-text-dim);padding:16px 0">No CGM data yet — connect your sensor to see glucose insights.</div>');
-  }
-
-  // ── Time-of-day chart ────────────────────────────────────────────────────
-  var todHtml = '<div style="position:relative;height:120px;background:var(--rv-input-bg);border-radius:12px;border:1px solid var(--rv-panel-border);overflow:hidden;margin-bottom:8px">';
-  todHtml += '<canvas id="tod-chart" style="position:absolute;inset:0;width:100%;height:100%"></canvas>';
-  todHtml += '</div>';
-  // Hour labels
-  todHtml += '<div style="display:flex;justify-content:space-between;'+mono(8)+';color:var(--rv-text-dim);padding:0 2px">';
-  ['00:00','04:00','08:00','12:00','16:00','20:00','24:00'].forEach(function(l){ todHtml += '<span>'+l+'</span>'; });
-  todHtml += '</div>';
-  // Legend
-  todHtml += '<div style="display:flex;gap:16px;margin-top:8px;'+mono(9)+';color:var(--rv-text-dim)">';
-  todHtml += '<span><span style="display:inline-block;width:8px;height:8px;border-radius:2px;background:rgba(100,220,160,0.5);margin-right:4px"></span>mean BG</span>';
-  todHtml += '<span><span style="display:inline-block;width:8px;height:8px;border-radius:2px;background:rgba(255,210,40,0.15);margin-right:4px"></span>10th–90th %ile</span>';
-  todHtml += '<span><span style="display:inline-block;width:8px;height:8px;border-radius:2px;background:rgba(100,160,255,0.4);margin-right:4px"></span>target zone</span>';
-  todHtml += '</div>';
-  // Store data for canvas rendering
-  todHtml += '<script id="tod-data" type="application/json">'+JSON.stringify(hourStats)+'<\/script>';
-  html += section('time of day — bg profile', todHtml);
-
-  // ── Meal response ────────────────────────────────────────────────────────
-  var mealHtml = '';
-  if (mealResponses.length === 0) {
-    mealHtml = '<div style="'+mono(10)+';color:var(--rv-text-dim);padding:12px 0">Log meals to see response patterns here.</div>';
-  } else {
-    mealHtml += '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px">' +
-      statCard('avg rise', avgRise !== null ? '+'+avgRise.toFixed(1)+' mmol' : '—', 'peak vs pre-meal', 'rgba(255,180,80,0.9)') +
-      statCard('avg peak time', avgPeak !== null ? Math.round(avgPeak)+' min' : '—', 'after eating', 'var(--rv-text-primary)') +
-      statCard('meals logged', mealResponses.length+'', 'with CGM match', 'var(--rv-text-secondary)') +
-    '</div>';
-    // Recent meals table
-    mealHtml += '<div style="border-radius:12px;border:1px solid var(--rv-panel-border);overflow:hidden">';
-    var recent = mealResponses.slice(0, 8);
-    recent.forEach(function(mr, idx) {
-      var dateStr = new Date(mr.t).toLocaleDateString('en-GB',{weekday:'short',day:'numeric',month:'short'});
-      var riseCol = mr.rise > 5 ? 'rgba(255,100,80,0.9)' : mr.rise > 3 ? 'rgba(255,180,80,0.9)' : 'rgba(100,220,160,0.9)';
-      mealHtml += '<div style="display:flex;justify-content:space-between;align-items:center;padding:10px 14px;'+
-        (idx < recent.length-1 ? 'border-bottom:1px solid var(--rv-panel-border);' : '')+
-        'background:var(--rv-input-bg)">';
-      mealHtml += '<div style="flex:1;min-width:0">';
-      mealHtml += '<div style="'+mono(10)+';color:var(--rv-text-secondary);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">'+mr.name+'</div>';
-      mealHtml += '<div style="'+mono(9)+';color:var(--rv-text-dim)">'+dateStr+' · '+mr.carbs+'g carbs'+(mr.u?' · '+mr.u+'U':'')+'</div>';
-      mealHtml += '</div>';
-      mealHtml += '<div style="display:flex;gap:14px;margin-left:10px">';
-      mealHtml += '<div style="text-align:right"><div style="'+mono(12)+';color:'+riseCol+'">'+
-        (mr.rise > 0 ? '+' : '')+mr.rise.toFixed(1)+'</div><div style="'+mono(8)+';color:var(--rv-text-dim)">rise</div></div>';
-      mealHtml += '<div style="text-align:right"><div style="'+mono(12)+';color:var(--rv-text-secondary)">'+mr.peakMins+'m</div><div style="'+mono(8)+';color:var(--rv-text-dim)">peak</div></div>';
-      mealHtml += '</div></div>';
-    });
-    mealHtml += '</div>';
-  }
-  html += section('meal response', mealHtml);
-
-  // ── Sensor lag ───────────────────────────────────────────────────────────
-  var lagHtml = '';
-  if (lagPoints.length === 0) {
-    lagHtml = '<div style="'+mono(10)+';color:var(--rv-text-dim);padding:12px 0">Log finger prick readings (◆ from the orb menu) to build your personal sensor lag profile.</div>';
-  } else {
-    lagHtml += '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px">' +
-      statCard('mean delta', meanLag !== null ? (meanLag >= 0 ? '+' : '')+meanLag.toFixed(2)+' mmol' : '—', 'prick − CGM', meanLag && Math.abs(meanLag) > 1.5 ? 'rgba(255,180,80,0.9)' : 'rgba(100,220,160,0.9)') +
-      (sdLag !== null ? statCard('variability', '±'+sdLag.toFixed(2)+' mmol', 'SD of deltas', 'var(--rv-text-secondary)') : '') +
-      statCard('readings', lagPoints.length+'', 'prick pairs', 'var(--rv-text-dim)') +
-    '</div>';
-    // Individual lag points
-    lagHtml += '<div style="border-radius:12px;border:1px solid var(--rv-panel-border);overflow:hidden">';
-    var recentLag = lagPoints.slice(-8).reverse();
-    recentLag.forEach(function(lp, idx) {
-      var dateStr = new Date(lp.t).toLocaleDateString('en-GB',{weekday:'short',day:'numeric',month:'short'});
-      var timeStr = new Date(lp.t).toLocaleTimeString('en-GB',{hour:'2-digit',minute:'2-digit'});
-      var deltaCol = Math.abs(lp.delta) > 2 ? 'rgba(255,100,80,0.9)' : Math.abs(lp.delta) > 1 ? 'rgba(255,180,80,0.9)' : 'rgba(100,220,160,0.9)';
-      lagHtml += '<div style="display:flex;justify-content:space-between;align-items:center;padding:9px 14px;'+
-        (idx < recentLag.length-1 ? 'border-bottom:1px solid var(--rv-panel-border);' : '')+
-        'background:var(--rv-input-bg)">';
-      lagHtml += '<div><div style="'+mono(10)+';color:var(--rv-text-secondary)">'+dateStr+' '+timeStr+'</div></div>';
-      lagHtml += '<div style="display:flex;gap:14px">';
-      lagHtml += '<div style="text-align:right"><div style="'+mono(11)+';color:var(--rv-text-secondary)">'+lp.prick.toFixed(1)+'</div><div style="'+mono(8)+';color:var(--rv-text-dim)">prick</div></div>';
-      lagHtml += '<div style="text-align:right"><div style="'+mono(11)+';color:var(--rv-text-secondary)">'+lp.cgm.toFixed(1)+'</div><div style="'+mono(8)+';color:var(--rv-text-dim)">CGM</div></div>';
-      lagHtml += '<div style="text-align:right"><div style="'+mono(11)+';color:'+deltaCol+'">'+(lp.delta >= 0?'+':'')+lp.delta.toFixed(2)+'</div><div style="'+mono(8)+';color:var(--rv-text-dim)">Δ</div></div>';
-      lagHtml += '</div></div>';
-    });
-    lagHtml += '</div>';
-    if (meanLag !== null && Math.abs(meanLag) > 1.0) {
-      lagHtml += '<div style="'+mono(9)+';color:rgba(255,180,80,0.7);margin-top:8px;padding:0 2px">Your CGM consistently reads '+(meanLag > 0 ? 'below' : 'above')+' your blood glucose by ~'+Math.abs(meanLag).toFixed(1)+' mmol. This is typical on '+( meanLag > 0 ? 'rising' : 'falling')+' glucose.</div>';
-    }
-  }
-  html += section('sensor lag — prick vs cgm', lagHtml);
-
-  // ── Events summary ───────────────────────────────────────────────────────
-  var eventsHtml = '<div style="display:flex;gap:8px;flex-wrap:wrap">';
-  var totalBolus  = LOGGED_EVENTS.filter(function(e){return e.u>0;}).length;
-  var totalCarbs2 = LOGGED_EVENTS.filter(function(e){return e.c>0;}).length;
-  var totalHypos  = hypoEvents.length;
-  var totalPricks2 = PRICKS.length;
-  eventsHtml += statCard('boluses', totalBolus+'', 'logged', 'rgba(100,160,255,0.9)');
-  eventsHtml += statCard('meals', totalCarbs2+'', 'logged', 'rgba(255,180,80,0.9)');
-  eventsHtml += statCard('hypos', totalHypos+'', 'treated', totalHypos > 3 ? 'rgba(255,100,80,0.9)' : 'rgba(100,220,160,0.9)');
-  eventsHtml += statCard('pricks', totalPricks2+'', 'logged', 'var(--rv-text-secondary)');
-  eventsHtml += '</div>';
-  html += section('events — this session', eventsHtml);
-
-  // ── Export section ───────────────────────────────────────────────────────
-  html += section('clinic export',
-    '<div style="'+mono(10)+';color:var(--rv-text-secondary);margin-bottom:12px">Download a structured summary for your diabetes team — includes glucose profile, meal log, bolus history, and prick readings.</div>' +
-    '<button onclick="insightsExport()" style="width:100%;padding:14px;border-radius:12px;border:1px solid rgba(255,180,80,0.3);background:rgba(255,180,80,0.08);cursor:pointer;'+mono(11)+';letter-spacing:0.5px;color:rgba(255,180,80,0.9)">Download clinic report (.txt)</button>'
-  );
-
-  html += '</div>'; // close max-width wrapper
-  el.innerHTML = html;
-  document.body.appendChild(el);
-  setTimeout(function(){ el.style.opacity='1'; }, 10);
-
-  // ── Render time-of-day canvas chart ─────────────────────────────────────
-  setTimeout(function() {
-    var canvas = document.getElementById('tod-chart');
-    if (!canvas) return;
-    var dataEl = document.getElementById('tod-data');
-    if (!dataEl) return;
-    var stats = JSON.parse(dataEl.textContent);
-    var dpr = window.devicePixelRatio || 1;
-    var W = canvas.offsetWidth, H = canvas.offsetHeight;
-    canvas.width = W * dpr; canvas.height = H * dpr;
-    var ctx2 = canvas.getContext('2d');
-    ctx2.scale(dpr, dpr);
-
-    var PAD = { l: 28, r: 8, t: 8, b: 8 };
-    var CW = W - PAD.l - PAD.r, CH = H - PAD.t - PAD.b;
-    var BG_MIN2 = 2.0, BG_MAX2 = 16.0;
-
-    function yp(bg) { return PAD.t + CH - (bg - BG_MIN2) / (BG_MAX2 - BG_MIN2) * CH; }
-    function xp(hr) { return PAD.l + (hr / 24) * CW; }
-
-    // Target band
-    ctx2.fillStyle = 'rgba(100,160,255,0.08)';
-    ctx2.fillRect(PAD.l, yp(10), CW, yp(3.9) - yp(10));
-    ctx2.strokeStyle = 'rgba(100,160,255,0.2)';
-    ctx2.lineWidth = 0.5;
-    [3.9, 10].forEach(function(v) {
-      ctx2.beginPath(); ctx2.moveTo(PAD.l, yp(v)); ctx2.lineTo(PAD.l + CW, yp(v)); ctx2.stroke();
-    });
-
-    // Y-axis labels
-    ctx2.font = "8px 'DM Mono', monospace";
-    ctx2.fillStyle = 'rgba(255,255,255,0.25)';
-    ctx2.textAlign = 'right';
-    [4, 7, 10, 14].forEach(function(v) {
-      ctx2.fillText(v, PAD.l - 3, yp(v) + 3);
-    });
-
-    // Percentile band
-    var hasData = stats.some(function(s){ return s.n > 0; });
-    if (hasData) {
-      ctx2.beginPath();
-      var first = true;
-      for (var h = 0; h < 24; h++) {
-        if (stats[h].low !== null) { if (first) { ctx2.moveTo(xp(h + 0.5), yp(stats[h].low)); first = false; } else { ctx2.lineTo(xp(h + 0.5), yp(stats[h].low)); } }
-      }
-      for (var h2 = 23; h2 >= 0; h2--) {
-        if (stats[h2].high !== null) { ctx2.lineTo(xp(h2 + 0.5), yp(stats[h2].high)); }
-      }
-      ctx2.closePath();
-      ctx2.fillStyle = 'rgba(255,210,40,0.1)';
-      ctx2.fill();
-
-      // Mean line
-      ctx2.beginPath();
-      var firstM = true;
-      for (var h3 = 0; h3 < 24; h3++) {
-        if (stats[h3].mean !== null) {
-          var xm = xp(h3 + 0.5), ym = yp(stats[h3].mean);
-          if (firstM) { ctx2.moveTo(xm, ym); firstM = false; } else { ctx2.lineTo(xm, ym); }
-        }
-      }
-      ctx2.strokeStyle = 'rgba(100,220,160,0.8)';
-      ctx2.lineWidth = 1.5;
-      ctx2.lineJoin = 'round';
-      ctx2.stroke();
-
-      // Dots where data exists
-      for (var h4 = 0; h4 < 24; h4++) {
-        if (stats[h4].mean !== null && stats[h4].n >= 2) {
-          ctx2.beginPath();
-          ctx2.arc(xp(h4 + 0.5), yp(stats[h4].mean), 2, 0, 2*Math.PI);
-          ctx2.fillStyle = 'rgba(100,220,160,0.9)';
-          ctx2.fill();
-        }
-      }
-    } else {
-      ctx2.font = "10px 'DM Mono', monospace";
-      ctx2.fillStyle = 'rgba(255,255,255,0.2)';
-      ctx2.textAlign = 'center';
-      ctx2.fillText('no data yet', W/2, H/2 + 4);
-    }
-  }, 80);
-}
-
-// ── Export function: structured clinic report ─────────────────────────────
-function insightsExport() {
-  var lines = [];
-  var now = new Date();
-  var dateStr = now.toLocaleDateString('en-GB', { weekday:'long', year:'numeric', month:'long', day:'numeric' });
-  lines.push("OSKAR'S RIVER — CLINIC REPORT");
-  lines.push('Generated: ' + dateStr + ' ' + now.toLocaleTimeString('en-GB'));
-  lines.push('Patient: Oskar · T1D · MDI · Libre 3');
-  lines.push('');
-  lines.push('════════════════════════════════════════');
-  lines.push('GLUCOSE SUMMARY');
-  lines.push('════════════════════════════════════════');
-
-  var allBGx = HISTORY_RAW.filter(function(r){return r.bg>=1&&r.bg<=30;}).map(function(r){return r.bg;});
-  if (allBGx.length > 0) {
-    var m = allBGx.reduce(function(s,v){return s+v;},0)/allBGx.length;
-    var tir = Math.round(allBGx.filter(function(v){return v>=3.9&&v<=10;}).length/allBGx.length*100);
-    var below = Math.round(allBGx.filter(function(v){return v<3.9;}).length/allBGx.length*100);
-    var above = Math.round(allBGx.filter(function(v){return v>10;}).length/allBGx.length*100);
-    var a1c = ((m + 2.59) / 1.59).toFixed(1);
-    lines.push('Readings:         ' + allBGx.length);
-    lines.push('Mean BG:          ' + m.toFixed(2) + ' mmol/L');
-    lines.push('Time in range:    ' + tir + '% (3.9–10.0 mmol)');
-    lines.push('Below range:      ' + below + '% (< 3.9 mmol)');
-    lines.push('Above range:      ' + above + '% (> 10.0 mmol)');
-    lines.push('Estimated eA1C:   ' + a1c + '% (derived from mean CGM — not a lab value)');
-    if (HISTORY_RAW.length > 0) {
-      var from = new Date(HISTORY_RAW[0].t).toLocaleDateString('en-GB');
-      var to   = new Date(HISTORY_RAW[HISTORY_RAW.length-1].t).toLocaleDateString('en-GB');
-      lines.push('Data range:       ' + from + ' → ' + to);
-    }
-  } else {
-    lines.push('No CGM readings available.');
-  }
-
-  lines.push('');
-  lines.push('════════════════════════════════════════');
-  lines.push('TIME-OF-DAY PROFILE');
-  lines.push('════════════════════════════════════════');
-  var hourBucketsX = Array.from({length:24}, function(){ return []; });
-  for (var ri = 0; ri < HISTORY_RAW.length; ri++) {
-    var r = HISTORY_RAW[ri];
-    if (r.bg >= 1 && r.bg <= 30) hourBucketsX[new Date(r.t).getHours()].push(r.bg);
-  }
-  lines.push('Hour  | Mean   | n   | In Range');
-  lines.push('------+--------+-----+---------');
-  for (var h = 0; h < 24; h++) {
-    var b = hourBucketsX[h];
-    if (!b.length) { lines.push(String(h).padStart(2,'0')+':00 | —      | 0   | —'); continue; }
-    var bm = (b.reduce(function(s,v){return s+v;},0)/b.length).toFixed(2);
-    var bir = Math.round(b.filter(function(v){return v>=3.9&&v<=10;}).length/b.length*100);
-    lines.push(String(h).padStart(2,'0')+':00 | '+bm+'  | '+b.length+'   | '+bir+'%');
-  }
-
-  lines.push('');
-  lines.push('════════════════════════════════════════');
-  lines.push('MEAL LOG');
-  lines.push('════════════════════════════════════════');
-  if (MEAL_HISTORY.length === 0) {
-    lines.push('No meals logged.');
-  } else {
-    MEAL_HISTORY.slice(0, 30).forEach(function(m) {
-      var d = new Date(m.t);
-      var ds = d.toLocaleDateString('en-GB',{weekday:'short',day:'numeric',month:'short'}) + ' ' + d.toLocaleTimeString('en-GB',{hour:'2-digit',minute:'2-digit'});
-      lines.push(ds + '  ' + m.totalCarbs + 'g carbs' + (m.u ? '  ' + m.u + 'U bolus' : ''));
-      if (m.items && m.items.length) {
-        m.items.forEach(function(i){ lines.push('  · ' + i.name + '  ' + (i.grams||'?') + 'g  ' + (i.carbs||'?') + 'g carbs'); });
-      }
-      lines.push('');
-    });
-  }
-
-  lines.push('════════════════════════════════════════');
-  lines.push('BOLUS / CORRECTION LOG');
-  lines.push('════════════════════════════════════════');
-  var bolusOnly = LOGGED_EVENTS.filter(function(e){return e.u>0;}).slice(0,30);
-  if (!bolusOnly.length) { lines.push('No boluses logged.'); }
-  else {
-    bolusOnly.forEach(function(e) {
-      var d = new Date(e.t);
-      var ds = d.toLocaleDateString('en-GB',{weekday:'short',day:'numeric',month:'short'}) + ' ' + d.toLocaleTimeString('en-GB',{hour:'2-digit',minute:'2-digit'});
-      lines.push(ds + '  ' + e.u.toFixed(1) + 'U  ' + (e.note||'') + (e.logged_by?' ['+e.logged_by+']':''));
-    });
-  }
-
-  lines.push('');
-  lines.push('════════════════════════════════════════');
-  lines.push('FINGER PRICK READINGS');
-  lines.push('════════════════════════════════════════');
-  var PRICKSX = (function(){ try{ return JSON.parse(localStorage.getItem('river_pricks')||'[]'); }catch(e){ return []; } })();
-  if (!PRICKSX.length) { lines.push('No finger pricks logged.'); }
-  else {
-    PRICKSX.forEach(function(p) {
-      var d = new Date(p.t);
-      var ds = d.toLocaleDateString('en-GB',{weekday:'short',day:'numeric',month:'short'}) + ' ' + d.toLocaleTimeString('en-GB',{hour:'2-digit',minute:'2-digit'});
-      lines.push(ds + '  ' + p.bg.toFixed(1) + ' mmol/L (finger prick)');
-    });
-  }
-
-  lines.push('');
-  lines.push('════════════════════════════════════════');
-  lines.push('HYPO EVENTS');
-  lines.push('════════════════════════════════════════');
-  var hyposX = LOGGED_EVENTS.filter(function(e){ return e.note && e.note.indexOf('hypo') === 0; });
-  if (!hyposX.length) { lines.push('No hypo treatments logged.'); }
-  else {
-    hyposX.forEach(function(e) {
-      var d = new Date(e.t);
-      var ds = d.toLocaleDateString('en-GB',{weekday:'short',day:'numeric',month:'short'}) + ' ' + d.toLocaleTimeString('en-GB',{hour:'2-digit',minute:'2-digit'});
-      lines.push(ds + '  ' + e.c + 'g treatment  ' + (e.note||'').replace('hypo:','') + (e.logged_by?' ['+e.logged_by+']':''));
-    });
-  }
-
-  lines.push('');
-  lines.push('════════════════════════════════════════');
-  lines.push('NOTES');
-  lines.push('────────────────────────────────────────');
-  lines.push('This report was generated by Oskar\'s River — a personal T1D management');
-  lines.push('app for one family. Data shown is for clinical context only. All dosing');
-  lines.push('decisions remain with the family and their medical team.');
-  lines.push('eA1C formula: (mean mmol + 2.59) / 1.59 — approximate only.');
-
-  var blob = new Blob([lines.join('\n')], { type: 'text/plain' });
-  var url  = URL.createObjectURL(blob);
-  var a = document.createElement('a');
-  a.href = url;
-  a.download = 'oskar-river-clinic-' + now.toISOString().slice(0,10) + '.txt';
-  document.body.appendChild(a); a.click();
-  document.body.removeChild(a);
-  URL.revokeObjectURL(url);
-  if (typeof showToast === 'function') showToast('Clinic report downloaded');
-}
-
 function openSettings() {
   // If tray already open, close it
   var ex = document.getElementById('settings-tray');
@@ -10358,7 +9413,6 @@ function openSettingsTray() {
     { label: 'cgm',          icon: '◎', fn: function(){ closeSettingsTray(); openCGMSettings(); },      col: 'rgba(80,200,180,0.8)'  },
     { label: 'food library', icon: '◌', fn: function(){ closeSettingsTray(); openFoodManager(); },      col: 'rgba(220,150,60,0.8)'  },
     { label: 'treatment',    icon: '◈', fn: function(){ closeSettingsTray(); openTreatmentPanel(); },   col: 'rgba(180,100,220,0.8)' },
-    { label: 'insights',     icon: '◧', fn: function(){ closeSettingsTray(); openInsightsPanel(); },    col: 'rgba(255,180,80,0.8)'  },
     { label: 'visuals',      icon: '◐', fn: function(){ openVisualSettings(); },                         col: 'rgba(180,140,240,0.8)' },
   ];
 
