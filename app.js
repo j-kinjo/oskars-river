@@ -196,8 +196,9 @@ async function syncPullEvents(sinceT) {
   if (!rows || rows.length === 0) return 0;
   var added = 0;
   rows.forEach(function(row) {
+    // Skip events the user has explicitly deleted on this device
+    if (typeof _deletedEventTs !== 'undefined' && _deletedEventTs.has(row.t)) return;
     // Merge into LOGGED_EVENTS
-    // Exact timestamp match — 30s window caused legitimate events to be silently dropped.
     var existsL = LOGGED_EVENTS.findIndex(function(e){ return e.t === row.t && Math.abs((e.c||0) - (row.c||0)) < 0.5; });
     if (existsL < 0) {
       var rowItems = row.items;
@@ -1165,9 +1166,13 @@ function _drawCOBReservoir() {
       var mealT_local = meal.t; // capture for closure — carbs cannot arrive before eat time
       function bellH(px) {
         var t_px = viewTime + (px - NOW_X*W) / W * viewSpan;
-        if (t_px < mealT_local) return 0; // no carb absorption before food is eaten
+        if (t_px < mealT_local) return 0; // zero before food is eaten
+        // Smooth ramp-up from eat time: rises from 0 over the first ~8 minutes
+        // so the curve starts gradually at the chip rather than as a vertical cliff
+        var rampMins = Math.min(1.0, (t_px - mealT_local) / (8 * 60000));
+        var ramp = rampMins * rampMins * (3 - 2 * rampMins); // smoothstep
         var minsDist = (t_px - peakT) / 60000;
-        return Math.exp(-0.5 * Math.pow(minsDist / sigmaMins, 2)) * maxD;
+        return Math.exp(-0.5 * Math.pow(minsDist / sigmaMins, 2)) * maxD * ramp;
       }
       CX.beginPath();
       CX.moveTo(0, H);
@@ -8512,7 +8517,7 @@ function nukeLocalData() {
     // Clear all river localStorage keys
     var keys = ['river_logged','river_session','river_meals','river_meal_hist',
                  'river_cgm_history','river_food_lib','river_people','river_recipes',
-                 'river_visual_prefs','river_person_id'];
+                 'river_visual_prefs','river_person_id','river_deleted_ts'];
     keys.forEach(function(k){ try{localStorage.removeItem(k);}catch(_e){} });
     // Clear in-memory arrays defensively
     try{ if(typeof LOGGED_EVENTS!=='undefined') LOGGED_EVENTS.length=0; }catch(_e){}
@@ -8810,14 +8815,40 @@ function saveEventEdit(idx) {
   showToast('entry updated');
 }
 
+// ── DELETED EVENTS BLOCKLIST — prevents re-pull from Supabase ────────
+// Timestamps of locally-deleted events. Persisted to localStorage.
+// syncPullEvents skips any row whose t is in this set.
+var _deletedEventTs = (function() {
+  try { return new Set(JSON.parse(localStorage.getItem('river_deleted_ts')||'[]')); }
+  catch(_e) { return new Set(); }
+})();
+function _saveDeletedTs() {
+  try {
+    var arr = Array.from(_deletedEventTs).filter(function(t){ return Date.now()-t < 7*86400000; });
+    localStorage.setItem('river_deleted_ts', JSON.stringify(arr));
+    _deletedEventTs = new Set(arr);
+  } catch(_e) {}
+}
+
 function deleteEvent(idx) {
-  var t = BOLUS_EVENTS[idx]?.t;
+  var ev = BOLUS_EVENTS[idx];
+  var t  = ev && ev.t;
   BOLUS_EVENTS.splice(idx, 1);
   if (t) {
-    SESSION = SESSION.filter(function(s){ return Math.abs(s.t - t) >= 60000; });
-    try { localStorage.setItem('river_session', JSON.stringify(SESSION)); } catch(e) {}
-    LOGGED_EVENTS = LOGGED_EVENTS.filter(function(s){ return Math.abs(s.t - t) >= 60000; });
-    try { localStorage.setItem('river_logged', JSON.stringify(LOGGED_EVENTS)); } catch(e) {}
+    SESSION       = SESSION.filter(function(s){ return s.t !== t; });
+    LOGGED_EVENTS = LOGGED_EVENTS.filter(function(s){ return s.t !== t; });
+    try { localStorage.setItem('river_session', JSON.stringify(SESSION)); } catch(_e) {}
+    try { localStorage.setItem('river_logged',  JSON.stringify(LOGGED_EVENTS)); } catch(_e) {}
+
+    // Add to blocklist so it isn't re-pulled from Supabase
+    _deletedEventTs.add(t);
+    _saveDeletedTs();
+
+    // Delete from Supabase (best-effort — blocklist protects if this fails)
+    if (SUPABASE_READY) {
+      _sbFetch('events?t=eq.' + t, { method: 'DELETE', prefer: 'return=minimal' })
+        .catch(function(e){ console.warn('[delete] Supabase delete failed:', e.message); });
+    }
   }
   var el = document.getElementById('event-edit-overlay');
   if (el) el.remove();
