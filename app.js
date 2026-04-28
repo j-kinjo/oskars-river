@@ -8484,16 +8484,22 @@ async function sendFeatureRequest(description) {
 
 // ── Nuclear data clear — wipes all local river state ─────────────────
 function nukeLocalData() {
-  var keys = ['river_logged','river_session','river_meals','river_meal_hist',
-               'river_cgm_history','river_food_lib'];
-  keys.forEach(function(k){ try{localStorage.removeItem(k);}catch(_e){} });
-  LOGGED_EVENTS.length = 0;
-  BOLUS_EVENTS.length = 0;
-  SESSION.length = 0;
-  if (typeof MEAL_HISTORY !== 'undefined') MEAL_HISTORY.length = 0;
-  try { HISTORY_RAW.length = 0; } catch(_e){}
-  showToast('local data cleared\nreloading…');
-  setTimeout(function(){ window.location.reload(); }, 1200);
+  try {
+    // Clear all river localStorage keys
+    var keys = ['river_logged','river_session','river_meals','river_meal_hist',
+                 'river_cgm_history','river_food_lib','river_people','river_recipes',
+                 'river_visual_prefs','river_person_id'];
+    keys.forEach(function(k){ try{localStorage.removeItem(k);}catch(_e){} });
+    // Clear in-memory arrays defensively
+    try{ if(typeof LOGGED_EVENTS!=='undefined') LOGGED_EVENTS.length=0; }catch(_e){}
+    try{ if(typeof BOLUS_EVENTS!=='undefined')  BOLUS_EVENTS.length=0;  }catch(_e){}
+    try{ if(typeof SESSION!=='undefined')        SESSION.length=0;       }catch(_e){}
+    try{ if(typeof MEAL_HISTORY!=='undefined')   MEAL_HISTORY.length=0;  }catch(_e){}
+    try{ if(typeof HISTORY_RAW!=='undefined')    HISTORY_RAW.length=0;   }catch(_e){}
+  } catch(_e) {}
+  // Reload regardless — the whole point is a clean start
+  try { showToast('cache cleared — reloading'); } catch(_e){}
+  setTimeout(function(){ window.location.reload(); }, 800);
 }
 
 async function nukeSupabaseEvents() {
