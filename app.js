@@ -2977,6 +2977,295 @@ function returnToNow() {
 // Track if user has scrolled away from now
 let _isAtNow = true;
 
+
+// ── CURVE BUBBLE SYSTEM — physics-aware accumulation at peaks and troughs ──
+// Separate from the NOW_X forceParticles system.
+// Bubbles accumulate at local BG peaks (carbs dominating) and troughs (insulin dominating).
+// Lava-lamp motion, per-food GI colour, dark unknown blobs mixed in.
+
+var _curveBubbles    = [];   // active curve bubbles
+var _curveGhosts     = [];   // ribbon ghost trails
+var _ptCache         = null; // cached peaks/troughs
+var _ptCacheTime     = 0;    // when cache was built
+var _ptCacheView     = 0;    // viewTime when cache was built
+var _cbFrame         = 0;    // animation frame counter
+
+// Find up to 3 local peaks and troughs in the visible BG curve
+function _findPeaksTroughs() {
+  var now = Date.now();
+  if (_ptCache && (now - _ptCacheTime) < 5000 &&
+      Math.abs(_ptCacheView - viewTime) < 2 * 60000) {
+    return _ptCache;
+  }
+
+  var pts = [];
+  var steps = 40;
+  var leftT  = viewTime - viewSpan * NOW_X;
+  var rightT = viewTime + viewSpan * (1 - NOW_X);
+  // Only look at history, not forecast
+  rightT = Math.min(rightT, viewTime + 60000);
+
+  for (var i = 0; i <= steps; i++) {
+    var t = leftT + (i / steps) * (rightT - leftT);
+    var d = dataAt(t);
+    pts.push({ t: t, bg: d.bg, cob: d.cob || 0, iob: d.iob || 0 });
+  }
+
+  var results = [];
+  for (var i = 2; i < pts.length - 2; i++) {
+    var prev2 = pts[i-2].bg, prev1 = pts[i-1].bg;
+    var cur   = pts[i].bg;
+    var next1 = pts[i+1].bg, next2 = pts[i+2].bg;
+
+    var isPeak  = cur > prev1 && cur > prev2 && cur > next1 && cur > next2;
+    var isTrough= cur < prev1 && cur < prev2 && cur < next1 && cur < next2;
+
+    if (isPeak || isTrough) {
+      var p = pts[i];
+      var netForce = p.cob - p.iob * 1.8; // carbs vs insulin-weighted
+      results.push({
+        t: p.t,
+        x: tX(p.t),
+        y: bgToY(p.bg),
+        bg: p.bg,
+        type: isPeak ? 'peak' : 'trough',
+        cob: p.cob,
+        iob: p.iob,
+        netForce: netForce,
+        magnitude: isPeak ? (p.bg - BG_LOW) / (BG_HIGH - BG_LOW)
+                           : (BG_HIGH - p.bg) / (BG_HIGH - BG_LOW),
+      });
+    }
+  }
+
+  // Keep strongest 3
+  results.sort(function(a, b) { return Math.abs(b.netForce) - Math.abs(a.netForce); });
+  results = results.slice(0, 3);
+
+  _ptCache    = results;
+  _ptCacheTime = now;
+  _ptCacheView = viewTime;
+  return results;
+}
+
+// Spawn curve bubbles at a peak or trough
+function _spawnCurveBubbles(pt) {
+  var isPeak = pt.type === 'peak';
+  var count  = Math.max(3, Math.round(pt.magnitude * 14));
+  var darkCount = Math.min(4, Math.floor(Math.abs(pt.netForce) * 0.15 + 1));
+
+  // Dominant food GI at this moment
+  var domGI = 55;
+  var meals = _getActiveMealEvents();
+  if (meals.length > 0) {
+    var bestCarbs = 0, bestFood = null;
+    meals.forEach(function(meal) {
+      var elapsedMin = (pt.t - meal.t) / 60000;
+      if (meal.items) meal.items.forEach(function(food) {
+        var rem = _cobFgi(elapsedMin, food.gi || 55) * (food.carbs || 0);
+        if (rem > bestCarbs) { bestCarbs = rem; bestFood = food; }
+      });
+    });
+    if (bestFood) domGI = bestFood.gi || 55;
+  }
+
+  for (var i = 0; i < count; i++) {
+    var isIOB = !isPeak || (isPeak && i < count * Math.max(0, -pt.netForce / 15));
+    var col   = isIOB
+      ? (RIVER_VISUAL_PREFS.iobR || COL_IOB)
+      : giToColour(domGI + (Math.random() - 0.5) * 20);
+
+    _curveBubbles.push({
+      ptType:  pt.type,
+      ptX:     pt.x,
+      ptY:     pt.y,
+      // Start scattered around the peak/trough
+      ox:      (Math.random() - 0.5) * 38,   // orbital x offset
+      oy:      isPeak ? -(Math.random() * 28) : (Math.random() * 28),
+      x:       pt.x + (Math.random() - 0.5) * 38,
+      y:       pt.y + (isPeak ? -(Math.random() * 28) : (Math.random() * 28)),
+      vx:      (Math.random() - 0.5) * 0.12,
+      vy:      isPeak ? -(0.05 + Math.random() * 0.12) : (0.05 + Math.random() * 0.12),
+      r:       2.5 + Math.random() * 3.5,
+      col:     col,
+      isIOB:   isIOB,
+      isDark:  false,
+      alpha:   0,
+      phase:   Math.random() * Math.PI * 2,
+      lavaPhase: Math.random() * Math.PI * 2,
+      lavaSpeed: 0.008 + Math.random() * 0.012,
+      ghosts:  [],
+      age:     0,
+    });
+  }
+
+  // Dark unknown blobs — mixed into cluster
+  for (var j = 0; j < darkCount; j++) {
+    _curveBubbles.push({
+      ptType:  pt.type,
+      ptX:     pt.x,
+      ptY:     pt.y,
+      ox:      (Math.random() - 0.5) * 30,
+      oy:      isPeak ? -(Math.random() * 20) : (Math.random() * 20),
+      x:       pt.x + (Math.random() - 0.5) * 30,
+      y:       pt.y + (isPeak ? -(Math.random() * 20) : (Math.random() * 20)),
+      vx:      (Math.random() - 0.5) * 0.08,
+      vy:      isPeak ? -(0.03 + Math.random() * 0.07) : (0.03 + Math.random() * 0.07),
+      r:       2.0 + Math.random() * 2.2,
+      col:     [40, 38, 42],   // dark charcoal — unknown
+      isIOB:   false,
+      isDark:  true,
+      alpha:   0,
+      phase:   Math.random() * Math.PI * 2,
+      lavaPhase: Math.random() * Math.PI * 2,
+      lavaSpeed: 0.004 + Math.random() * 0.008,  // slower — heavier
+      ghosts:  [],
+      age:     0,
+    });
+  }
+}
+
+// Rebuild curve bubbles when peaks/troughs change significantly
+var _lastPTSet = '';
+function _updateCurveBubbles() {
+  var pts = _findPeaksTroughs();
+
+  // Build a signature to detect changes
+  var sig = pts.map(function(p) {
+    return p.type + Math.round(p.x) + Math.round(p.y);
+  }).join('|');
+
+  if (sig === _lastPTSet) return;
+  _lastPTSet = sig;
+
+  // Fade out old bubbles gracefully — don't hard-clear
+  _curveBubbles.forEach(function(b) { b._dying = true; });
+
+  pts.forEach(function(pt) { _spawnCurveBubbles(pt); });
+}
+
+function _tickCurveBubbles() {
+  _cbFrame++;
+  var pts = _findPeaksTroughs();
+
+  // Build lookup: ptX → pt (for anchoring)
+  var ptMap = {};
+  pts.forEach(function(pt) { ptMap[Math.round(pt.x)] = pt; });
+
+  _curveBubbles = _curveBubbles.filter(function(b) {
+    b.age++;
+
+    // Fade in
+    if (!b._dying) b.alpha = Math.min(0.82, b.alpha + 0.025);
+
+    // Dying bubbles fade out and are removed
+    if (b._dying) {
+      b.alpha -= 0.018;
+      return b.alpha > 0.01;
+    }
+
+    // Lava-lamp motion — slow sinusoidal buoyancy
+    b.lavaPhase += b.lavaSpeed;
+    var lavaLift = Math.sin(b.lavaPhase) * 8;
+    var lavaWob  = Math.cos(b.lavaPhase * 0.7 + b.phase) * 5;
+
+    // Find current peak position (peaks move as BG changes)
+    var anchorX = b.ptX;
+    var anchorY = b.ptY;
+    // Re-anchor to nearest pt
+    pts.forEach(function(pt) {
+      if (Math.abs(pt.x - b.ptX) < 60) {
+        b.ptX = pt.x; b.ptY = pt.y;
+        anchorX = pt.x; anchorY = pt.y;
+      }
+    });
+
+    // Target: orbital offset + lava motion around anchor
+    var targetX = anchorX + b.ox + lavaWob;
+    var targetY = anchorY + b.oy + lavaLift * (b.ptType === 'peak' ? -1 : 1);
+
+    // Spring toward target
+    b.vx += (targetX - b.x) * 0.04;
+    b.vy += (targetY - b.y) * 0.04;
+    b.vx *= 0.82;
+    b.vy *= 0.82;
+    b.x += b.vx;
+    b.y += b.vy;
+
+    // Ghost ribbon — every 6 frames if moving fast enough
+    if (_cbFrame % 6 === 0 && (Math.abs(b.vx) + Math.abs(b.vy)) > 0.3) {
+      b.ghosts.push({ x: b.x, y: b.y, alpha: b.alpha * 0.35, r: b.r * 0.7, col: b.col });
+      if (b.ghosts.length > 6) b.ghosts.shift();
+    }
+
+    // Decay ghosts
+    b.ghosts.forEach(function(g) { g.alpha *= 0.84; });
+    b.ghosts = b.ghosts.filter(function(g) { return g.alpha > 0.01; });
+
+    return true;
+  });
+}
+
+function _drawCurveBubbles() {
+  // Draw ghosts first (ribbon trails)
+  _curveBubbles.forEach(function(b) {
+    b.ghosts.forEach(function(g) {
+      CX.beginPath();
+      CX.arc(g.x, g.y, g.r, 0, Math.PI * 2);
+      CX.fillStyle = 'rgba(' + g.col[0] + ',' + g.col[1] + ',' + g.col[2] + ',' + g.alpha + ')';
+      CX.fill();
+    });
+  });
+
+  // Draw bubbles
+  _curveBubbles.forEach(function(b) {
+    if (b.alpha < 0.01) return;
+    var rv = b.col[0], gv = b.col[1], bv = b.col[2];
+    var a  = b.alpha;
+
+    if (b.isDark) {
+      // Dark blob — solid, slightly translucent, no highlight
+      CX.beginPath();
+      CX.arc(b.x, b.y, b.r, 0, Math.PI * 2);
+      CX.fillStyle   = 'rgba(' + rv + ',' + gv + ',' + bv + ',' + (a * 0.72) + ')';
+      CX.fill();
+      CX.strokeStyle = 'rgba(20,18,22,' + (a * 0.45) + ')';
+      CX.lineWidth   = 0.8;
+      CX.stroke();
+    } else if (b.isIOB) {
+      // IOB teardrop — smaller, falling feel
+      var s = b.r;
+      CX.beginPath();
+      CX.arc(b.x, b.y, s, 0, Math.PI * 2);
+      CX.fillStyle   = 'rgba(' + rv + ',' + gv + ',' + bv + ',' + (a * 0.55) + ')';
+      CX.fill();
+      CX.strokeStyle = 'rgba(' + rv + ',' + gv + ',' + bv + ',' + (a * 0.80) + ')';
+      CX.lineWidth   = 1.1;
+      CX.stroke();
+      // Small inner highlight
+      CX.beginPath();
+      CX.arc(b.x - s * 0.25, b.y - s * 0.3, s * 0.22, 0, Math.PI * 2);
+      CX.fillStyle = 'rgba(195,228,255,' + (a * 0.42) + ')';
+      CX.fill();
+    } else {
+      // Carb bubble — GI-coloured, open circle with fill
+      CX.beginPath();
+      CX.arc(b.x, b.y, b.r, 0, Math.PI * 2);
+      CX.fillStyle   = 'rgba(' + rv + ',' + gv + ',' + bv + ',' + (a * 0.18) + ')';
+      CX.fill();
+      CX.strokeStyle = 'rgba(' + rv + ',' + gv + ',' + bv + ',' + (a * 0.85) + ')';
+      CX.lineWidth   = 1.4;
+      CX.stroke();
+      // Warm highlight
+      var hlR = rv > 200 ? 255 : 200, hlG = gv > 150 ? 230 : 210, hlB = bv < 100 ? 170 : 220;
+      CX.beginPath();
+      CX.arc(b.x - b.r * 0.28, b.y - b.r * 0.3, b.r * 0.24, 0, Math.PI * 2);
+      CX.fillStyle = 'rgba(' + hlR + ',' + hlG + ',' + hlB + ',' + (a * 0.44) + ')';
+      CX.fill();
+    }
+  });
+}
+
 function frame(ts) {
   try {
   const dt=Math.min((ts-t0)/1000, 0.05); t0=ts;
@@ -3003,7 +3292,12 @@ function frame(ts) {
 
   // ── BG TRACE — the life-line ────────────────────────────────────
   drawBGTrail(pal);
-  drawUnknownForce(pal);  // silver mist where forces are unexplained
+  drawUnknownForce(pal);  // silver mist where forces are unexplained (layer 1)
+
+  // ── CURVE BUBBLES — lava-lamp accumulation at peaks and troughs ──
+  _updateCurveBubbles();  // rebuild if peaks/troughs changed
+  _tickCurveBubbles();    // physics tick every frame
+  _drawCurveBubbles();    // render after mist, before orb
 
   // ── EVENT MARKERS — ripples where forces entered ───────────────
   drawBolusMarkers(pal);
