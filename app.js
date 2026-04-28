@@ -5114,7 +5114,7 @@ async function _parseSpeechToFood(transcript) {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'anthropic-version': '2023-06-01' },
       body: JSON.stringify({
-        model: 'claude-sonnet-4-20250514',
+        model: 'claude-sonnet-4-5',
         max_tokens: 700,
         system: 'You parse garbled speech-to-text meal descriptions for a UK child\'s diabetes app. Speech recognition often mangles brand names and food words — correct them phonetically (e.g. "Lindell chocolate ball" = "Lindor chocolate ball", "benecault" = "Benecol", "wild from" = "wild farm"). RULES: (1) Each food/ingredient is a SEPARATE object — never combine. A sandwich = bread + filling items as separate objects. (2) Every object needs: "name" (clean UK food name, never empty), "grams" (typical child portion estimate), and optionally "dish" (if it\'s part of a dish/sandwich, set dish:"sandwich" or dish:"recipe name"). (3) If something sounds like a known dish [' + knownDishes + '] set type:"dish" and include its likely ingredients as separate objects with dish set to the recipe name. (4) Known foods for reference: ' + libraryHint + '. (5) Return ONLY a valid JSON array. Example for "cheese sandwich and a plum": [{"name":"bread","grams":60,"dish":"sandwich"},{"name":"cheddar cheese","grams":30,"dish":"sandwich"},{"name":"plum","grams":80}]',
         messages: [{ role: 'user', content: 'Parse into individual food items, correcting any speech recognition errors: "' + transcript + '"' }]
@@ -5379,7 +5379,7 @@ async function handleFoodPhoto(inputEl) {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'anthropic-version': '2023-06-01' },
       body: JSON.stringify({
-        model: 'claude-sonnet-4-20250514',
+        model: 'claude-sonnet-4-5',
         max_tokens: 400,
         system: 'You extract nutritional information from food packaging photos and nutrition labels. Return ONLY a JSON object, no markdown, no explanation. Fields: {"name": "product name", "c100": carbs_per_100g_as_number, "gi": estimated_gi_as_number_or_null, "g_serv": serving_size_grams_as_number_or_null, "sugar": sugars_per_100g_as_number_or_null}. Use the "Carbohydrate" or "Total Carbohydrate" row (not "of which sugars" for c100). Estimate GI from the food type if not shown: white bread ~75, wholemeal ~55, pasta ~48, biscuits ~70, oats ~55, fruit ~45. If image is not a food label, return {"error": "not a label"}.',
         messages: [{
@@ -5452,7 +5452,7 @@ async function checkFoodPaste(val) {
         'anthropic-version': '2023-06-01',
       },
       body: JSON.stringify({
-        model: 'claude-sonnet-4-20250514',
+        model: 'claude-sonnet-4-5',
         max_tokens: 600,
         system: 'You extract recipe ingredients or nutritional info from webpage text. Return ONLY a JSON array, no markdown. Each item: {"name": "food name", "c100": carbs_per_100g_as_number, "gi": estimated_gi_or_null, "g_serv": typical_serving_grams_or_null}. If the page contains a recipe, extract the main ingredients with estimated carb content per 100g. If it contains a single product with nutrition info, return a single-item array. If you cannot extract any food data, return []. Use common UK food names.',
         messages: [{ role: 'user', content: 'URL: ' + url + '\n\nPage content:\n' + (pageText || '(could not fetch page)') + '\n\nExtract food/nutrition data.' }]
@@ -6937,7 +6937,7 @@ async function suggestGI(foodName, inputEl) {
   try {
     var resp = await fetch('https://orange-surf-6f98.john-king-uk.workers.dev/claude', {
       method:'POST', headers:{'Content-Type':'application/json','anthropic-version':'2023-06-01'},
-      body: JSON.stringify({model:'claude-sonnet-4-20250514', max_tokens:60,
+      body: JSON.stringify({model:'claude-sonnet-4-5', max_tokens:60,
         messages:[{role:'user', content:'Single integer only: glycaemic index for "'+foodName+'". Just the number 1-100.'}]})
     });
     var d = await resp.json();
@@ -8281,7 +8281,7 @@ async function sendWhisper() {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'anthropic-version': '2023-06-01' },
       body: JSON.stringify({
-        model: 'claude-sonnet-4-20250514',
+        model: 'claude-sonnet-4-5',
         max_tokens: 180,
         system: 'You are a calm, knowledgeable diabetes management assistant embedded in a glucose visualisation app called Oskar\'s River. Provide brief, specific, actionable insight — 2-4 sentences maximum. Never diagnose or prescribe. Always frame as contextual insight, not instruction. Use the clinical context provided. Be warm but precise.',
         messages: [{ role: 'user', content: 'Clinical context:\n' + ctx + '\n\nQuestion: ' + q }]
