@@ -5169,26 +5169,6 @@ async function _parseSpeechToFood(transcript) {
 // ── Fixed voice results panel (position:fixed, not clipped by sheet overflow) ──
 
 function _showVoicePanel(html) {
-  var panel = document.getElementById('voice-results-panel');
-  if (!panel) {
-    panel = document.createElement('div');
-    panel.id = 'voice-results-panel';
-    panel.style.cssText = [
-      'position:fixed',
-      'left:0','right:0','bottom:0',
-      'z-index:9999',
-      'background:rgba(14,20,38,0.98)',
-      'border-top:1px solid rgba(255,255,255,0.10)',
-      'border-radius:18px 18px 0 0',
-      'max-height:62vh',
-      'overflow-y:auto',
-      'box-shadow:0 -8px 40px rgba(0,0,0,0.5)',
-      'transform:translateY(100%)',
-      'transition:transform .25s cubic-bezier(.4,0,.2,1)',
-      '-webkit-overflow-scrolling:touch'
-    ].join(';');
-    document.body.appendChild(panel);
-  }
   // Inject spin animation if needed
   if (!document.getElementById('spin-style')) {
     var s = document.createElement('style');
@@ -5196,14 +5176,33 @@ function _showVoicePanel(html) {
     s.textContent = '@keyframes spin{from{transform:rotate(0deg)}to{transform:rotate(360deg)}}';
     document.head.appendChild(s);
   }
+  // Always destroy and recreate — avoids transition state issues on reuse
+  var old = document.getElementById('voice-results-panel');
+  if (old) old.parentNode.removeChild(old);
+  var panel = document.createElement('div');
+  panel.id = 'voice-results-panel';
+  panel.style.cssText = [
+    'position:fixed',
+    'left:0','right:0','bottom:0',
+    'z-index:9999',
+    'background:rgba(14,20,38,0.98)',
+    'border-top:1px solid rgba(255,255,255,0.10)',
+    'border-radius:18px 18px 0 0',
+    'max-height:62vh',
+    'overflow-y:auto',
+    'box-shadow:0 -8px 40px rgba(0,0,0,0.5)',
+    'transform:translateY(100%)',
+    '-webkit-overflow-scrolling:touch'
+  ].join(';');
   panel.innerHTML = html;
-  panel.style.display = 'block';
-  panel.style.transition = 'none';
-  panel.style.transform = 'translateY(100%)';
-  // Force reflow then slide up
-  panel.getBoundingClientRect();
-  panel.style.transition = 'transform .25s cubic-bezier(.4,0,.2,1)';
-  panel.style.transform = 'translateY(0)';
+  document.body.appendChild(panel);
+  // Frame delay ensures element is painted before transition starts
+  requestAnimationFrame(function() {
+    requestAnimationFrame(function() {
+      panel.style.transition = 'transform .25s cubic-bezier(.4,0,.2,1)';
+      panel.style.transform = 'translateY(0)';
+    });
+  });
 }
 
 function _closeVoicePanel() {
