@@ -9180,9 +9180,26 @@ function savePrickEdit(idx) {
   showToast('prick updated');
 }
 
+var _deletedPrickTs = (function() {
+  try { return new Set(JSON.parse(localStorage.getItem('river_deleted_pricks') || '[]')); }
+  catch(e) { return new Set(); }
+})();
+function _saveDeletedPrickTs() {
+  try {
+    var arr = Array.from(_deletedPrickTs).filter(function(t){ return Date.now() - t < 30 * 86400000; });
+    localStorage.setItem('river_deleted_pricks', JSON.stringify(arr));
+    _deletedPrickTs = new Set(arr);
+  } catch(e) {}
+}
+
 function deletePrick(idx) {
   var p = BLOOD_PRICKS[idx];
-  if (p && SUPABASE_READY) {
+  if (!p) { var el=document.getElementById('prick-edit-overlay'); if(el) el.remove(); return; }
+  // Blocklist so syncPullPricks won't re-add it
+  _deletedPrickTs.add(p.t);
+  _saveDeletedPrickTs();
+  // Delete from Supabase
+  if (SUPABASE_READY) {
     _sbFetch('events?t=eq.' + p.t + '&note=eq.prick', { method: 'DELETE', prefer: 'return=minimal' })
       .catch(function(e){ console.warn('[prick] delete sync failed:', e.message); });
   }
@@ -9200,7 +9217,9 @@ function syncPullPricks(sinceT) {
     .then(function(rows) {
       if (!rows || rows.length === 0) return;
       rows.forEach(function(row) {
-        if (!row.gi) return; // gi field holds the bg value
+        if (!row.gi) return;
+        // Skip explicitly deleted pricks
+        if (_deletedPrickTs && _deletedPrickTs.has(row.t)) return;
         var exists = BLOOD_PRICKS.findIndex(function(p){ return Math.abs(p.t - row.t) < 30000; });
         if (exists < 0) {
           BLOOD_PRICKS.push({ t: row.t, bg: row.gi, local: false });
