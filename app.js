@@ -5198,8 +5198,11 @@ function _showVoicePanel(html) {
   }
   panel.innerHTML = html;
   panel.style.display = 'block';
+  panel.style.transition = 'none';
+  panel.style.transform = 'translateY(100%)';
   // Force reflow then slide up
   panel.getBoundingClientRect();
+  panel.style.transition = 'transform .25s cubic-bezier(.4,0,.2,1)';
   panel.style.transform = 'translateY(0)';
 }
 
