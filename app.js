@@ -5254,12 +5254,14 @@ function _showVoiceResults(items, transcript) {
         '<div style="font-size:10px;color:' + giCol + ';font-family:\'DM Mono\',monospace">GI ' + (matched.gi || '—') + '</div>' +
       '</div>';
     } else {
-      return '<div onclick="_closeVoicePanel();addCustomFood(decodeURIComponent(\'' + encName + '\'))" style="' + pad + ';cursor:pointer;border-bottom:1px solid rgba(255,255,255,0.06);display:flex;justify-content:space-between;align-items:center;touch-action:manipulation">' +
+      // Unmatched: add to sheet with 0 carbs flagged — user edits inline
+      var encRaw = encodeURIComponent(item.name);
+      return '<div onclick="_closeVoicePanel();_addUnknownFoodToSheet(decodeURIComponent(\'' + encRaw + '\'),' + item.grams + ')" style="' + pad + ';cursor:pointer;border-bottom:1px solid rgba(255,255,255,0.06);display:flex;justify-content:space-between;align-items:center;touch-action:manipulation">' +
         '<div>' +
           '<div style="font-family:\'DM Mono\',monospace;font-size:12px;color:rgba(200,210,240,0.8)">' + item.name + '</div>' +
-          '<div style="font-family:\'DM Mono\',monospace;font-size:9px;color:rgba(130,160,220,0.55)">' + item.grams + 'g estimated · tap to add to library</div>' +
+          '<div style="font-family:\'DM Mono\',monospace;font-size:9px;color:rgba(220,160,60,0.7)">' + item.grams + 'g · carbs unknown — tap then edit</div>' +
         '</div>' +
-        '<div style="font-size:9px;color:rgba(100,130,200,0.7);font-family:\'DM Mono\',monospace;border:1px solid rgba(100,130,200,0.25);border-radius:5px;padding:2px 6px">+ new</div>' +
+        '<div style="font-size:9px;color:rgba(220,160,60,0.6);font-family:\'DM Mono\',monospace;border:1px solid rgba(220,160,60,0.25);border-radius:5px;padding:2px 6px">? carbs</div>' +
       '</div>';
     }
   }
@@ -5339,6 +5341,18 @@ function _addAllVoiceItems(items) {
 }
 
 // Add food item with a specific gram weight (used by voice results)
+// Add an unrecognised voice item directly to the sheet with 0 carbs so user can edit inline
+function _addUnknownFoodToSheet(name, grams) {
+  var phantom = { name: name, c100: 0, gi: 55, g_serv: grams, g_each: grams, kcal: 0, prot: 0, fat: 0, fibre: 0 };
+  _mealItems.push({ food: phantom, grams: grams, carbs: 0 });
+  var _b = document.getElementById('in-bolus'); if (_b && _b.value !== '') _bolusVal = _b.value;
+  var fs = document.getElementById('food-search'); if (fs) fs.value = '';
+  var fr = document.getElementById('food-results'); if (fr) fr.style.display = 'none';
+  renderSheet();
+  // Brief toast nudging user to edit the carb value
+  showToast(name + ' added — edit carbs');
+}
+
 function addFoodItemGrams(name, grams) {
   var all   = FOOD_DB.concat(FOOD_LIBRARY);
   var food  = null;
