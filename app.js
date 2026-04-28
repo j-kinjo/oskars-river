@@ -126,17 +126,24 @@ async function syncPushEvents(events) {
       updated_at: new Date().toISOString(),
     };
   });
-  // Plain INSERT — if no unique constraint on t, upsert isn't possible via PostgREST.
-  // We insert and swallow 409 conflicts; the pull will reconcile state from other devices.
   try {
-    await _sbFetch('events', {
+    // Try upsert first (requires unique constraint on t in Supabase)
+    await _sbFetch('events?on_conflict=t', {
       method:  'POST',
-      prefer:  'return=minimal',
+      prefer:  'resolution=merge-duplicates,return=minimal',
       body:    rows,
     });
   } catch(e) {
-    // 409 duplicate / 42P10 no-constraint — not fatal, pull will reconcile
-    if (!e.message.includes('409') && !e.message.includes('42P10') && !e.message.includes('23505')) throw e;
+    if (e.message.includes('42P10') || e.message.includes('no unique')) {
+      // No unique constraint — fall back to plain INSERT, swallow dupes
+      try {
+        await _sbFetch('events', { method: 'POST', prefer: 'return=minimal', body: rows });
+      } catch(e2) {
+        if (!e2.message.includes('409') && !e2.message.includes('23505')) throw e2;
+      }
+    } else if (!e.message.includes('409') && !e.message.includes('23505')) {
+      throw e;
+    }
   }
 }
 
@@ -179,7 +186,9 @@ async function syncPullReadings(sinceT) {
 
 // ── PULL: Supabase events → local ─────────────────────────────────────
 async function syncPullEvents(sinceT) {
-  var since = sinceT || (Date.now() - 7 * 86400000);
+  // Only pull events from the last 6h — older events are irrelevant to the visual window.
+  var _pullCutoff = Date.now() - 6 * 3600000;
+  var since = Math.max(sinceT || 0, _pullCutoff);
   var rows  = await _sbFetch(
     'events?t=gte.' + since + '&order=t.asc&limit=500',
     { method: 'GET' }
@@ -262,8 +271,7 @@ function stopSyncPolling() {
 // ── SYNC AFTER LOGGING — call after any event is saved ────────────────
 function syncAfterLog() {
   if (!SUPABASE_READY) return;
-  // Small delay to let localStorage settle
-  setTimeout(function(){ syncNow(true); }, 800);
+  syncNow(true); // immediate — no delay
 }
 
 // ── SYNC STATUS INDICATOR ─────────────────────────────────────────────
@@ -307,13 +315,12 @@ function buildSupabaseSettingsHTML() {
 var BOLUS_EVENTS = [];
 var LOGGED_EVENTS = [];
 try { LOGGED_EVENTS = JSON.parse(localStorage.getItem('river_logged')||'[]');
-  LOGGED_EVENTS = LOGGED_EVENTS.filter(function(e){return (Date.now()-e.t)<30*86400000;});
-  LOGGED_EVENTS.forEach(function(e){
-    BOLUS_EVENTS.push(e);
-    // Only extend HISTORY_RAW for very recent events to avoid phantom drops when CGM data loads.
-    if(e.t > HISTORY_RAW[HISTORY_RAW.length-1].t && (Date.now()-e.t) < 30*60000)
-      HISTORY_RAW.push({t:e.t,bg:HISTORY_RAW[HISTORY_RAW.length-1].bg||7.0,iob:0,cob:0,pen:1});
-  });
+  // Keep only last 6h — older events are not displayed and cause ghost bells on reload.
+  var _sixHoursAgo = Date.now() - 6 * 3600000;
+  LOGGED_EVENTS = LOGGED_EVENTS.filter(function(e){ return e.t >= _sixHoursAgo; });
+  LOGGED_EVENTS.forEach(function(e){ BOLUS_EVENTS.push(e); });
+  // Write trimmed list back so it doesn't grow indefinitely
+  try { localStorage.setItem('river_logged', JSON.stringify(LOGGED_EVENTS)); } catch(_le){}
 } catch(err) {}
 
 const POD_PAUSE_T  = 1773651600000;
@@ -1067,8 +1074,9 @@ function topUpCOB(grams)  { _cobReservoir = Math.min(1, _cobReservoir + grams / 
 function topUpIOB(units)  { _iobReservoir = Math.min(1, _iobReservoir + units / 6);  }
 
 function _getActiveMealEvents() {
-  var refT   = viewTime || Date.now();
-  var cutoff = refT - 4 * 3600000;
+  // Always use real clock for cutoff — not viewTime which can be scrubbed back.
+  // This prevents old events from appearing when user scrolls left.
+  var cutoff = Date.now() - 6 * 3600000;
   var events = [], seen = {};
   BOLUS_EVENTS.concat(SESSION).forEach(function(ev) {
     if (!ev.c || ev.c <= 0 || ev.t < cutoff) return;
@@ -1082,8 +1090,7 @@ function _getActiveMealEvents() {
 }
 
 function _getActiveBolusEvents() {
-  var refT   = viewTime || Date.now();
-  var cutoff = refT - 4 * 3600000;
+  var cutoff = Date.now() - 6 * 3600000;
   var events = [], seen = {};
   BOLUS_EVENTS.concat(SESSION).forEach(function(ev) {
     if (!ev.u || ev.u <= 0 || ev.t < cutoff) return;
@@ -4613,7 +4620,7 @@ function openSheet() {
   // Meal mode: full-screen dark overlay, consistent with correction/hypo screens
   var s = document.getElementById('sheet');
   if (s) {
-    s.style.display = '';
+    s.style.display = 'flex'; // clear display:none explicitly
     s.style.position = 'fixed';
     s.style.inset = '0';
     s.style.zIndex = '60';
@@ -4648,13 +4655,30 @@ function closeSheet() {
   var o = document.getElementById('overlay');
   if (s) {
     if (_sheetMode === 'meal') {
+      // Fade out, then hard-hide. Don't use cssText='' — it races with display:none.
       s.style.opacity = '0';
       s.style.pointerEvents = 'none';
+      s.style.touchAction = 'none';
       setTimeout(function() {
         s.classList.remove('open');
-        s.style.cssText = '';
-        s.style.display = 'none'; // belt-and-braces for mobile
-      }, 300);
+        // Reset meal-mode styles individually — don't use cssText='' which clears everything
+        s.style.position = '';
+        s.style.inset = '';
+        s.style.zIndex = '';
+        s.style.background = '';
+        s.style.backdropFilter = '';
+        s.style.overflowY = '';
+        s.style.WebkitOverflowScrolling = '';
+        s.style.transition = '';
+        s.style.opacity = '';
+        s.style.pointerEvents = '';
+        s.style.touchAction = '';
+        s.style.display = 'none';
+        s.style.flexDirection = '';
+        s.style.borderRadius = '';
+        s.style.transform = '';
+        s.style.maxHeight = '';
+      }, 320);
     } else {
       s.classList.remove('open');
     }
@@ -8327,50 +8351,6 @@ window.addEventListener('load', function() {
   window.__updateDebugPanel = updateDebugPanel;
 })();
 
-function openDebugPanel() {
-  var p = document.getElementById('debug-panel');
-  if (p) { p.remove(); return; }
-
-  var el = document.createElement('div');
-  el.id  = 'debug-panel';
-  el.style.cssText = (
-    'position:fixed;bottom:80px;left:8px;right:8px;z-index:200;' +
-    'background:rgba(0,0,0,0.92);border:1px solid var(--rv-panel-border);' +
-    'border-radius:10px;padding:10px;font-family:monospace;font-size:10px;' +
-    'color:rgba(200,220,200,0.8);max-height:50vh;overflow-y:auto;' +
-    'touch-action:pan-y;pointer-events:auto'
-  );
-
-  // Status section
-  var d   = (typeof dataAt === 'function') ? dataAt(viewTime) : {};
-  var age = (typeof _lastReadingT !== 'undefined' && _lastReadingT > 0)
-    ? Math.round((Date.now() - _lastReadingT) / 60000) + ' min ago'
-    : 'unknown';
-  var src = (typeof _sourceId !== 'undefined') ? _sourceId : 'none';
-  var hist = (typeof HISTORY_RAW !== 'undefined') ? HISTORY_RAW.length : '?';
-  var buildStr = '__BUILD_ID__';
-
-  el.innerHTML =
-    '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">' +
-      '<span style="color:rgba(62,207,160,0.8);font-weight:bold">River Debug</span>' +
-      '<div style="display:flex;gap:6px;align-items:center">' +
-        '<button onclick="deployToGitHub()" style="padding:3px 8px;border-radius:6px;border:1px solid rgba(62,207,160,0.3);background:rgba(62,207,160,0.08);color:rgba(62,207,160,0.8);font-family:monospace;font-size:9px;cursor:pointer">deploy</button>' +
-        '<button onclick="document.getElementById(\'debug-panel\').remove()" ' +
-          'style="background:none;border:none;color:var(--rv-text-muted);cursor:pointer;font-size:16px;padding:0">×</button>' +
-      '</div>' +
-    '</div>' +
-    '<div style="color:rgba(150,200,150,0.6);margin-bottom:6px;line-height:1.6">' +
-      buildStr + ' · source: ' + src + '<br>' +
-      'last reading: ' + age + ' · history: ' + hist + ' entries<br>' +
-      'BG: ' + (d.bg ? d.bg.toFixed(1) : '?') +
-      ' IOB: ' + (d.iob ? d.iob.toFixed(2) : '?') +
-      ' COB: ' + (d.cob ? d.cob.toFixed(1) : '?') +
-    '</div>' +
-    '<div id="debug-content" style="line-height:1.5"></div>';
-
-  document.body.appendChild(el);
-  if (window.__updateDebugPanel) window.__updateDebugPanel();
-}
 
 // ═══════════════════════════════════════════════════════════════════════
 //  RIVER REPAIR SYSTEM
@@ -8502,17 +8482,38 @@ async function sendFeatureRequest(description) {
   }
 }
 
-// ── Extended debug panel ──────────────────────────────────────────────
+// ── Nuclear data clear — wipes all local river state ─────────────────
+function nukeLocalData() {
+  var keys = ['river_logged','river_session','river_meals','river_meal_hist',
+               'river_cgm_history','river_food_lib'];
+  keys.forEach(function(k){ try{localStorage.removeItem(k);}catch(_e){} });
+  LOGGED_EVENTS.length = 0;
+  BOLUS_EVENTS.length = 0;
+  SESSION.length = 0;
+  if (typeof MEAL_HISTORY !== 'undefined') MEAL_HISTORY.length = 0;
+  try { HISTORY_RAW.length = 0; } catch(_e){}
+  showToast('local data cleared\nreloading…');
+  setTimeout(function(){ window.location.reload(); }, 1200);
+}
+
+async function nukeSupabaseEvents() {
+  if (!SUPABASE_READY) { showToast('Supabase not configured'); return; }
+  try {
+    await _sbFetch('events?t=gt.0', { method: 'DELETE', prefer: 'return=minimal' });
+    showToast('Supabase events cleared\nnuke local next');
+  } catch(e) {
+    showToast('Supabase clear failed:\n' + e.message.slice(0,60));
+  }
+}
+
 function openDebugPanel() {
   var p = document.getElementById('debug-panel');
   if (p) { p.remove(); return; }
-
-  var d   = (typeof dataAt === 'function') ? dataAt(viewTime) : {};
-  var age = (typeof _lastReadingT !== 'undefined' && _lastReadingT > 0)
-    ? Math.round((Date.now() - _lastReadingT) / 60000) + ' min ago'
-    : 'unknown';
+  var d = (typeof dataAt === 'function') ? dataAt(viewTime) : {};
+  var age = (typeof _lastReadingT !== 'undefined' && _lastReadingT > 0) ? Math.round((Date.now() - _lastReadingT) / 60000) + ' min ago' : 'unknown';
   var src = (typeof _sourceId !== 'undefined') ? _sourceId : 'none';
   var hist = (typeof HISTORY_RAW !== 'undefined') ? HISTORY_RAW.length : '?';
+
 
   var el = document.createElement('div');
   el.id  = 'debug-panel';
@@ -8530,6 +8531,8 @@ function openDebugPanel() {
       '<span style="color:rgba(62,207,160,0.9);font-weight:bold;font-size:11px">🌊 River Debug</span>' +
       '<div style="display:flex;gap:6px">' +
         '<button onclick="deployToGitHub()" style="padding:3px 8px;border-radius:6px;border:1px solid rgba(62,207,160,0.3);background:rgba(62,207,160,0.08);color:rgba(62,207,160,0.8);font-family:monospace;font-size:9px;cursor:pointer">⬆ deploy</button>' +
+        '<button onclick="if(confirm(\'Clear all local data and reload?\'))nukeLocalData()" style="padding:3px 8px;border-radius:6px;border:1px solid rgba(220,80,60,0.4);background:rgba(220,80,60,0.08);color:rgba(220,80,60,0.8);font-family:monospace;font-size:9px;cursor:pointer">nuke local</button>' +
+        '<button onclick="if(confirm(\'Delete ALL Supabase events? Cannot be undone.\'))nukeSupabaseEvents()" style="padding:3px 8px;border-radius:6px;border:1px solid rgba(220,80,60,0.6);background:rgba(220,80,60,0.12);color:rgba(220,80,60,0.9);font-family:monospace;font-size:9px;cursor:pointer">nuke supa</button>' +
         '<button onclick="document.getElementById(\'debug-panel\').remove()" style="background:none;border:none;color:var(--rv-text-muted);cursor:pointer;font-size:18px;padding:0;line-height:1">×</button>' +
       '</div>' +
     '</div>' +
