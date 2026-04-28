@@ -2906,6 +2906,19 @@ function drawHypoPulse(pal) {
 let lastHUD = 0;
 function updateHUD(d, pal) {
   if (Date.now()-lastHUD < 300) return; lastHUD = Date.now();
+  // If showing persisted history before live CGM connects, grey out the BG number
+  if (typeof _historyIsStale !== 'undefined' && _historyIsStale) {
+    var bgEl2 = document.getElementById('bg-num');
+    if (bgEl2) { bgEl2.style.opacity = '0.3'; bgEl2.title = 'connecting…'; }
+    var bgUnit2 = document.getElementById('bg-unit');
+    if (bgUnit2) bgUnit2.style.opacity = '0.3';
+    return; // don't update values until live data arrives
+  } else {
+    var bgEl3 = document.getElementById('bg-num');
+    if (bgEl3) { bgEl3.style.opacity = ''; bgEl3.title = ''; }
+    var bgUnit3 = document.getElementById('bg-unit');
+    if (bgUnit3) bgUnit3.style.opacity = '';
+  }
   if (!d || !pal || typeof d.bg !== 'number' || isNaN(d.bg)) return;
 
   // Stale data warning
@@ -3584,17 +3597,17 @@ function commitDrop(){
   const u=parseFloat(document.getElementById('in-i').value)||0;
   const t=getEntryTime();
   if(c>0||u>0){
-    SESSION.push({t,c,u});
+    var evDrop = {t:t, c:c, u:u, note:'drop', local:true};
+    SESSION.push(evDrop);
+    BOLUS_EVENTS.push(evDrop);
+    LOGGED_EVENTS.push(evDrop);
     try{localStorage.setItem('river_session',JSON.stringify(SESSION));}catch(e){}
-    // Save meal to history if has carbs
+    try{localStorage.setItem('river_logged',JSON.stringify(LOGGED_EVENTS));}catch(e){}
+    syncAfterLog();
     if(c>0) {
-      const bg=parseFloat(document.getElementById('in-bg').value)||0;
       const mealName = c>0&&u>0?`${c}g + ${u}U`:(c>0?`${c}g carbs`:`${u}U bolus`);
       saveMealToHistory(mealName, c, u, t);
     }
-    // Also update HISTORY_RAW entry for that time if it exists
-    const existing = HISTORY_RAW.findIndex(h=>Math.abs(h.t-t)<150000);
-    if(existing>=0) { HISTORY_RAW[existing].iob+=u; HISTORY_RAW[existing].cob+=c; }
   }
   const msg=[]; if(c>0)msg.push(`${c}g`); if(u>0)msg.push(`${u}U`);
   showToast((msg.join(' · ')||'logged')+'\ninto the river');
@@ -4104,7 +4117,7 @@ function bolusNow() {
   var t = getEntryTime() || Date.now();
   SESSION.push({t:t, c:0, u:u});
   BOLUS_EVENTS.push({t:t, c:0, u:u});
-  LOGGED_EVENTS.push({t:t, c:0, u:u, note:'bolus', logged_by:_thisPersonId||'unknown'});
+  LOGGED_EVENTS.push({t:t, c:0, u:u, note:'bolus', logged_by:_thisPersonId||'unknown', local:true});
   try{localStorage.setItem('river_session',JSON.stringify(SESSION));}catch(e){}
   try{localStorage.setItem('river_logged',JSON.stringify(LOGGED_EVENTS));}catch(e){}
   topUpIOB(u);
@@ -4136,7 +4149,7 @@ function logPlate() {
     SESSION.push({t:carbT, c:total, u:0, gi:avgGI, items:foodItems});
     BOLUS_EVENTS.push({t:carbT, c:total, u:0, gi:avgGI, items:foodItems});
     LOGGED_EVENTS.push({t:carbT, c:total, u:0, gi:avgGI, items:foodItems, note:'plate',
-      logged_by:_thisPersonId||'unknown'});
+      logged_by:_thisPersonId||'unknown', local:true});
     topUpCOB(total);
   }
 
@@ -7268,6 +7281,8 @@ function persistReadings() {
   } catch(e) {}
 }
 
+var _historyIsStale = false; // true when showing persisted data before live CGM connects
+
 function loadPersistedReadings() {
   try {
     const raw = JSON.parse(localStorage.getItem(PERSIST_KEY) || '[]');
@@ -7280,7 +7295,9 @@ function loadPersistedReadings() {
     }
     HISTORY_RAW.sort((a,b)=>a.t-b.t);
     updateCGMBounds();
-    console.log(`Loaded ${raw.length} persisted readings (${CGM_START ? new Date(CGM_START).toLocaleDateString() : '?'} → now)`);
+    // Mark as stale so HUD shows a loading indicator until live data arrives
+    _historyIsStale = true;
+    console.log(`Loaded ${raw.length} persisted readings — awaiting live sync`);
   } catch(e) {}
 }
 
@@ -7303,6 +7320,7 @@ function ingestReadings(readings) {
     _isAtNow = true;
   }
   if (changed) persistReadings();
+  _historyIsStale = false; // live data has arrived — HUD can show real values
 }
 
 function formatAge(t) {
