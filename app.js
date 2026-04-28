@@ -8844,6 +8844,11 @@ function deleteEvent(idx) {
     _deletedEventTs.add(t);
     _saveDeletedTs();
 
+    // Flush bubble cache so frog-spawn orbs clear immediately
+    _ptCache = null;
+    _lastPTSet = '';
+    _curveBubbles.forEach(function(b){ b._dying = true; });
+
     // Delete from Supabase (best-effort — blocklist protects if this fails)
     if (SUPABASE_READY) {
       _sbFetch('events?t=eq.' + t, { method: 'DELETE', prefer: 'return=minimal' })
