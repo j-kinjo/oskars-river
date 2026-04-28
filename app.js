@@ -226,18 +226,13 @@ async function syncNow(silent) {
   _updateSyncIndicator();
 
   try {
-    // Only push events that were logged locally (not pulled from Supabase).
-    // On first load (_lastSyncT===null) skip push entirely — avoids re-seeding stale cache.
-    // Events are marked local: true when logged by this device.
-    if (_lastSyncT) {
-      var localEvents = LOGGED_EVENTS.filter(function(e){
-        return e.local === true && e.t > _lastSyncT;
-      });
-      if (localEvents.length > 0) await syncPushEvents(localEvents);
-    }
+    // Push all locally-logged events — local:true means logged on this device.
+    // Upsert on Supabase handles duplicates. Always push regardless of _lastSyncT.
+    var localEvents = LOGGED_EVENTS.filter(function(e){ return e.local === true; });
+    if (localEvents.length > 0) await syncPushEvents(localEvents);
 
-    // Push recent CGM readings — only after first sync (when we know we have real data)
-    if (_lastSyncT) {
+    // Push recent CGM readings — skip on very first startup sync (no real data yet)
+    if (_lastSyncT > 0) {
       var recentReadings = HISTORY_RAW.filter(function(h){
         return h.t > Date.now() - 3600000 && h.bg > 0;
       });
