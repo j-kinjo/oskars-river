@@ -190,7 +190,10 @@ async function syncPullEvents(sinceT) {
     // Merge into LOGGED_EVENTS
     var existsL = LOGGED_EVENTS.findIndex(function(e){ return Math.abs(e.t - row.t) < 30000 && Math.abs((e.c||0) - (row.c||0)) < 0.5; });
     if (existsL < 0) {
-      var ev = { t: row.t, c: row.c||0, u: row.u||0, gi: row.gi, note: row.note, items: row.items };
+      // items may come back as a JSON string if stored as text rather than JSONB
+      var rowItems = row.items;
+      if (typeof rowItems === 'string') { try { rowItems = JSON.parse(rowItems); } catch(e2) { rowItems = null; } }
+      var ev = { t: row.t, c: row.c||0, u: row.u||0, gi: row.gi, note: row.note, items: rowItems };
       LOGGED_EVENTS.push(ev);
       BOLUS_EVENTS.push(ev);
       SESSION.push(ev);
@@ -1067,8 +1070,7 @@ function _getActiveMealEvents() {
     var key = Math.round(ev.t / 30000);
     if (seen[key]) return;
     seen[key] = true;
-    var eatT = ev.t + (ev.waitMins || 0) * 60000;
-    events.push({ t: eatT, c: ev.c, gi: ev.gi||55,
+    events.push({ t: ev.t, c: ev.c, gi: ev.gi||55,
       items: ev.items || [{name:'meal', carbs:ev.c, gi:ev.gi||55}] });
   });
   return events.sort(function(a,b){ return a.t-b.t; });
@@ -3039,51 +3041,21 @@ function _findPeaksTroughs() {
     }
   }
 
-  // Keep strongest 3 peaks/troughs
+  // Keep strongest 3
   results.sort(function(a, b) { return Math.abs(b.netForce) - Math.abs(a.netForce); });
   results = results.slice(0, 3);
 
-  // Add slope points: evenly spaced along steep rising/falling segments
-  // Bubbles should populate the whole line, denser where steepest
-  var slopePoints = [];
-  var slopeStep = 6; // check every 6 samples
-  for (var si = slopeStep; si < pts.length - slopeStep; si += slopeStep) {
-    var bgChange = pts[si].bg - pts[si - slopeStep].bg; // mmol over ~slopeStep * (span/steps) ms
-    var absChange = Math.abs(bgChange);
-    if (absChange < 0.4) continue; // below noise floor — skip
-    var spt = pts[si];
-    // Steepness → magnitude (capped)
-    var sMag = Math.min(1, absChange / 2.0);
-    // Don't place a slope point too close to an existing peak/trough
-    var tooClose = results.some(function(r) { return Math.abs(r.x - tX(spt.t)) < 40; });
-    if (tooClose) continue;
-    var sNetForce = spt.cob - spt.iob * 1.8;
-    slopePoints.push({
-      t: spt.t,
-      x: tX(spt.t),
-      y: bgToY(spt.bg),
-      bg: spt.bg,
-      type: bgChange > 0 ? 'peak' : 'trough', // rising→peak physics, falling→trough physics
-      cob: spt.cob,
-      iob: spt.iob,
-      netForce: sNetForce,
-      magnitude: sMag * 0.6, // slope points get fewer bubbles than true extrema
-    });
-  }
-  // Limit slope points and interleave with results
-  slopePoints = slopePoints.slice(0, 6);
-  var allPoints = results.concat(slopePoints);
-
-  _ptCache    = allPoints;
+  _ptCache    = results;
   _ptCacheTime = now;
   _ptCacheView = viewTime;
-  return allPoints;
+  return results;
 }
 
 // Spawn curve bubbles at a peak or trough
 function _spawnCurveBubbles(pt) {
   var isPeak = pt.type === 'peak';
   var count  = Math.max(3, Math.round(pt.magnitude * 14));
+  var darkCount = Math.min(4, Math.floor(Math.abs(pt.netForce) * 0.15 + 1));
 
   // Dominant food GI at this moment
   var domGI = 55;
@@ -3100,51 +3072,23 @@ function _spawnCurveBubbles(pt) {
     if (bestFood) domGI = bestFood.gi || 55;
   }
 
-  // Divergence-gated dark blobs — only when actual BG diverges from COB+IOB model
-  // Compute simple predicted BG at pt.t from prior step
-  var darkCount = 0;
-  var tPrev = pt.t - 5 * 60000;
-  var dPrev = dataAt(tPrev);
-  if (dPrev && dPrev.bg > 0) {
-    var ISF2 = (new Date(pt.t).getHours() >= 9 && new Date(pt.t).getHours() < 15) ? 7.0 : 6.5;
-    var cobDelta2 = dPrev.cob > 0 ? dPrev.cob * (1 - cobF(5)) * 0.055 : 0;
-    var iobDelta2 = dPrev.iob > 0 ? -dPrev.iob * (1 - iobF(5)) * ISF2 : 0;
-    var predictedBG = dPrev.bg + cobDelta2 + iobDelta2;
-    var divergence = Math.abs(pt.bg - predictedBG);
-    if (divergence > 1.2) {
-      darkCount = Math.min(4, Math.floor((divergence - 1.2) * 2));
-    }
-  }
-
-  // Physics model:
-  // At a PEAK — carbs pushed from BELOW (buoyancy up), IOB pushes from ABOVE (gravity down)
-  // At a TROUGH — IOB presses from ABOVE, carbs are depleted so fewer
-  // isIOB flag: at a peak, only show IOB bubbles if negative netForce (insulin winning)
   for (var i = 0; i < count; i++) {
-    var isIOB = isPeak
-      ? (i < count * Math.max(0, -pt.netForce / 15))   // IOB orbs at peak only if insulin dominant
-      : (i < count * 0.6);                               // mostly IOB at trough
-
-    var col = isIOB
+    var isIOB = !isPeak || (isPeak && i < count * Math.max(0, -pt.netForce / 15));
+    var col   = isIOB
       ? (RIVER_VISUAL_PREFS.iobR || COL_IOB)
       : giToColour(domGI + (Math.random() - 0.5) * 20);
-
-    // Carb bubbles push from BELOW the line (positive oy = below)
-    // IOB drops press from ABOVE the line (negative oy = above)
-    var oyBase = isIOB
-      ? -(2 + Math.random() * 18)    // IOB: above the line
-      : (2 + Math.random() * 22);    // carb: below the line (buoyancy up)
 
     _curveBubbles.push({
       ptType:  pt.type,
       ptX:     pt.x,
       ptY:     pt.y,
-      ox:      (Math.random() - 0.5) * 38,
-      oy:      oyBase,
+      // Start scattered around the peak/trough
+      ox:      (Math.random() - 0.5) * 38,   // orbital x offset
+      oy:      isPeak ? -(Math.random() * 28) : (Math.random() * 28),
       x:       pt.x + (Math.random() - 0.5) * 38,
-      y:       pt.y + oyBase,
+      y:       pt.y + (isPeak ? -(Math.random() * 28) : (Math.random() * 28)),
       vx:      (Math.random() - 0.5) * 0.12,
-      vy:      isIOB ? -(0.03 + Math.random() * 0.08) : (0.03 + Math.random() * 0.08),
+      vy:      isPeak ? -(0.05 + Math.random() * 0.12) : (0.05 + Math.random() * 0.12),
       r:       2.5 + Math.random() * 3.5,
       col:     col,
       isIOB:   isIOB,
@@ -3158,28 +3102,26 @@ function _spawnCurveBubbles(pt) {
     });
   }
 
-  // Dark unknown blobs — only when divergence from model is significant
+  // Dark unknown blobs — mixed into cluster
   for (var j = 0; j < darkCount; j++) {
-    // Dark blobs cluster near the line (neither above nor below dominantly)
-    var oyDark = (Math.random() - 0.5) * 24;
     _curveBubbles.push({
       ptType:  pt.type,
       ptX:     pt.x,
       ptY:     pt.y,
       ox:      (Math.random() - 0.5) * 30,
-      oy:      oyDark,
+      oy:      isPeak ? -(Math.random() * 20) : (Math.random() * 20),
       x:       pt.x + (Math.random() - 0.5) * 30,
-      y:       pt.y + oyDark,
+      y:       pt.y + (isPeak ? -(Math.random() * 20) : (Math.random() * 20)),
       vx:      (Math.random() - 0.5) * 0.08,
-      vy:      (Math.random() - 0.5) * 0.05,
+      vy:      isPeak ? -(0.03 + Math.random() * 0.07) : (0.03 + Math.random() * 0.07),
       r:       2.0 + Math.random() * 2.2,
-      col:     [40, 38, 42],
+      col:     [40, 38, 42],   // dark charcoal — unknown
       isIOB:   false,
       isDark:  true,
       alpha:   0,
       phase:   Math.random() * Math.PI * 2,
       lavaPhase: Math.random() * Math.PI * 2,
-      lavaSpeed: 0.004 + Math.random() * 0.008,
+      lavaSpeed: 0.004 + Math.random() * 0.008,  // slower — heavier
       ghosts:  [],
       age:     0,
     });
@@ -3243,11 +3185,7 @@ function _tickCurveBubbles() {
 
     // Target: orbital offset + lava motion around anchor
     var targetX = anchorX + b.ox + lavaWob;
-    var rawTargetY = anchorY + b.oy + lavaLift * (b.ptType === 'peak' ? -1 : 1);
-    // IOB drops must stay pressed against the line — clamp to within 14px above ptY
-    var targetY = b.isIOB
-      ? Math.max(anchorY - 14, Math.min(anchorY - 1, rawTargetY))
-      : rawTargetY;
+    var targetY = anchorY + b.oy + lavaLift * (b.ptType === 'peak' ? -1 : 1);
 
     // Spring toward target
     b.vx += (targetX - b.x) * 0.04;
