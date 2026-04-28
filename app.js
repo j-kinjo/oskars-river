@@ -190,13 +190,12 @@ async function syncPullEvents(sinceT) {
     // Merge into LOGGED_EVENTS
     var existsL = LOGGED_EVENTS.findIndex(function(e){ return Math.abs(e.t - row.t) < 30000 && Math.abs((e.c||0) - (row.c||0)) < 0.5; });
     if (existsL < 0) {
-      // items may come back as a JSON string if stored as text rather than JSONB
       var rowItems = row.items;
-      if (typeof rowItems === 'string') { try { rowItems = JSON.parse(rowItems); } catch(e2) { rowItems = null; } }
+      if (typeof rowItems === 'string') { try { rowItems = JSON.parse(rowItems); } catch(_e) { rowItems = null; } }
       var ev = { t: row.t, c: row.c||0, u: row.u||0, gi: row.gi, note: row.note, items: rowItems };
       LOGGED_EVENTS.push(ev);
       BOLUS_EVENTS.push(ev);
-      SESSION.push(ev);
+      // Do NOT push into SESSION — historical Supabase events must not drive dataAt().
       added++;
     }
   });
@@ -311,7 +310,8 @@ try { LOGGED_EVENTS = JSON.parse(localStorage.getItem('river_logged')||'[]');
   LOGGED_EVENTS = LOGGED_EVENTS.filter(function(e){return (Date.now()-e.t)<30*86400000;});
   LOGGED_EVENTS.forEach(function(e){
     BOLUS_EVENTS.push(e);
-    if(e.t > HISTORY_RAW[HISTORY_RAW.length-1].t)
+    // Only extend HISTORY_RAW for very recent events to avoid phantom drops when CGM data loads.
+    if(e.t > HISTORY_RAW[HISTORY_RAW.length-1].t && (Date.now()-e.t) < 30*60000)
       HISTORY_RAW.push({t:e.t,bg:HISTORY_RAW[HISTORY_RAW.length-1].bg||7.0,iob:0,cob:0,pen:1});
   });
 } catch(err) {}
@@ -495,7 +495,7 @@ const IOB_PEAK = 70; // "now" position — past to left, future to right
 
 // Session entries
 let SESSION = [];
-try { SESSION = JSON.parse(localStorage.getItem('river_session')||'[]'); SESSION=SESSION.filter(function(s){return (Date.now()-s.t)<7*86400000;}); } catch(e){}
+try { SESSION = JSON.parse(localStorage.getItem('river_session')||'[]'); SESSION=SESSION.filter(function(s){return (Date.now()-s.t)<6*3600000;}); } catch(e){}
 
 // ── CANVAS ───────────────────────────────────────────────────
 const CV = document.getElementById('c');
@@ -531,7 +531,12 @@ function histAt(t) {
 function dataAt(t) {
   const h = histAt(t);
   let si=0, sc=0;
+  // Only count SESSION entries after the last CGM reading — earlier entries
+  // are already reflected in histAt() via Nightscout-embedded IOB/COB.
+  // This prevents stale session events producing phantom chips on load.
+  const _cgmFloor = (typeof CGM_END !== 'undefined' && CGM_END > 0) ? CGM_END - 5*60000 : 0;
   for (const s of SESSION) {
+    if (s.t < _cgmFloor) continue;
     const m=(t-s.t)/60000;
     if (m<0||m>240) continue;
     si += (s.u||0)*iobF(m);
@@ -3073,57 +3078,63 @@ function _spawnCurveBubbles(pt) {
   }
 
   for (var i = 0; i < count; i++) {
-    var isIOB = !isPeak || (isPeak && i < count * Math.max(0, -pt.netForce / 15));
-    var col   = isIOB
-      ? (RIVER_VISUAL_PREFS.iobR || COL_IOB)
+    // Physics: canvas Y increases downward.
+    // Carb (buoyancy) push from BELOW the line → positive oy offset
+    // IOB (gravity) press from ABOVE the line → negative oy offset
+    var isIOB = isPeak
+      ? (i < Math.round(count * Math.max(0, -pt.netForce / 15)))
+      : (i < Math.round(count * 0.65));
+    var col = isIOB
+      ? (RIVER_VISUAL_PREFS && RIVER_VISUAL_PREFS.iobR ? RIVER_VISUAL_PREFS.iobR : COL_IOB)
       : giToColour(domGI + (Math.random() - 0.5) * 20);
+    var oyBase = isIOB ? -(3 + Math.random() * 18) : (3 + Math.random() * 22);
 
     _curveBubbles.push({
-      ptType:  pt.type,
-      ptX:     pt.x,
-      ptY:     pt.y,
-      // Start scattered around the peak/trough
-      ox:      (Math.random() - 0.5) * 38,   // orbital x offset
-      oy:      isPeak ? -(Math.random() * 28) : (Math.random() * 28),
-      x:       pt.x + (Math.random() - 0.5) * 38,
-      y:       pt.y + (isPeak ? -(Math.random() * 28) : (Math.random() * 28)),
-      vx:      (Math.random() - 0.5) * 0.12,
-      vy:      isPeak ? -(0.05 + Math.random() * 0.12) : (0.05 + Math.random() * 0.12),
-      r:       2.5 + Math.random() * 3.5,
-      col:     col,
-      isIOB:   isIOB,
-      isDark:  false,
-      alpha:   0,
-      phase:   Math.random() * Math.PI * 2,
-      lavaPhase: Math.random() * Math.PI * 2,
-      lavaSpeed: 0.008 + Math.random() * 0.012,
-      ghosts:  [],
-      age:     0,
+      ptType:   pt.type,
+      ptX:      pt.x,
+      ptY:      pt.y,
+      ox:       (Math.random() - 0.5) * 38,
+      oy:       oyBase,
+      x:        pt.x + (Math.random() - 0.5) * 38,
+      y:        pt.y + oyBase,
+      vx:       (Math.random() - 0.5) * 0.12,
+      vy:       isIOB ? -(0.04 + Math.random() * 0.08) : (0.04 + Math.random() * 0.08),
+      r:        2.5 + Math.random() * 3.5,
+      col:      col,
+      isIOB:    isIOB,
+      isDark:   false,
+      alpha:    0,
+      phase:    Math.random() * Math.PI * 2,
+      lavaPhase:Math.random() * Math.PI * 2,
+      lavaSpeed:0.008 + Math.random() * 0.012,
+      ghosts:   [],
+      age:      0,
     });
   }
 
-  // Dark unknown blobs — mixed into cluster
+  // Dark unknown blobs — only when COB+IOB model doesn't explain the move
   for (var j = 0; j < darkCount; j++) {
+    var oyDark = (Math.random() - 0.5) * 24;
     _curveBubbles.push({
-      ptType:  pt.type,
-      ptX:     pt.x,
-      ptY:     pt.y,
-      ox:      (Math.random() - 0.5) * 30,
-      oy:      isPeak ? -(Math.random() * 20) : (Math.random() * 20),
-      x:       pt.x + (Math.random() - 0.5) * 30,
-      y:       pt.y + (isPeak ? -(Math.random() * 20) : (Math.random() * 20)),
-      vx:      (Math.random() - 0.5) * 0.08,
-      vy:      isPeak ? -(0.03 + Math.random() * 0.07) : (0.03 + Math.random() * 0.07),
-      r:       2.0 + Math.random() * 2.2,
-      col:     [40, 38, 42],   // dark charcoal — unknown
-      isIOB:   false,
-      isDark:  true,
-      alpha:   0,
-      phase:   Math.random() * Math.PI * 2,
-      lavaPhase: Math.random() * Math.PI * 2,
-      lavaSpeed: 0.004 + Math.random() * 0.008,  // slower — heavier
-      ghosts:  [],
-      age:     0,
+      ptType:   pt.type,
+      ptX:      pt.x,
+      ptY:      pt.y,
+      ox:       (Math.random() - 0.5) * 30,
+      oy:       oyDark,
+      x:        pt.x + (Math.random() - 0.5) * 30,
+      y:        pt.y + oyDark,
+      vx:       (Math.random() - 0.5) * 0.08,
+      vy:       (Math.random() - 0.5) * 0.05,
+      r:        2.0 + Math.random() * 2.2,
+      col:      [40, 38, 42],
+      isIOB:    false,
+      isDark:   true,
+      alpha:    0,
+      phase:    Math.random() * Math.PI * 2,
+      lavaPhase:Math.random() * Math.PI * 2,
+      lavaSpeed:0.004 + Math.random() * 0.008,
+      ghosts:   [],
+      age:      0,
     });
   }
 }
@@ -3185,7 +3196,11 @@ function _tickCurveBubbles() {
 
     // Target: orbital offset + lava motion around anchor
     var targetX = anchorX + b.ox + lavaWob;
-    var targetY = anchorY + b.oy + lavaLift * (b.ptType === 'peak' ? -1 : 1);
+    var rawTargetY = anchorY + b.oy + lavaLift * (b.ptType === 'peak' ? -1 : 1);
+    // IOB stays above line (negative offset), carbs stay below (positive offset)
+    var targetY = b.isIOB
+      ? Math.min(anchorY - 1, rawTargetY)
+      : (b.isDark ? rawTargetY : Math.max(anchorY + 1, rawTargetY));
 
     // Spring toward target
     b.vx += (targetX - b.x) * 0.04;
@@ -4598,6 +4613,7 @@ function openSheet() {
   // Meal mode: full-screen dark overlay, consistent with correction/hypo screens
   var s = document.getElementById('sheet');
   if (s) {
+    s.style.display = '';
     s.style.position = 'fixed';
     s.style.inset = '0';
     s.style.zIndex = '60';
@@ -4632,12 +4648,13 @@ function closeSheet() {
   var o = document.getElementById('overlay');
   if (s) {
     if (_sheetMode === 'meal') {
-      // Animate out then reset inline styles so kitchen mode still works
       s.style.opacity = '0';
+      s.style.pointerEvents = 'none';
       setTimeout(function() {
         s.classList.remove('open');
-        s.style.cssText = ''; // restore CSS-class-driven bottom-sheet styles
-      }, 260);
+        s.style.cssText = '';
+        s.style.display = 'none'; // belt-and-braces for mobile
+      }, 300);
     } else {
       s.classList.remove('open');
     }
@@ -9194,7 +9211,7 @@ window.addEventListener('load',()=>{
   viewTime = CGM_END || Date.now();
   viewSpan = 2*3600000;
   try{
-    SESSION=JSON.parse(localStorage.getItem('river_session')||'[]'); SESSION=SESSION.filter(s=>(Date.now()-s.t)<7*86400000);
+    SESSION=JSON.parse(localStorage.getItem('river_session')||'[]'); SESSION=SESSION.filter(s=>(Date.now()-s.t)<6*3600000);
   }catch(e){}
   const pal=palette(CGM_END);
   document.body.style.background='#05070f';
@@ -9215,7 +9232,7 @@ window.addEventListener('load',()=>{
   const saved = loadCGMConfig();
   if (saved && saved.sourceId && saved.sourceId !== 'manual') {
     // Re-use saved credentials silently
-    setTimeout(()=> startLivePolling(saved.sourceId, saved.fields), 1500);
+    setTimeout(()=> startLivePolling(saved.sourceId, saved.fields), 0); // immediate — don't show stale data
   } else if (saved && saved.sourceId === 'manual') {
     // Manual / demo mode — load equilibrium scenario
     setTimeout(function(){ loadScenario('equilibrium'); }, 400);
