@@ -2907,13 +2907,13 @@ let lastHUD = 0;
 function updateHUD(d, pal) {
   if (Date.now()-lastHUD < 300) return; lastHUD = Date.now();
   // Persisted history loaded but live CGM not yet connected — hide BG entirely
-  if (typeof _historyIsStale !== 'undefined' && _historyIsStale) {
-    var bgWrap2 = document.getElementById('bg-wrap');
-    if (bgWrap2) bgWrap2.style.opacity = '0';
+  if (_historyIsStale) {
+    var bgWrap = document.getElementById('bg-wrap');
+    if (bgWrap) bgWrap.style.opacity = '0';
     return;
   } else {
-    var bgWrap3 = document.getElementById('bg-wrap');
-    if (bgWrap3) bgWrap3.style.opacity = '';
+    var bgWrap = document.getElementById('bg-wrap');
+    if (bgWrap) bgWrap.style.opacity = '';
   }
   if (!d || !pal || typeof d.bg !== 'number' || isNaN(d.bg)) return;
 
@@ -3185,20 +3185,20 @@ function _updateCurveBubbles() {
   var pts = _findPeaksTroughs();
 
   // Build a signature to detect changes
-  // Use a non-empty sentinel for empty pts so the first empty result still triggers a kill
-  var sig = pts.length > 0
-    ? pts.map(function(p){ return p.type+Math.round(p.x)+Math.round(p.y); }).join('|')
-    : ('__empty__' + Math.floor(Date.now() / 10000)); // changes every 10s to allow periodic recheck
+  var sig = pts.map(function(p) {
+    return p.type + Math.round(p.x) + Math.round(p.y);
+  }).join('|');
 
-  // For empty state: only re-trigger if we previously had bubbles
-  if (sig.startsWith('__empty__') && _lastPTSet.startsWith('__empty__') && _curveBubbles.length === 0) return;
-  if (!sig.startsWith('__empty__') && sig === _lastPTSet) return;
+  // Use sentinel for empty state so it doesn't match a populated state
+  if (pts.length === 0) sig = '__empty__';
+  // If nothing changed and bubbles already cleared, skip
+  if (sig === _lastPTSet && (pts.length > 0 || _curveBubbles.length === 0)) return;
   _lastPTSet = sig;
 
-  // Mark all existing bubbles as dying
+  // Mark all existing bubbles dying
   _curveBubbles.forEach(function(b) { b._dying = true; });
 
-  // Only spawn new ones if there are actual peaks/troughs
+  // Only spawn if there are actual peaks/troughs
   if (pts.length > 0) {
     pts.forEach(function(pt) { _spawnCurveBubbles(pt); });
   }
@@ -3232,8 +3232,8 @@ function _tickCurveBubbles() {
     // Find current peak position (peaks move as BG changes)
     var anchorX = b.ptX;
     var anchorY = b.ptY;
-    // Re-anchor to nearest pt — if no pt within range, bubble is orphaned and dies
-    var reanchored = false;
+    // Re-anchor to nearest pt — orphaned bubbles (no anchor) die
+    var reanchored = pts.length === 0 ? false : false;
     pts.forEach(function(pt) {
       if (Math.abs(pt.x - b.ptX) < 60) {
         b.ptX = pt.x; b.ptY = pt.y;
@@ -3241,9 +3241,7 @@ function _tickCurveBubbles() {
         reanchored = true;
       }
     });
-    if (!reanchored && pts.length === 0) {
-      b._dying = true; // no peaks left — fade out
-    }
+    if (!reanchored && pts.length === 0) { b._dying = true; }
 
     // Target: orbital offset + lava motion around anchor
     var targetX = anchorX + b.ox + lavaWob;
@@ -3604,17 +3602,17 @@ function commitDrop(){
   const u=parseFloat(document.getElementById('in-i').value)||0;
   const t=getEntryTime();
   if(c>0||u>0){
-    var evDrop = {t:t, c:c, u:u, note:'drop', local:true};
-    SESSION.push(evDrop);
-    BOLUS_EVENTS.push(evDrop);
-    LOGGED_EVENTS.push(evDrop);
+    SESSION.push({t,c,u});
     try{localStorage.setItem('river_session',JSON.stringify(SESSION));}catch(e){}
-    try{localStorage.setItem('river_logged',JSON.stringify(LOGGED_EVENTS));}catch(e){}
-    syncAfterLog();
+    // Save meal to history if has carbs
     if(c>0) {
+      const bg=parseFloat(document.getElementById('in-bg').value)||0;
       const mealName = c>0&&u>0?`${c}g + ${u}U`:(c>0?`${c}g carbs`:`${u}U bolus`);
       saveMealToHistory(mealName, c, u, t);
     }
+    // Also update HISTORY_RAW entry for that time if it exists
+    const existing = HISTORY_RAW.findIndex(h=>Math.abs(h.t-t)<150000);
+    if(existing>=0) { HISTORY_RAW[existing].iob+=u; HISTORY_RAW[existing].cob+=c; }
   }
   const msg=[]; if(c>0)msg.push(`${c}g`); if(u>0)msg.push(`${u}U`);
   showToast((msg.join(' · ')||'logged')+'\ninto the river');
@@ -7288,7 +7286,7 @@ function persistReadings() {
   } catch(e) {}
 }
 
-var _historyIsStale = false; // true when showing persisted data before live CGM connects
+var _historyIsStale = false; // true = showing persisted data, live CGM not yet connected
 
 function loadPersistedReadings() {
   try {
@@ -7302,9 +7300,7 @@ function loadPersistedReadings() {
     }
     HISTORY_RAW.sort((a,b)=>a.t-b.t);
     updateCGMBounds();
-    // Mark as stale so HUD shows a loading indicator until live data arrives
-    _historyIsStale = true;
-    console.log(`Loaded ${raw.length} persisted readings — awaiting live sync`);
+    _historyIsStale = true; // hide BG display until live data arrives
   } catch(e) {}
 }
 
@@ -7327,18 +7323,13 @@ function ingestReadings(readings) {
     _isAtNow = true;
   }
   if (changed) persistReadings();
-  _historyIsStale = false; // live data has arrived — HUD can show real values
-
-  // Purge scenario-only BOLUS_EVENTS (have no matching LOGGED_EVENTS entry)
-  // Prevents equilibrium/demo data from showing as chips when live CGM connects
+  _historyIsStale = false; // live data confirmed — show real BG
+  // Purge scenario-only BOLUS_EVENTS (not in LOGGED_EVENTS) — demo data gone
   if (_activeDemoId) {
-    var loggedTs = new Set(LOGGED_EVENTS.map(function(e){ return e.t; }));
-    var before = BOLUS_EVENTS.length;
-    BOLUS_EVENTS = BOLUS_EVENTS.filter(function(b){ return loggedTs.has(b.t); });
-    SESSION      = SESSION.filter(function(s){ return loggedTs.has(s.t); });
-    if (BOLUS_EVENTS.length < before) {
-      _activeDemoId = null; // demo is no longer active
-    }
+    var _loggedTs = new Set(LOGGED_EVENTS.map(function(e){ return e.t; }));
+    BOLUS_EVENTS = BOLUS_EVENTS.filter(function(b){ return _loggedTs.has(b.t); });
+    SESSION      = SESSION.filter(function(s){ return _loggedTs.has(s.t); });
+    _activeDemoId = null;
   }
 }
 
