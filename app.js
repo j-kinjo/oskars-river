@@ -9972,67 +9972,7 @@ function saveTreatmentForm() {
     if (el) el.remove();
   });
 }
-  el.addEventListener('touchstart',function(e){e.stopPropagation();},{passive:true});
 
-  function rowStyle(col) {
-    return 'display:flex;align-items:center;justify-content:space-between;' +
-      'padding:10px 14px;border-radius:10px;background:var(--rv-input-bg);' +
-      'border:1px solid var(--rv-panel-border);margin-bottom:8px;' +
-      "font-family:'DM Mono',monospace;font-size:11px;color:" + col;
-  }
-
-  var ratioRows = [
-    { period:'Breakfast',  isf:'1:6.5', ic:'1:8.5'  },
-    { period:'Lunch',      isf:'1:7.0', ic:'1:12'   },
-    { period:'Afternoon',  isf:'1:7.0', ic:'1:15'   },
-    { period:'Evening',    isf:'1:7.0', ic:'1:10'   },
-    { period:'Overnight',  isf:'1:6.5', ic:'—'      },
-  ];
-
-  var ratioHTML = ratioRows.map(function(row) {
-    return '<div style="' + rowStyle('rgba(200,220,240,0.7)') + '">' +
-      '<span style="color:rgba(140,180,220,0.6);text-transform:uppercase;font-size:9px;letter-spacing:1px;width:90px">' + row.period + '</span>' +
-      '<span style="color:rgba(255,150,50,0.8)">I:C ' + row.ic + '</span>' +
-      '<span style="color:rgba(80,140,220,0.8)">ISF ' + row.isf + '</span>' +
-    '</div>';
-  }).join('');
-
-  el.innerHTML =
-    '<div style="max-width:340px;width:100%">' +
-    '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:24px">' +
-      '<div style="font-family:\'Fraunces\',serif;font-style:italic;font-weight:200;font-size:22px;color:rgba(180,220,200,0.8)">treatment</div>' +
-      '<button onclick="document.getElementById(\'treatment-overlay\').remove()" ' +
-        'style="background:none;border:none;cursor:pointer;font-size:22px;color:var(--rv-close-btn);padding:4px">×</button>' +
-    '</div>' +
-
-    // Basal
-    '<div style="font-family:\'DM Mono\',monospace;font-size:8px;letter-spacing:1.5px;text-transform:uppercase;' +
-      'color:rgba(80,140,220,0.5);margin-bottom:10px">basal</div>' +
-    '<div style="' + rowStyle('rgba(200,220,240,0.7)') + '">' +
-      '<span style="color:rgba(140,180,220,0.6)">Degludec</span>' +
-      '<span style="color:rgba(80,140,220,0.9);font-size:16px">6 U</span>' +
-      '<span style="color:rgba(100,140,200,0.4);font-size:9px">peakless</span>' +
-    '</div>' +
-
-    // Hypo defaults
-    '<div style="font-family:\'DM Mono\',monospace;font-size:8px;letter-spacing:1.5px;text-transform:uppercase;' +
-      'color:rgba(255,210,40,0.5);margin-bottom:10px;margin-top:20px">hypo defaults</div>' +
-    '<div style="' + rowStyle('rgba(255,210,40,0.8)') + '">' +
-      '<span style="color:rgba(200,180,80,0.6)">threshold</span>' +
-      '<span>3.9 mmol/L</span>' +
-    '</div>' +
-    '<div style="' + rowStyle('rgba(255,210,40,0.8)') + '">' +
-      '<span style="color:rgba(200,180,80,0.6)">treatment</span>' +
-      '<span>15g fast carbs</span>' +
-    '</div>' +
-
-    // Ratios
-    '<div style="font-family:\'DM Mono\',monospace;font-size:8px;letter-spacing:1.5px;text-transform:uppercase;' +
-      'color:rgba(255,150,50,0.5);margin-bottom:10px;margin-top:20px">ratios</div>' +
-    ratioHTML +
-
-    // Bolus model
-    '<div style="font-family:\'DM Mono\',monospace;font-size:8px;letter-spacing:1.5px;text-transform:uppercase;' +
 window.addEventListener('load',()=>{
   // Load any persisted CGM history from previous sessions
   loadPersistedReadings();
