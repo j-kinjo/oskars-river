@@ -393,12 +393,12 @@ function deriveUITokens(bgHex) {
     inputBg      = 'rgba(255,255,255,0.05)';
     inputBorder  = 'rgba(255,255,255,0.10)';
     textPrimary  = 'rgba(200,220,240,0.88)';
-    textSecondary= 'rgba(180,200,220,0.65)';
-    textMuted    = 'rgba(160,180,200,0.38)';
+    textSecondary= 'rgba(180,200,220,0.78)';
+    textMuted    = 'rgba(160,180,200,0.62)';
     textDim      = 'rgba(140,160,180,0.22)';
     swatchBorder = 'rgba(255,255,255,0.14)';
     divider      = 'rgba(255,255,255,0.06)';
-    closeBtnCol  = 'rgba(255,255,255,0.22)';
+    closeBtnCol  = 'rgba(255,255,255,0.35)';
   } else if (mid) {
     // Mid-tone: use dark-on-light for text, slightly opaque panel
     panelBg      = 'rgba(240,238,232,0.96)';
@@ -407,7 +407,7 @@ function deriveUITokens(bgHex) {
     inputBorder  = 'rgba(0,0,0,0.14)';
     textPrimary  = 'rgba(20,24,32,0.90)';
     textSecondary= 'rgba(30,34,44,0.65)';
-    textMuted    = 'rgba(40,44,54,0.42)';
+    textMuted    = 'rgba(40,44,54,0.65)';
     textDim      = 'rgba(40,44,54,0.25)';
     swatchBorder = 'rgba(0,0,0,0.18)';
     divider      = 'rgba(0,0,0,0.08)';
@@ -420,7 +420,7 @@ function deriveUITokens(bgHex) {
     inputBorder  = 'rgba(0,0,0,0.12)';
     textPrimary  = 'rgba(16,20,30,0.92)';
     textSecondary= 'rgba(24,28,40,0.68)';
-    textMuted    = 'rgba(32,36,50,0.44)';
+    textMuted    = 'rgba(32,36,50,0.66)';
     textDim      = 'rgba(32,36,50,0.26)';
     swatchBorder = 'rgba(0,0,0,0.16)';
     divider      = 'rgba(0,0,0,0.07)';
@@ -4156,6 +4156,7 @@ function bolusNow() {
   try{localStorage.setItem('river_logged',JSON.stringify(LOGGED_EVENTS));}catch(e){}
   topUpIOB(u);
   syncAfterLog();
+  _ptCache = null;
   _plateBolused = true;
   _plateBolusU  = u;
   _plateBolusTm = t;
@@ -4202,6 +4203,7 @@ function logPlate() {
   try{localStorage.setItem('river_session',JSON.stringify(SESSION));}catch(e){}
   try{localStorage.setItem('river_logged',JSON.stringify(LOGGED_EVENTS));}catch(e){}
   syncAfterLog();
+  _ptCache = null;
   showToast(total.toFixed(0)+'g carbs\nplate logged ✓');
   closeKitchen();
 }
@@ -6170,6 +6172,7 @@ function logMealEntry(carbsOnly) {
   if (totalCarbs > 0) parts.push(totalCarbs.toFixed(0) + 'g carbs');
   if (u > 0) parts.push(u.toFixed(1) + 'U insulin');
   syncAfterLog();
+  _ptCache = null;
   showToast((parts.join(' + ') || 'logged') + '\nadded to the flow');
   closeSheet();
 }
@@ -8961,6 +8964,7 @@ function openSettingsTray() {
     { label: 'cgm',          icon: '◎', fn: function(){ closeSettingsTray(); openCGMSettings(); },      col: 'rgba(80,200,180,0.8)'  },
     { label: 'food library', icon: '◌', fn: function(){ closeSettingsTray(); openFoodManager(); },      col: 'rgba(220,150,60,0.8)'  },
     { label: 'treatment',    icon: '◈', fn: function(){ closeSettingsTray(); openTreatmentPanel(); },   col: 'rgba(180,100,220,0.8)' },
+    { label: 'insights',     icon: '◧', fn: function(){ closeSettingsTray(); openInsightsPanel(); },     col: 'rgba(255,180,80,0.8)'  },
     { label: 'visuals',      icon: '◐', fn: function(){ openVisualSettings(); },                         col: 'rgba(180,140,240,0.8)' },
   ];
 
@@ -9385,3 +9389,814 @@ window.addEventListener('load',()=>{
     }, 1200);
   }
 })
+
+// ═══════════════════════════════════════════════════════════════════════════
+// INSIGHTS PANEL
+// ═══════════════════════════════════════════════════════════════════════════
+
+function openInsightsPanel() {
+  var ex = document.getElementById('insights-overlay');
+  if (ex) ex.remove();
+
+  // ── Compute stats ────────────────────────────────────────────────────────
+  var readings = HISTORY_RAW.filter(function(r){ return r && r.bg > 0; });
+  var pricks   = (function(){
+    try{ return JSON.parse(localStorage.getItem('river_pricks')||'[]'); }catch(e){ return []; }
+  })();
+
+  var inRange  = readings.filter(function(r){ return r.bg >= 3.9 && r.bg <= 10.0; }).length;
+  var belowRange = readings.filter(function(r){ return r.bg < 3.9; }).length;
+  var aboveRange = readings.filter(function(r){ return r.bg > 10.0; }).length;
+  var total    = readings.length || 1;
+  var meanBG   = readings.reduce(function(s,r){return s+r.bg;},0) / total;
+  var eA1C     = ((meanBG + 2.59) / 1.59).toFixed(1);
+  var tirPct   = Math.round(100 * inRange / total);
+  var belPct   = Math.round(100 * belowRange / total);
+  var abvPct   = Math.round(100 * aboveRange / total);
+
+  var dateMin  = readings.length ? new Date(readings[0].t).toLocaleDateString('en-GB',{day:'numeric',month:'short'}) : '—';
+  var dateMax  = readings.length ? new Date(readings[readings.length-1].t).toLocaleDateString('en-GB',{day:'numeric',month:'short'}) : '—';
+
+  // ── Hourly buckets ───────────────────────────────────────────────────────
+  var hourBuckets = [];
+  for (var h = 0; h < 24; h++) hourBuckets.push([]);
+  readings.forEach(function(r){ hourBuckets[new Date(r.t).getHours()].push(r.bg); });
+  pricks.forEach(function(p){ if(p && p.bg && p.t) hourBuckets[new Date(p.t).getHours()].push(p.bg); });
+  var hourMeans = hourBuckets.map(function(b){ return b.length ? b.reduce(function(s,v){return s+v;},0)/b.length : null; });
+  var hourP10   = hourBuckets.map(function(b){ if(!b.length) return null; var s=[...b].sort(function(a,c){return a-c;}); return s[Math.floor(s.length*0.1)]; });
+  var hourP90   = hourBuckets.map(function(b){ if(!b.length) return null; var s=[...b].sort(function(a,c){return a-c;}); return s[Math.floor(s.length*0.9)]; });
+
+  // ── Meal response ────────────────────────────────────────────────────────
+  var mealStats = (MEAL_HISTORY||[]).slice(0,8).map(function(m){
+    var preMeal  = null, peakRise = null, timeToPeak = null;
+    var window2hr = readings.filter(function(r){ return r.t >= m.t && r.t <= m.t + 7200000; });
+    if (window2hr.length) {
+      var prePts = readings.filter(function(r){ return r.t >= m.t - 600000 && r.t < m.t; });
+      preMeal = prePts.length ? prePts[prePts.length-1].bg : window2hr[0].bg;
+      var peak = window2hr.reduce(function(best,r){ return r.bg > best.bg ? r : best; }, window2hr[0]);
+      peakRise = +(peak.bg - preMeal).toFixed(1);
+      timeToPeak = Math.round((peak.t - m.t) / 60000);
+    }
+    return { name: m.name, totalCarbs: m.totalCarbs, preMeal: preMeal, peakRise: peakRise, timeToPeak: timeToPeak };
+  }).filter(function(m){ return m.preMeal !== null; });
+
+  var avgRise = mealStats.length ? (mealStats.reduce(function(s,m){return s+(m.peakRise||0);},0)/mealStats.length).toFixed(1) : '—';
+  var avgPeak = mealStats.length ? Math.round(mealStats.reduce(function(s,m){return s+(m.timeToPeak||0);},0)/mealStats.length) : '—';
+
+  // ── Sensor lag ───────────────────────────────────────────────────────────
+  var lagPairs = pricks.map(function(p){
+    var cgm = readings.find(function(r){ return Math.abs(r.t - p.t) < 600000; });
+    return cgm ? { prick: p.bg, cgm: cgm.bg, delta: +(p.bg - cgm.bg).toFixed(1) } : null;
+  }).filter(Boolean);
+  var meanLag = lagPairs.length ? (lagPairs.reduce(function(s,p){return s+p.delta;},0)/lagPairs.length).toFixed(2) : null;
+  var sdLag   = (lagPairs.length > 1) ? (function(){
+    var m2 = lagPairs.reduce(function(s,p){return s+p.delta;},0)/lagPairs.length;
+    return Math.sqrt(lagPairs.reduce(function(s,p){return s+Math.pow(p.delta-m2,2);},0)/lagPairs.length).toFixed(2);
+  })() : null;
+
+  // ── Build HTML ────────────────────────────────────────────────────────────
+  var el = document.createElement('div');
+  el.id  = 'insights-overlay';
+  el.style.cssText = 'position:fixed;inset:0;z-index:90;background:rgba(3,5,20,0.97);' +
+    'backdrop-filter:blur(20px);overflow-y:auto;-webkit-overflow-scrolling:touch;' +
+    'font-family:"DM Mono",monospace;color:rgba(200,220,240,0.85);';
+
+  var s = '<div style="max-width:540px;margin:0 auto;padding:env(safe-area-inset-top,24px) 20px 80px">';
+  s += '<div style="display:flex;justify-content:space-between;align-items:center;' +
+    'padding:20px 0 24px;border-bottom:1px solid rgba(255,255,255,0.07);margin-bottom:24px">';
+  s += '<div style="font-family:\'Fraunces\',serif;font-style:italic;font-weight:200;' +
+    'font-size:22px;color:rgba(200,220,240,0.9)">insights</div>';
+  s += '<button onclick="document.getElementById(\'insights-overlay\').remove()" ' +
+    'style="background:none;border:none;cursor:pointer;font-size:24px;' +
+    'color:rgba(200,220,240,0.4);padding:4px">×</button></div>';
+
+  // ── Section 1: Overview ──────────────────────────────────────────────────
+  s += '<div style="margin-bottom:28px">';
+  s += '<div style="font-size:10px;letter-spacing:1.5px;text-transform:uppercase;' +
+    'color:rgba(200,220,240,0.4);margin-bottom:14px">overview · ' + dateMin + ' – ' + dateMax + '</div>';
+  s += '<div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px;margin-bottom:14px">';
+  // mean BG
+  s += '<div style="background:rgba(255,255,255,0.04);border-radius:10px;padding:14px;text-align:center">';
+  s += '<div style="font-size:24px;font-weight:500;color:rgba(62,180,160,0.9)">' + meanBG.toFixed(1) + '</div>';
+  s += '<div style="font-size:9px;color:rgba(200,220,240,0.4);margin-top:4px">mean mmol</div></div>';
+  // TIR
+  s += '<div style="background:rgba(255,255,255,0.04);border-radius:10px;padding:14px;text-align:center">';
+  s += '<div style="font-size:24px;font-weight:500;color:rgba(62,180,120,' + (tirPct>=70?'0.9':'0.6') + ')">' + tirPct + '%</div>';
+  s += '<div style="font-size:9px;color:rgba(200,220,240,0.4);margin-top:4px">in range</div></div>';
+  // eA1C
+  s += '<div style="background:rgba(255,255,255,0.04);border-radius:10px;padding:14px;text-align:center">';
+  s += '<div style="font-size:24px;font-weight:500;color:rgba(200,180,120,0.8)">' + eA1C + '</div>';
+  s += '<div style="font-size:9px;color:rgba(200,220,240,0.4);margin-top:4px">est. A1c%</div></div>';
+  s += '</div>';
+  s += '<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">';
+  s += '<div style="background:rgba(255,80,80,0.06);border-radius:8px;padding:10px 14px;' +
+    'display:flex;justify-content:space-between;align-items:center">';
+  s += '<span style="font-size:10px;color:rgba(255,130,100,0.6)">below 3.9</span>';
+  s += '<span style="font-size:16px;font-weight:500;color:rgba(255,130,100,0.9)">' + belPct + '%</span></div>';
+  s += '<div style="background:rgba(255,180,60,0.06);border-radius:8px;padding:10px 14px;' +
+    'display:flex;justify-content:space-between;align-items:center">';
+  s += '<span style="font-size:10px;color:rgba(255,180,60,0.6)">above 10</span>';
+  s += '<span style="font-size:16px;font-weight:500;color:rgba(255,180,60,0.9)">' + abvPct + '%</span></div>';
+  s += '</div>';
+  s += '<div style="font-size:9px;color:rgba(200,220,240,0.3);margin-top:10px">' +
+    total + ' readings · eA1c is a formula estimate, not a calibrated GMI</div></div>';
+
+  // ── Section 2: 24-hour profile ───────────────────────────────────────────
+  s += '<div style="margin-bottom:28px">';
+  s += '<div style="font-size:10px;letter-spacing:1.5px;text-transform:uppercase;' +
+    'color:rgba(200,220,240,0.4);margin-bottom:14px">24-hour profile</div>';
+  s += '<canvas id="insights-hour-canvas" width="500" height="140" style="width:100%;height:auto;' +
+    'border-radius:8px;background:rgba(255,255,255,0.03)"></canvas>';
+  s += '</div>';
+
+  // ── Section 3: Meal response ─────────────────────────────────────────────
+  s += '<div style="margin-bottom:28px">';
+  s += '<div style="font-size:10px;letter-spacing:1.5px;text-transform:uppercase;' +
+    'color:rgba(200,220,240,0.4);margin-bottom:14px">meal response</div>';
+  if (mealStats.length) {
+    s += '<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:14px">';
+    s += '<div style="background:rgba(255,255,255,0.04);border-radius:8px;padding:10px 14px">';
+    s += '<div style="font-size:18px;font-weight:500;color:rgba(255,160,60,0.9)">+' + avgRise + '</div>';
+    s += '<div style="font-size:9px;color:rgba(200,220,240,0.4);margin-top:2px">avg rise (mmol)</div></div>';
+    s += '<div style="background:rgba(255,255,255,0.04);border-radius:8px;padding:10px 14px">';
+    s += '<div style="font-size:18px;font-weight:500;color:rgba(120,180,255,0.9)">' + avgPeak + 'min</div>';
+    s += '<div style="font-size:9px;color:rgba(200,220,240,0.4);margin-top:2px">avg time to peak</div></div>';
+    s += '</div>';
+    s += '<div style="border-radius:8px;overflow:hidden;border:1px solid rgba(255,255,255,0.06)">';
+    mealStats.forEach(function(m, i){
+      var rise = m.peakRise || 0;
+      var col  = rise < 2.5 ? 'rgba(62,180,120,0.8)' : rise < 4.5 ? 'rgba(255,180,60,0.8)' : 'rgba(255,100,80,0.8)';
+      s += '<div style="display:grid;grid-template-columns:1fr auto auto;gap:12px;align-items:center;' +
+        'padding:10px 14px;' + (i % 2 === 0 ? 'background:rgba(255,255,255,0.02)' : '') + '">';
+      s += '<div style="font-size:10px;color:rgba(200,220,240,0.7);white-space:nowrap;overflow:hidden;' +
+        'text-overflow:ellipsis">' + (m.name||'').split('·')[0].trim() + '</div>';
+      s += '<div style="font-size:12px;font-weight:500;color:' + col + ';min-width:40px;text-align:right">+' + rise + '</div>';
+      s += '<div style="font-size:10px;color:rgba(200,220,240,0.4);min-width:36px;text-align:right">' + (m.timeToPeak||'—') + 'm</div>';
+      s += '</div>';
+    });
+    s += '</div>';
+  } else {
+    s += '<div style="padding:20px;text-align:center;font-size:11px;color:rgba(200,220,240,0.3);' +
+      'border-radius:8px;border:1px dashed rgba(255,255,255,0.08)">no meal data yet — log meals to see response patterns</div>';
+  }
+  s += '</div>';
+
+  // ── Section 4: Sensor lag ─────────────────────────────────────────────────
+  s += '<div style="margin-bottom:28px">';
+  s += '<div style="font-size:10px;letter-spacing:1.5px;text-transform:uppercase;' +
+    'color:rgba(200,220,240,0.4);margin-bottom:14px">sensor lag · prick vs cgm</div>';
+  if (lagPairs.length) {
+    s += '<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:14px">';
+    s += '<div style="background:rgba(255,255,255,0.04);border-radius:8px;padding:10px 14px">';
+    s += '<div style="font-size:18px;font-weight:500;color:rgba(200,220,240,0.8)">' + (meanLag > 0 ? '+' : '') + meanLag + '</div>';
+    s += '<div style="font-size:9px;color:rgba(200,220,240,0.4);margin-top:2px">mean Δ (mmol)</div></div>';
+    s += '<div style="background:rgba(255,255,255,0.04);border-radius:8px;padding:10px 14px">';
+    s += '<div style="font-size:18px;font-weight:500;color:rgba(200,220,240,0.6)">±' + sdLag + '</div>';
+    s += '<div style="font-size:9px;color:rgba(200,220,240,0.4);margin-top:2px">variability (SD)</div></div>';
+    s += '</div>';
+    if (Math.abs(parseFloat(meanLag)) > 1.0) {
+      s += '<div style="padding:10px 14px;border-radius:8px;background:rgba(255,180,60,0.07);' +
+        'border:1px solid rgba(255,180,60,0.15);font-size:10px;color:rgba(255,180,60,0.8);' +
+        'margin-bottom:14px">CGM reading ' + (parseFloat(meanLag) > 0 ? 'lower' : 'higher') +
+        ' than prick by ~' + Math.abs(parseFloat(meanLag)).toFixed(1) +
+        ' mmol on average. Lag is more pronounced when BG is rising rapidly.</div>';
+    }
+    s += '<div style="border-radius:8px;overflow:hidden;border:1px solid rgba(255,255,255,0.06)">';
+    lagPairs.slice(0,8).forEach(function(p, i){
+      var col = Math.abs(p.delta) < 1.0 ? 'rgba(62,180,120,0.8)' : Math.abs(p.delta) < 2.0 ? 'rgba(255,180,60,0.8)' : 'rgba(255,100,80,0.8)';
+      s += '<div style="display:grid;grid-template-columns:1fr auto auto auto;gap:10px;align-items:center;' +
+        'padding:9px 14px;' + (i % 2 === 0 ? 'background:rgba(255,255,255,0.02)' : '') + '">';
+      s += '<div style="font-size:10px;color:rgba(200,220,240,0.4)">' +
+        new Date(pricks[i] && pricks[i].t || Date.now()).toLocaleTimeString('en-GB',{hour:'2-digit',minute:'2-digit'}) + '</div>';
+      s += '<div style="font-size:11px;color:rgba(255,200,100,0.8)">' + p.prick.toFixed(1) + '</div>';
+      s += '<div style="font-size:11px;color:rgba(120,200,255,0.7)">' + p.cgm.toFixed(1) + '</div>';
+      s += '<div style="font-size:11px;font-weight:500;color:' + col + '">' + (p.delta > 0 ? '+' : '') + p.delta + '</div>';
+      s += '</div>';
+    });
+    s += '</div>';
+  } else {
+    s += '<div style="padding:20px;text-align:center;font-size:11px;color:rgba(200,220,240,0.3);' +
+      'border-radius:8px;border:1px dashed rgba(255,255,255,0.08)">no finger prick readings yet — log pricks via the radial menu to build your personal lag profile</div>';
+  }
+  s += '</div>';
+
+  // ── Section 5: Clinic export ──────────────────────────────────────────────
+  s += '<div style="margin-bottom:40px">';
+  s += '<div style="font-size:10px;letter-spacing:1.5px;text-transform:uppercase;' +
+    'color:rgba(200,220,240,0.4);margin-bottom:14px">clinic export</div>';
+  s += '<button onclick="insightsExport()" style="width:100%;padding:14px;border-radius:10px;' +
+    'border:1px solid rgba(255,180,80,0.3);background:rgba(255,180,80,0.07);' +
+    'font-family:\'Fraunces\',serif;font-style:italic;font-weight:200;font-size:17px;' +
+    'color:rgba(255,200,100,0.9);cursor:pointer">download clinic report</button>';
+  s += '<div style="font-size:9px;color:rgba(200,220,240,0.3);margin-top:8px;text-align:center">' +
+    'plain text · not a clinical document · for conversation with your team</div>';
+  s += '</div>';
+
+  s += '</div>'; // end max-width wrapper
+  el.innerHTML = s;
+  document.body.appendChild(el);
+
+  // ── Draw 24-hour canvas ───────────────────────────────────────────────────
+  requestAnimationFrame(function(){
+    var cv = document.getElementById('insights-hour-canvas');
+    if (!cv) return;
+    var cx = cv.getContext('2d');
+    var W = cv.width, H = cv.height;
+    var PAD = { t:12, b:28, l:30, r:12 };
+    var CW = W - PAD.l - PAD.r, CH = H - PAD.t - PAD.b;
+    var bgMin = 2.0, bgMax = 14.0;
+    function xOf(h){ return PAD.l + (h / 23) * CW; }
+    function yOf(v){ return PAD.t + (1 - (v - bgMin) / (bgMax - bgMin)) * CH; }
+
+    // target zone band
+    cx.fillStyle = 'rgba(62,180,120,0.06)';
+    cx.fillRect(PAD.l, yOf(10.0), CW, yOf(3.9) - yOf(10.0));
+
+    // percentile band
+    var pts10 = [], pts90 = [];
+    for (var h = 0; h < 24; h++) {
+      if (hourP10[h] !== null) pts10.push({x: xOf(h), y: yOf(hourP10[h])});
+      if (hourP90[h] !== null) pts90.push({x: xOf(h), y: yOf(hourP90[h])});
+    }
+    if (pts10.length > 1 && pts90.length > 1) {
+      cx.beginPath();
+      cx.moveTo(pts10[0].x, pts10[0].y);
+      pts10.forEach(function(p){ cx.lineTo(p.x, p.y); });
+      pts90.slice().reverse().forEach(function(p){ cx.lineTo(p.x, p.y); });
+      cx.closePath();
+      cx.fillStyle = 'rgba(62,180,160,0.12)';
+      cx.fill();
+    }
+
+    // mean line
+    var meanPts = hourMeans.map(function(v, h){ return v !== null ? {x: xOf(h), y: yOf(v)} : null; }).filter(Boolean);
+    if (meanPts.length > 1) {
+      cx.beginPath();
+      cx.moveTo(meanPts[0].x, meanPts[0].y);
+      meanPts.forEach(function(p){ cx.lineTo(p.x, p.y); });
+      cx.strokeStyle = 'rgba(62,200,180,0.8)';
+      cx.lineWidth = 2;
+      cx.stroke();
+    }
+
+    // x-axis labels
+    cx.fillStyle = 'rgba(180,200,220,0.4)';
+    cx.font = '9px "DM Mono",monospace';
+    cx.textAlign = 'center';
+    [0, 6, 12, 18, 23].forEach(function(h){
+      cx.fillText(h + ':00', xOf(h), H - 6);
+    });
+
+    // y-axis labels
+    cx.textAlign = 'right';
+    [4, 7, 10, 13].forEach(function(v){
+      cx.fillText(v, PAD.l - 4, yOf(v) + 3);
+    });
+  });
+}
+
+function insightsExport() {
+  var readings = HISTORY_RAW.filter(function(r){ return r && r.bg > 0; });
+  var pricks   = (function(){ try{ return JSON.parse(localStorage.getItem('river_pricks')||'[]'); }catch(e){ return []; } })();
+  var total    = readings.length || 1;
+  var meanBG   = readings.reduce(function(s,r){return s+r.bg;},0) / total;
+  var inRange  = readings.filter(function(r){ return r.bg >= 3.9 && r.bg <= 10.0; }).length;
+  var belowRange = readings.filter(function(r){ return r.bg < 3.9; }).length;
+  var aboveRange = readings.filter(function(r){ return r.bg > 10.0; }).length;
+  var eA1C     = ((meanBG + 2.59) / 1.59).toFixed(1);
+  var dateMin  = readings.length ? new Date(readings[0].t).toLocaleDateString('en-GB') : '—';
+  var dateMax  = readings.length ? new Date(readings[readings.length-1].t).toLocaleDateString('en-GB') : '—';
+
+  var lines = [];
+  lines.push('OSKAR\'S RIVER — CLINIC REPORT');
+  lines.push('Generated: ' + new Date().toLocaleString('en-GB'));
+  lines.push('Data range: ' + dateMin + ' – ' + dateMax);
+  lines.push('NOT A CLINICAL DOCUMENT — for conversation with your care team only');
+  lines.push('');
+  lines.push('── GLUCOSE SUMMARY ─────────────────────────────────────────');
+  lines.push('Mean BG:          ' + meanBG.toFixed(1) + ' mmol/L');
+  lines.push('Time in range:    ' + Math.round(100*inRange/total) + '% (' + inRange + '/' + total + ' readings)');
+  lines.push('Below 3.9 mmol:   ' + Math.round(100*belowRange/total) + '% (' + belowRange + ' readings)');
+  lines.push('Above 10.0 mmol:  ' + Math.round(100*aboveRange/total) + '% (' + aboveRange + ' readings)');
+  lines.push('Estimated A1c:    ' + eA1C + '% (formula estimate — not GMI)');
+  lines.push('Total readings:   ' + total);
+  lines.push('');
+
+  // Hourly profile
+  lines.push('── HOURLY PROFILE ──────────────────────────────────────────');
+  lines.push('Hour  Mean    n   In-range');
+  var hourBuckets = [];
+  for (var h = 0; h < 24; h++) hourBuckets.push([]);
+  readings.forEach(function(r){ hourBuckets[new Date(r.t).getHours()].push(r.bg); });
+  hourBuckets.forEach(function(b, h){
+    if (!b.length) return;
+    var m = b.reduce(function(s,v){return s+v;},0)/b.length;
+    var ir = b.filter(function(v){ return v>=3.9&&v<=10.0; }).length;
+    var hStr = h.toString().padStart(2,'0') + ':00';
+    lines.push(hStr + '  ' + m.toFixed(1).padStart(5) + '   ' + b.length.toString().padStart(3) + '   ' + Math.round(100*ir/b.length) + '%');
+  });
+  lines.push('');
+
+  // Meal log
+  lines.push('── MEAL LOG (last 30) ──────────────────────────────────────');
+  (MEAL_HISTORY||[]).slice(0,30).forEach(function(m){
+    var dt = new Date(m.t).toLocaleString('en-GB',{day:'2-digit',month:'short',hour:'2-digit',minute:'2-digit'});
+    lines.push(dt + '  ' + (m.totalCarbs||0) + 'g  ' + (m.u||0) + 'U  — ' + (m.name||''));
+    if (m.items && m.items.length) {
+      m.items.forEach(function(i){ lines.push('         ' + (i.name||'') + ' ' + (i.carbs||0) + 'g carbs'); });
+    }
+  });
+  lines.push('');
+
+  // Bolus log
+  lines.push('── BOLUS / CORRECTION LOG ──────────────────────────────────');
+  (LOGGED_EVENTS||[]).filter(function(e){ return e.u > 0; }).slice(-40).forEach(function(e){
+    var dt = new Date(e.t).toLocaleString('en-GB',{day:'2-digit',month:'short',hour:'2-digit',minute:'2-digit'});
+    lines.push(dt + '  ' + e.u.toFixed(1) + 'U  ' + (e.note||'') + '  ' + (e.logged_by||''));
+  });
+  lines.push('');
+
+  // Prick readings
+  if (pricks.length) {
+    lines.push('── FINGER PRICK READINGS ───────────────────────────────────');
+    pricks.forEach(function(p){
+      var dt = new Date(p.t).toLocaleString('en-GB',{day:'2-digit',month:'short',hour:'2-digit',minute:'2-digit'});
+      lines.push(dt + '  ' + p.bg.toFixed(1) + ' mmol/L');
+    });
+    lines.push('');
+  }
+
+  // Hypo events
+  var hypos = (LOGGED_EVENTS||[]).filter(function(e){ return e.note && e.note.indexOf('hypo')===0; });
+  if (hypos.length) {
+    lines.push('── HYPO EVENTS ─────────────────────────────────────────────');
+    hypos.forEach(function(e){
+      var dt = new Date(e.t).toLocaleString('en-GB',{day:'2-digit',month:'short',hour:'2-digit',minute:'2-digit'});
+      lines.push(dt + '  ' + (e.c||0) + 'g treatment  ' + (e.logged_by||''));
+    });
+    lines.push('');
+  }
+
+  lines.push('────────────────────────────────────────────────────────────');
+  lines.push('Oskar\'s River · Insight and capture layer, not clinical decision pathway');
+  lines.push('CGM: Libre 3 via Nightscout/Gluroo · MDI · Oskar, T1D, diagnosed Aug 2025');
+
+  var blob = new Blob([lines.join('\n')], {type:'text/plain'});
+  var url  = URL.createObjectURL(blob);
+  var a    = document.createElement('a');
+  a.href   = url;
+  a.download = 'oskar-river-clinic-' + new Date().toISOString().slice(0,10) + '.txt';
+  a.click();
+  URL.revokeObjectURL(url);
+  showToast('clinic report downloaded');
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// PAD SCAN — Photo of handwritten meal notes → food log import
+// ═══════════════════════════════════════════════════════════════════════════
+
+var FOOD_ALIASES = (function(){
+  try { return JSON.parse(localStorage.getItem('river_food_aliases')||'{}'); }
+  catch(e) { return {}; }
+})();
+
+function saveAliases() {
+  try { localStorage.setItem('river_food_aliases', JSON.stringify(FOOD_ALIASES)); } catch(e) {}
+  // Sync to Supabase as a special event row
+  var SB_URL = 'https://oafnrfxypmllyvdewztm.supabase.co';
+  var SB_KEY = 'sb_publishable_MFxi8_3Nsj4O-8_oSG8a7Q_OwpnjKWy';
+  fetch(SB_URL + '/rest/v1/events', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'apikey': SB_KEY,
+      'Authorization': 'Bearer ' + SB_KEY,
+      'Prefer': 'resolution=merge-duplicates'
+    },
+    body: JSON.stringify({
+      t: -9999,
+      c: 0, u: 0,
+      note: 'aliases:' + JSON.stringify(FOOD_ALIASES),
+      logged_by: 'system'
+    })
+  }).catch(function(){});
+}
+
+function loadAliasesFromSupabase() {
+  var SB_URL = 'https://oafnrfxypmllyvdewztm.supabase.co';
+  var SB_KEY = 'sb_publishable_MFxi8_3Nsj4O-8_oSG8a7Q_OwpnjKWy';
+  fetch(SB_URL + '/rest/v1/events?t=eq.-9999&select=note', {
+    headers: { 'apikey': SB_KEY, 'Authorization': 'Bearer ' + SB_KEY }
+  }).then(function(r){ return r.json(); })
+    .then(function(rows){
+      if (!rows || !rows.length) return;
+      var row = rows[0];
+      if (row.note && row.note.indexOf('aliases:') === 0) {
+        try {
+          var remote = JSON.parse(row.note.slice(8));
+          Object.assign(FOOD_ALIASES, remote);
+          saveAliases();
+        } catch(e) {}
+      }
+    }).catch(function(){});
+}
+
+function resolveScannedFood(name) {
+  var n = (name||'').toLowerCase().trim();
+  // Check alias map first
+  if (FOOD_ALIASES[n]) {
+    var aliased = FOOD_ALIASES[n].toLowerCase();
+    var found = (FOOD_DB||[]).find(function(f){ return f.name.toLowerCase() === aliased; }) ||
+                (FOOD_LIBRARY||[]).find(function(f){ return f.name.toLowerCase() === aliased; });
+    if (found) return found;
+  }
+  // Fuzzy match
+  var all = [...(FOOD_DB||[]), ...(FOOD_LIBRARY||[])];
+  var exact = all.find(function(f){ return f.name.toLowerCase() === n; });
+  if (exact) return exact;
+  var partial = all.filter(function(f){ return f.name.toLowerCase().includes(n) || n.includes(f.name.toLowerCase()); });
+  return partial.length ? partial[0] : null;
+}
+
+function openPadScanInput() {
+  var inp = document.getElementById('pad-photo-input');
+  if (!inp) {
+    inp = document.createElement('input');
+    inp.type = 'file';
+    inp.accept = 'image/*';
+    inp.capture = 'environment';
+    inp.id = 'pad-photo-input';
+    inp.style.display = 'none';
+    inp.addEventListener('change', function(){
+      if (!inp.files || !inp.files[0]) return;
+      processPadPhoto(inp.files[0]);
+      inp.value = '';
+    });
+    document.body.appendChild(inp);
+  }
+  inp.click();
+}
+
+function processPadPhoto(file) {
+  // Show spinner
+  var spinner = document.createElement('div');
+  spinner.id = 'pad-spinner';
+  spinner.style.cssText = 'position:fixed;inset:0;z-index:200;background:rgba(3,5,20,0.92);' +
+    'display:flex;flex-direction:column;align-items:center;justify-content:center;' +
+    'font-family:"DM Mono",monospace;color:rgba(200,220,240,0.7);font-size:13px;gap:16px';
+  spinner.innerHTML = '<div style="width:32px;height:32px;border:2px solid rgba(255,180,80,0.3);' +
+    'border-top-color:rgba(255,180,80,0.9);border-radius:50%;animation:spin 0.8s linear infinite"></div>' +
+    '<div>reading your notes…</div>';
+  document.body.appendChild(spinner);
+
+  var reader = new FileReader();
+  reader.onload = function(ev) {
+    var base64 = ev.target.result.split(',')[1];
+    var mediaType = file.type || 'image/jpeg';
+
+    fetch('https://orange-surf-6f98.john-king-uk.workers.dev/claude', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        model: 'claude-sonnet-4-5',
+        max_tokens: 1000,
+        messages: [{
+          role: 'user',
+          content: [
+            {
+              type: 'image',
+              source: { type: 'base64', media_type: mediaType, data: base64 }
+            },
+            {
+              type: 'text',
+              text: 'This is a handwritten meal/diabetes log. Extract ALL of the following if present. ' +
+                'Return ONLY valid JSON, no preamble:\n' +
+                '{\n' +
+                '  "items": [{name, carbs_g, weight_g}],\n' +
+                '  "total_carbs": number or null,\n' +
+                '  "bg_mmol": number or null,\n' +
+                '  "insulin_units": number or null,\n' +
+                '  "wait_mins": number or null,\n' +
+                '  "meal_label": "breakfast"|"lunch"|"dinner"|"snack"|null,\n' +
+                '  "time_written": "HH:MM" or null,\n' +
+                '  "date_written": "DD/MM/YYYY" or null\n' +
+                '}\n' +
+                'Split compound descriptions into individual items. If weight_g is not written, estimate from context. ' +
+                'Look carefully for a time written near any BG reading.'
+            }
+          ]
+        }]
+      })
+    })
+    .then(function(r){ return r.json(); })
+    .then(function(data){
+      var sp = document.getElementById('pad-spinner');
+      if (sp) sp.remove();
+      var text = (data.content||[]).map(function(c){ return c.text||''; }).join('');
+      var clean = text.replace(/```json|```/g,'').trim();
+      var first = clean.indexOf('{'), last = clean.lastIndexOf('}');
+      if (first < 0 || last < 0) { showToast('couldn\'t read the notes — try a clearer photo'); return; }
+      try {
+        var parsed = JSON.parse(clean.slice(first, last+1));
+        openPadImportScreen(parsed, file);
+      } catch(e) {
+        showToast('couldn\'t parse the notes — try a clearer photo');
+      }
+    })
+    .catch(function(){
+      var sp = document.getElementById('pad-spinner');
+      if (sp) sp.remove();
+      showToast('scan failed — check your connection');
+    });
+  };
+  reader.readAsDataURL(file);
+}
+
+function openPadImportScreen(parsed, file) {
+  var ex = document.getElementById('pad-import-overlay');
+  if (ex) ex.remove();
+
+  // Infer timestamp
+  var inferredT = Date.now();
+  if (parsed.time_written) {
+    var parts = parsed.time_written.split(':');
+    var candidate = new Date();
+    candidate.setHours(parseInt(parts[0],10), parseInt(parts[1],10), 0, 0);
+    if (candidate.getTime() > Date.now()) candidate.setDate(candidate.getDate() - 1);
+    inferredT = candidate.getTime();
+  } else if (parsed.date_written) {
+    var dp = parsed.date_written.split('/');
+    if (dp.length === 3) {
+      var mealDefaults = {breakfast:8, lunch:12, dinner:18, snack:15};
+      var mealHr = mealDefaults[parsed.meal_label] || 12;
+      inferredT = new Date(parseInt(dp[2],10), parseInt(dp[1],10)-1, parseInt(dp[0],10), mealHr, 0, 0).getTime();
+    }
+  }
+
+  // Build datetime-local string
+  var dt2 = new Date(inferredT);
+  var tzOff = dt2.getTimezoneOffset() * 60000;
+  var dtISO  = new Date(dt2.getTime() - tzOff).toISOString().slice(0,16);
+
+  var items = (parsed.items||[]).map(function(i, idx){
+    var match = resolveScannedFood(i.name);
+    return {
+      raw: i.name,
+      grams: i.weight_g || 100,
+      carbs: match ? Math.round((match.c100||0) * (i.weight_g||100) / 100) : (i.carbs_g||0),
+      matched: !!match,
+      match: match,
+      gi: match ? (match.gi||55) : 55,
+      _gi_override: null,
+      idx: idx
+    };
+  });
+
+  var el = document.createElement('div');
+  el.id  = 'pad-import-overlay';
+  el.style.cssText = 'position:fixed;inset:0;z-index:150;background:rgba(3,5,20,0.98);' +
+    'overflow-y:auto;-webkit-overflow-scrolling:touch;' +
+    'font-family:"DM Mono",monospace;color:rgba(200,220,240,0.85);';
+
+  function renderImportScreen() {
+    var total = items.reduce(function(s,i){ return s + (parseFloat(i.carbs)||0); }, 0);
+    var s = '<div style="max-width:400px;margin:0 auto;padding:env(safe-area-inset-top,24px) 20px 80px">';
+    s += '<div style="display:flex;justify-content:space-between;align-items:center;' +
+      'padding:20px 0 20px;margin-bottom:16px">';
+    s += '<div style="font-family:\'Fraunces\',serif;font-style:italic;font-weight:200;font-size:20px;' +
+      'color:rgba(255,180,80,0.9)">pad import</div>';
+    s += '<button onclick="document.getElementById(\'pad-import-overlay\').remove()" ' +
+      'style="background:none;border:none;cursor:pointer;font-size:22px;color:rgba(200,220,240,0.4)">×</button></div>';
+
+    // Meal label
+    var labels = ['breakfast','lunch','dinner','snack'];
+    var curLabel = parsed.meal_label || 'meal';
+    s += '<div style="display:flex;gap:8px;margin-bottom:16px">';
+    labels.forEach(function(lab){
+      var active = lab === curLabel;
+      s += '<button onclick="window._padLabel=\'' + lab + '\';document.getElementById(\'pad-import-overlay\').querySelector(\'[data-section]\').innerHTML=\'\'" ' +
+        'style="flex:1;padding:7px 4px;border-radius:8px;border:1px solid ' +
+        (active ? 'rgba(255,180,80,0.5)' : 'rgba(255,255,255,0.1)') + ';' +
+        'background:' + (active ? 'rgba(255,180,80,0.1)' : 'transparent') + ';' +
+        'font-family:\'DM Mono\',monospace;font-size:9px;letter-spacing:0.5px;' +
+        'color:' + (active ? 'rgba(255,180,80,0.9)' : 'rgba(200,220,240,0.4)') + ';cursor:pointer">' +
+        lab + '</button>';
+    });
+    s += '</div>';
+
+    // Datetime
+    s += '<div style="margin-bottom:16px">';
+    s += '<div style="font-size:9px;letter-spacing:1px;text-transform:uppercase;' +
+      'color:rgba(200,220,240,0.4);margin-bottom:6px">when</div>';
+    s += '<input id="pad-import-dt" type="datetime-local" value="' + dtISO + '" ' +
+      'style="width:100%;padding:9px 12px;border-radius:8px;border:1px solid rgba(255,255,255,0.1);' +
+      'background:rgba(255,255,255,0.05);font-family:\'DM Mono\',monospace;font-size:13px;' +
+      'color:rgba(200,220,240,0.8);outline:none;box-sizing:border-box">';
+    if (parsed.bg_mmol) {
+      s += '<div style="font-size:10px;color:rgba(255,180,80,0.6);margin-top:5px">BG from pad: ' + parsed.bg_mmol + ' mmol</div>';
+    }
+    s += '</div>';
+
+    // Insulin
+    s += '<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:16px">';
+    s += '<div><div style="font-size:9px;letter-spacing:1px;text-transform:uppercase;' +
+      'color:rgba(60,130,220,0.5);margin-bottom:5px">insulin (U)</div>';
+    s += '<input id="pad-import-u" type="number" min="0" max="20" step="0.5" ' +
+      'value="' + (parsed.insulin_units||0) + '" ' +
+      'style="width:100%;padding:10px;border-radius:8px;border:1px solid rgba(60,130,220,0.2);' +
+      'background:rgba(60,130,220,0.05);font-family:\'DM Mono\',monospace;font-size:16px;' +
+      'color:rgba(60,130,220,0.9);text-align:center;outline:none"></div>';
+    s += '<div><div style="font-size:9px;letter-spacing:1px;text-transform:uppercase;' +
+      'color:rgba(200,220,240,0.4);margin-bottom:5px">wait (min)</div>';
+    s += '<input id="pad-import-wait" type="number" min="0" max="60" step="5" ' +
+      'value="' + (parsed.wait_mins||0) + '" ' +
+      'style="width:100%;padding:10px;border-radius:8px;border:1px solid rgba(255,255,255,0.1);' +
+      'background:rgba(255,255,255,0.05);font-family:\'DM Mono\',monospace;font-size:16px;' +
+      'color:rgba(200,200,200,0.9);text-align:center;outline:none"></div>';
+    s += '</div>';
+
+    // Items list
+    s += '<div style="font-size:9px;letter-spacing:1px;text-transform:uppercase;' +
+      'color:rgba(200,220,240,0.4);margin-bottom:8px">items</div>';
+    items.forEach(function(item, idx){
+      s += '<div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;' +
+        'background:rgba(255,255,255,0.03);border-radius:8px;padding:10px 12px">';
+      s += '<div style="flex:1;font-size:11px;color:' +
+        (item.matched ? 'rgba(200,220,240,0.8)' : 'rgba(255,180,80,0.7)') + '">' +
+        item.raw + (item.matched ? '' : ' ?') + '</div>';
+      s += '<input type="number" min="0" max="500" step="1" value="' + Math.round(item.carbs) + '" ' +
+        'onchange="window._padItems[' + idx + '].carbs=parseFloat(this.value)||0;window._padUpdateTotal()" ' +
+        'style="width:54px;padding:6px;border-radius:6px;border:1px solid rgba(255,140,50,0.2);' +
+        'background:rgba(255,140,50,0.05);font-family:\'DM Mono\',monospace;font-size:14px;' +
+        'color:rgba(255,140,50,0.9);text-align:center;outline:none">';
+      s += '<span style="font-size:9px;color:rgba(200,220,240,0.3)">g</span>';
+      if (!item.matched) {
+        s += '<button onclick="openAliasLinker(' + idx + ')" ' +
+          'style="padding:4px 8px;border-radius:6px;border:1px solid rgba(255,180,80,0.3);' +
+          'background:rgba(255,180,80,0.07);font-family:\'DM Mono\',monospace;font-size:9px;' +
+          'color:rgba(255,180,80,0.8);cursor:pointer">link</button>';
+        s += '<button onclick="openAddFoodFromPad(' + idx + ')" ' +
+          'style="padding:4px 8px;border-radius:6px;border:1px solid rgba(62,180,120,0.3);' +
+          'background:rgba(62,180,120,0.07);font-family:\'DM Mono\',monospace;font-size:9px;' +
+          'color:rgba(62,180,120,0.8);cursor:pointer">+ add</button>';
+      }
+      s += '<button onclick="window._padItems.splice(' + idx + ',1);window._padRerender()" ' +
+        'style="background:none;border:none;cursor:pointer;font-size:14px;' +
+        'color:rgba(200,220,240,0.3);padding:2px">×</button>';
+      s += '</div>';
+    });
+
+    // Total + commit
+    s += '<div style="display:flex;justify-content:space-between;align-items:center;' +
+      'padding:14px 0;border-top:1px solid rgba(255,255,255,0.06);margin-top:8px;margin-bottom:20px">';
+    s += '<div style="font-size:12px;color:rgba(200,220,240,0.5)">total carbs</div>';
+    s += '<div id="pad-total" style="font-size:22px;font-weight:500;color:rgba(255,140,50,0.9)">' +
+      total.toFixed(0) + 'g</div>';
+    s += '</div>';
+
+    s += '<button onclick="commitPadImport()" style="width:100%;padding:14px;border-radius:10px;' +
+      'border:1px solid rgba(255,180,80,0.3);background:rgba(255,180,80,0.08);' +
+      'font-family:\'Fraunces\',serif;font-style:italic;font-weight:200;font-size:18px;' +
+      'color:rgba(255,200,100,0.9);cursor:pointer">add to flow</button>';
+    s += '</div>';
+
+    el.innerHTML = s;
+  }
+
+  // Expose to window for onclick handlers
+  window._padItems = items;
+  window._padRerender = renderImportScreen;
+  window._padUpdateTotal = function(){
+    var tot = window._padItems.reduce(function(s,i){ return s+(parseFloat(i.carbs)||0); }, 0);
+    var el2 = document.getElementById('pad-total');
+    if (el2) el2.textContent = tot.toFixed(0) + 'g';
+  };
+
+  renderImportScreen();
+  document.body.appendChild(el);
+}
+
+function openAliasLinker(itemIdx) {
+  var item = window._padItems[itemIdx];
+  if (!item) return;
+  var all = [...(FOOD_DB||[]), ...(FOOD_LIBRARY||[])];
+
+  var el = document.createElement('div');
+  el.id  = 'alias-linker';
+  el.style.cssText = 'position:fixed;inset:0;z-index:160;background:rgba(3,5,20,0.95);' +
+    'display:flex;flex-direction:column;padding:32px 20px;font-family:"DM Mono",monospace';
+  el.innerHTML =
+    '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px">' +
+      '<div style="font-size:14px;color:rgba(255,180,80,0.9)">link "' + item.raw + '" to…</div>' +
+      '<button onclick="document.getElementById(\'alias-linker\').remove()" ' +
+        'style="background:none;border:none;cursor:pointer;font-size:22px;' +
+        'color:rgba(200,220,240,0.4)">×</button>' +
+    '</div>' +
+    '<input id="alias-search" type="text" placeholder="search food library…" ' +
+      'style="width:100%;padding:10px 12px;border-radius:8px;border:1px solid rgba(255,255,255,0.1);' +
+      'background:rgba(255,255,255,0.05);font-family:\'DM Mono\',monospace;font-size:13px;' +
+      'color:rgba(200,220,240,0.8);outline:none;box-sizing:border-box;margin-bottom:12px">' +
+    '<div id="alias-results" style="flex:1;overflow-y:auto"></div>';
+
+  function renderAliasResults(q) {
+    var q2 = q.toLowerCase();
+    var filtered = q2 ? all.filter(function(f){ return f.name.toLowerCase().includes(q2); }) : all.slice(0,20);
+    var res = document.getElementById('alias-results');
+    if (!res) return;
+    res.innerHTML = filtered.map(function(f){
+      return '<div onclick="applyAlias(' + itemIdx + ',\'' + encodeURIComponent(f.name) + '\')" ' +
+        'style="padding:12px 14px;border-radius:8px;margin-bottom:4px;cursor:pointer;' +
+        'background:rgba(255,255,255,0.03);color:rgba(200,220,240,0.8);font-size:12px">' +
+        f.name + '<span style="float:right;color:rgba(200,220,240,0.4)">' + (f.c100||0) + 'g/100g</span></div>';
+    }).join('');
+  }
+
+  document.body.appendChild(el);
+  var inp = document.getElementById('alias-search');
+  inp.addEventListener('input', function(){ renderAliasResults(inp.value); });
+  renderAliasResults('');
+}
+
+function applyAlias(itemIdx, encodedName) {
+  var name = decodeURIComponent(encodedName);
+  var item = window._padItems[itemIdx];
+  if (!item) return;
+  // Save alias
+  FOOD_ALIASES[item.raw.toLowerCase().trim()] = name;
+  saveAliases();
+  // Update item
+  var match = resolveScannedFood(name);
+  if (match) {
+    item.matched = true;
+    item.match   = match;
+    item.carbs   = Math.round((match.c100||0) * item.grams / 100);
+    item.gi      = match.gi || 55;
+    item._gi_override = item.gi;
+  }
+  var linker = document.getElementById('alias-linker');
+  if (linker) linker.remove();
+  window._padRerender();
+  showToast('"' + item.raw + '" → ' + name + ' saved');
+}
+
+function commitPadImport() {
+  var items    = window._padItems || [];
+  var dtInp    = document.getElementById('pad-import-dt');
+  var uInp     = document.getElementById('pad-import-u');
+  var waitInp  = document.getElementById('pad-import-wait');
+
+  var t        = dtInp ? new Date(dtInp.value).getTime() : Date.now();
+  var u        = parseFloat(uInp && uInp.value) || 0;
+  var waitMins = parseFloat(waitInp && waitInp.value) || 0;
+  var totalCarbs = items.reduce(function(s,i){ return s+(parseFloat(i.carbs)||0); }, 0);
+  var carbT    = t + waitMins * 60000;
+
+  var foodItems = items.map(function(i){
+    var gi = i._gi_override || i.gi || 55;
+    return { name: i.raw, carbs: parseFloat(i.carbs)||0, gi: gi, g: i.grams, source: 'pad' };
+  });
+  var avgGI = foodItems.length && totalCarbs > 0
+    ? foodItems.reduce(function(s,i){ return s + (i.gi||55) * (i.carbs||0); }, 0) / totalCarbs
+    : 55;
+
+  if (u > 0) {
+    SESSION.push({t:t, c:0, u:u, source:'pad'});
+    BOLUS_EVENTS.push({t:t, c:0, u:u, source:'pad'});
+    LOGGED_EVENTS.push({t:t, c:0, u:u, note:'bolus', source:'pad', logged_by:_thisPersonId||'unknown', local:true});
+    topUpIOB(u);
+  }
+  if (totalCarbs > 0) {
+    SESSION.push({t:carbT, c:totalCarbs, u:0, gi:avgGI, items:foodItems, source:'pad'});
+    BOLUS_EVENTS.push({t:carbT, c:totalCarbs, u:0, gi:avgGI, items:foodItems, source:'pad'});
+    LOGGED_EVENTS.push({t:carbT, c:totalCarbs, u:0, gi:avgGI, items:foodItems, note:'carbs', source:'pad',
+      logged_by:_thisPersonId||'unknown', local:true});
+    topUpCOB(totalCarbs);
+  }
+
+  try { localStorage.setItem('river_session',JSON.stringify(SESSION)); } catch(e) {}
+  try { localStorage.setItem('river_logged',JSON.stringify(LOGGED_EVENTS)); } catch(e) {}
+  syncAfterLog();
+  _ptCache = null;
+
+  var overlay = document.getElementById('pad-import-overlay');
+  if (overlay) overlay.remove();
+
+  // Save to meal history
+  if (foodItems.length) {
+    MEAL_HISTORY.unshift({
+      name: 'Pad import · ' + new Date(t).toLocaleDateString('en-GB',{weekday:'short',day:'numeric',month:'short'}),
+      totalCarbs: Math.round(totalCarbs),
+      items: foodItems,
+      t: carbT,
+      u: u,
+      logged_by: _thisPersonId||'unknown',
+      source: 'pad'
+    });
+    saveMealHistory();
+  }
+
+  showToast(totalCarbs.toFixed(0) + 'g carbs from pad\nadded to the flow');
+}
+
+// ── Load aliases on startup ──────────────────────────────────────────────
+loadAliasesFromSupabase();
