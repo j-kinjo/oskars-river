@@ -3101,6 +3101,22 @@ function _spawnCurveBubbles(pt) {
   var isPeak = pt.type === 'peak';
   var count  = Math.max(3, Math.round(pt.magnitude * 14));
 
+  // ── Divergence model ───────────────────────────────────────────────
+  // How much of the BG at this pt is unexplained by COB+IOB forces?
+  // Estimate predicted BG: neutral baseline + COB lift - IOB pull
+  // COB contribution: each gram lifts ~0.05 mmol; IOB: each unit pulls ~1.5 mmol
+  var activeCOB = pt.cob || 0;
+  var activeIOB = pt.iob || 0;
+  var neutralBG   = 6.0; // mmol baseline for model
+  var predictedBG = neutralBG + activeCOB * 0.05 - activeIOB * 1.5;
+  predictedBG     = Math.max(2.5, Math.min(18, predictedBG));
+  var divergence  = Math.abs(pt.bg - predictedBG);
+  // Dark (unknown force) blobs only spawn when reality significantly diverges from model
+  var darkCount = 0;
+  if (divergence > 1.2) {
+    darkCount = Math.min(4, Math.floor((divergence - 1.2) * 2));
+  }
+
   // ── Explanation model ─────────────────────────────────────────────────
   // How much of this peak/trough is explained by active COB or IOB?
   // cobExplained: 0–1 fraction of the move accounted for by active carbs
@@ -3168,9 +3184,8 @@ function _spawnCurveBubbles(pt) {
     });
   }
 
-  // ── Spawn unknown bubbles (silver) ─────────────────────────────────────
+  // ── Spawn silver unknown bubbles (unexplained fraction of explained pool) ──
   for (var j = 0; j < unknownCount; j++) {
-    // Unknown force — no preferred side, cluster around the line
     var oyUnk = (Math.random() - 0.5) * 28;
     _curveBubbles.push({
       ptType: pt.type, ptX: pt.x, ptY: pt.y,
@@ -3181,6 +3196,25 @@ function _spawnCurveBubbles(pt) {
       isIOB: false, isDark: false, isUnknown: true, alpha: 0,
       phase: Math.random() * Math.PI * 2,
       lavaPhase: Math.random() * Math.PI * 2, lavaSpeed: 0.005 + Math.random() * 0.008,
+      ghosts: [], age: 0,
+    });
+  }
+
+  // ── Dark blobs — divergence-gated unnamed force ────────────────────────
+  // Only spawn when actual BG significantly diverges from COB+IOB model (>1.2 mmol).
+  // These are the swim, the stress, the growth hormone — the things with no name yet.
+  var COL_DARK = [55, 48, 65];
+  for (var k = 0; k < darkCount; k++) {
+    var oyDk = (Math.random() - 0.5) * 40;
+    _curveBubbles.push({
+      ptType: pt.type, ptX: pt.x, ptY: pt.y,
+      ox: (Math.random() - 0.5) * 44, oy: oyDk,
+      x: pt.x + (Math.random() - 0.5) * 44, y: pt.y + oyDk,
+      vx: (Math.random() - 0.5) * 0.05, vy: (Math.random() - 0.5) * 0.05,
+      r: 3.0 + Math.random() * 3.5, col: COL_DARK,
+      isIOB: false, isDark: true, isUnknown: false, alpha: 0,
+      phase: Math.random() * Math.PI * 2,
+      lavaPhase: Math.random() * Math.PI * 2, lavaSpeed: 0.003 + Math.random() * 0.005,
       ghosts: [], age: 0,
     });
   }
@@ -3261,9 +3295,10 @@ function _tickCurveBubbles() {
     // Target: orbital offset + lava motion around anchor
     var targetX = anchorX + b.ox + lavaWob;
     var rawTargetY = anchorY + b.oy + lavaLift * (b.ptType === 'peak' ? -1 : 1);
-    // IOB stays above line (negative offset), carbs stay below (positive offset)
+    // IOB stays above line — hard max 12px above anchor (gravity drops hug the line)
+    // Carbs stay below line (positive offset = lower on canvas = buoyancy up visually)
     var targetY = b.isIOB
-      ? Math.min(anchorY - 1, rawTargetY)
+      ? Math.max(anchorY - 12, Math.min(anchorY - 2 - lavaLift * 0.3, rawTargetY))
       : (b.isDark ? rawTargetY : Math.max(anchorY + 1, rawTargetY));
 
     // Spring toward target
@@ -3531,6 +3566,16 @@ function loadSavedMeal(idx) {
 function setTimeNow() {
   var now = new Date();
   var local = new Date(now.getTime() - now.getTimezoneOffset()*60000);
+  var val = local.toISOString().slice(0,16);
+  _entryTimeVal = val;
+  var el = document.getElementById('in-time');
+  if (el) el.value = val;
+}
+
+// Set sheet time from an explicit timestamp — used when back-logging at a historical position
+function setSheetTime(t) {
+  var d = new Date(t);
+  var local = new Date(d.getTime() - d.getTimezoneOffset()*60000);
   var val = local.toISOString().slice(0,16);
   _entryTimeVal = val;
   var el = document.getElementById('in-time');
@@ -3935,7 +3980,12 @@ function openKitchen() {
   renderSheet();
   document.getElementById('sheet').classList.add('open');
   document.getElementById('overlay').classList.add('open');
-  setTimeNow();
+  var liveRef = HISTORY_RAW.length > 0 ? HISTORY_RAW[HISTORY_RAW.length-1].t : Date.now();
+  if (liveRef - viewTime > 2 * 60000) {
+    setSheetTime(viewTime);
+  } else {
+    setTimeNow();
+  }
 }
 
 function totalPlateCarbs() {
@@ -4716,7 +4766,13 @@ function openSheet() {
     s.classList.add('open');
     requestAnimationFrame(function(){ s.style.opacity = '1'; });
   }
-  setTimeNow();
+  // If scrubbed back more than 2 min behind live, pre-fill sheet time from orb position
+  var liveRef = HISTORY_RAW.length > 0 ? HISTORY_RAW[HISTORY_RAW.length-1].t : Date.now();
+  if (liveRef - viewTime > 2 * 60000) {
+    setSheetTime(viewTime);
+  } else {
+    setTimeNow();
+  }
 }
 
 // Long-press food button → kitchen mode; tap → quick log
