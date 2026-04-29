@@ -264,7 +264,6 @@ async function syncNow(silent) {
 function startSyncPolling() {
   if (!SUPABASE_READY) return;
   syncNow(true); // immediate on startup
-  loadAliasesFromSupabase();
   _syncTimer = setInterval(function(){ syncNow(true); }, 5 * 60000);
 }
 
@@ -393,39 +392,39 @@ function deriveUITokens(bgHex) {
     panelBorder  = 'rgba(255,255,255,0.07)';
     inputBg      = 'rgba(255,255,255,0.05)';
     inputBorder  = 'rgba(255,255,255,0.10)';
-    textPrimary  = 'rgba(200,220,240,0.92)';
-    textSecondary= 'rgba(180,200,220,0.78)';
-    textMuted    = 'rgba(160,185,210,0.62)';
-    textDim      = 'rgba(140,160,180,0.35)';
+    textPrimary  = 'rgba(200,220,240,0.88)';
+    textSecondary= 'rgba(180,200,220,0.65)';
+    textMuted    = 'rgba(160,180,200,0.38)';
+    textDim      = 'rgba(140,160,180,0.22)';
     swatchBorder = 'rgba(255,255,255,0.14)';
     divider      = 'rgba(255,255,255,0.06)';
-    closeBtnCol  = 'rgba(255,255,255,0.35)';
+    closeBtnCol  = 'rgba(255,255,255,0.22)';
   } else if (mid) {
     // Mid-tone: use dark-on-light for text, slightly opaque panel
     panelBg      = 'rgba(240,238,232,0.96)';
     panelBorder  = 'rgba(0,0,0,0.10)';
     inputBg      = 'rgba(0,0,0,0.06)';
     inputBorder  = 'rgba(0,0,0,0.14)';
-    textPrimary  = 'rgba(20,24,32,0.92)';
-    textSecondary= 'rgba(30,34,44,0.78)';
-    textMuted    = 'rgba(40,44,54,0.62)';
-    textDim      = 'rgba(40,44,54,0.38)';
+    textPrimary  = 'rgba(20,24,32,0.90)';
+    textSecondary= 'rgba(30,34,44,0.65)';
+    textMuted    = 'rgba(40,44,54,0.42)';
+    textDim      = 'rgba(40,44,54,0.25)';
     swatchBorder = 'rgba(0,0,0,0.18)';
     divider      = 'rgba(0,0,0,0.08)';
-    closeBtnCol  = 'rgba(0,0,0,0.40)';
+    closeBtnCol  = 'rgba(0,0,0,0.30)';
   } else {
     // Light bg: full dark-on-light
     panelBg      = 'rgba(248,246,240,0.98)';
     panelBorder  = 'rgba(0,0,0,0.08)';
     inputBg      = 'rgba(0,0,0,0.05)';
     inputBorder  = 'rgba(0,0,0,0.12)';
-    textPrimary  = 'rgba(16,20,30,0.94)';
-    textSecondary= 'rgba(24,28,40,0.80)';
-    textMuted    = 'rgba(32,36,50,0.64)';
-    textDim      = 'rgba(32,36,50,0.40)';
+    textPrimary  = 'rgba(16,20,30,0.92)';
+    textSecondary= 'rgba(24,28,40,0.68)';
+    textMuted    = 'rgba(32,36,50,0.44)';
+    textDim      = 'rgba(32,36,50,0.26)';
     swatchBorder = 'rgba(0,0,0,0.16)';
     divider      = 'rgba(0,0,0,0.07)';
-    closeBtnCol  = 'rgba(0,0,0,0.38)';
+    closeBtnCol  = 'rgba(0,0,0,0.28)';
   }
 
   return {
@@ -857,7 +856,7 @@ function drawBGTrail(pal) {
     CX.font        = "300 10px 'Fraunces',serif"; CX.textAlign = 'center';
     CX.fillText(last.bg.toFixed(1), last.x, last.y - 9);
     CX.globalAlpha = 0.3;
-    CX.font        = "300 10px 'DM Mono',monospace";
+    CX.font        = "300 8px 'DM Mono',monospace";
     CX.fillText('+' + last.mins + 'min', last.x, last.y + 13);
   }
 
@@ -1207,7 +1206,7 @@ function _drawCOBReservoir() {
         if (labelH > maxD * 0.15) { // only label if bell is meaningfully tall here
           CX.globalAlpha = remaining * 0.65;
           CX.fillStyle   = 'rgba('+rv+','+gv+','+bv+',1)';
-          CX.font        = "300 10px 'DM Mono',monospace";
+          CX.font        = "300 8px 'DM Mono',monospace";
           CX.textAlign   = 'center';
           CX.fillText(food.name.slice(0,14)+' '+food.carbs.toFixed(0)+'g', labelX, H-labelH-6);
           CX.globalAlpha = 1;
@@ -1266,7 +1265,7 @@ function _drawIOBReservoir() {
     if (peakX > 30 && peakX < W-30 && maxD > 10) {
       CX.globalAlpha = remaining * 0.6;
       CX.fillStyle   = 'rgba('+rv+','+gv+','+bv+',1)';
-      CX.font        = "300 10px 'DM Mono',monospace";
+      CX.font        = "300 8px 'DM Mono',monospace";
       CX.textAlign   = 'center';
       CX.fillText(bolus.u.toFixed(1)+'U', peakX, maxD+10);
       CX.globalAlpha = 1;
@@ -2220,7 +2219,7 @@ function drawBolusMarkers(pal) {
       CX.textAlign   = 'center';
       CX.fillText(lbl, x, cardY + 12);
       if (who) {
-        CX.globalAlpha = 0.7; CX.font = "400 10px 'DM Mono',monospace";
+        CX.globalAlpha = 0.7; CX.font = "400 8px 'DM Mono',monospace";
         CX.fillText(who, x + lw/2 - 5, cardY + 1);
         CX.globalAlpha = 1;
       }
@@ -2437,7 +2436,7 @@ function drawTimeLabels(pal) {
   );
   // Tiny "now" label beneath time
   CX.globalAlpha = 0.22;
-  CX.font        = "300 10px 'DM Mono',monospace";
+  CX.font        = "300 8px 'DM Mono',monospace";
   CX.fillText('now', nowX, H - 35);
   CX.globalAlpha=0.28;CX.fillStyle='rgba(200,220,240,1)';
   CX.font="300 9px 'DM Mono',monospace";CX.textAlign='right';
@@ -3682,51 +3681,6 @@ function saveFoodLibrary() {
   try { localStorage.setItem('river_food_lib', JSON.stringify(FOOD_LIBRARY)); } catch(e) {}
 }
 
-// ── FOOD ALIASES — maps scanned/handwritten names to canonical library names ──
-var FOOD_ALIASES = (function() {
-  try { return JSON.parse(localStorage.getItem('river_food_aliases') || '{}'); } catch(e) { return {}; }
-})();
-
-function saveFoodAliases() {
-  try { localStorage.setItem('river_food_aliases', JSON.stringify(FOOD_ALIASES)); } catch(e) {}
-  if (SUPABASE_READY) {
-    var payload = { t: -1, c: 0, u: 0, note: 'aliases', items: [{ aliases: FOOD_ALIASES }] };
-    _sbFetch('events?note=eq.aliases', { method: 'DELETE', prefer: 'return=minimal' })
-      .then(function() { return _sbFetch('events', { method: 'POST', prefer: 'return=minimal', body: [payload] }); })
-      .catch(function(e) { console.warn('[aliases] Supabase sync failed:', e.message); });
-  }
-}
-
-function addFoodAlias(scanned, canonical) {
-  if (!scanned || !canonical || scanned === canonical) return;
-  FOOD_ALIASES[scanned.toLowerCase().trim()] = canonical.toLowerCase().trim();
-  saveFoodAliases();
-}
-
-function resolveScannedFood(name) {
-  if (!name) return null;
-  var key = name.toLowerCase().trim();
-  var resolved = FOOD_ALIASES[key] || key;
-  var all = FOOD_DB.concat(FOOD_LIBRARY);
-  var exact = all.find(function(f){ return f.name.toLowerCase() === resolved; });
-  if (exact) return exact;
-  var partial = all.find(function(f){ return f.name.toLowerCase().includes(resolved) || resolved.includes(f.name.toLowerCase()); });
-  return partial || null;
-}
-
-function loadAliasesFromSupabase() {
-  if (!SUPABASE_READY) return;
-  _sbFetch('events?note=eq.aliases&limit=1', { method: 'GET' })
-    .then(function(rows) {
-      if (!Array.isArray(rows) || rows.length === 0) return;
-      var row = rows[0];
-      if (row.items && row.items[0] && row.items[0].aliases) {
-        FOOD_ALIASES = Object.assign({}, row.items[0].aliases, FOOD_ALIASES);
-        saveFoodAliases();
-      }
-    }).catch(function(e){ console.warn('[aliases] load failed:', e.message); });
-}
-
 // ── MEAL HISTORY ──────────────────────────────────────────────────────
 var MEAL_HISTORY = (function() {
   try { return JSON.parse(localStorage.getItem('river_meal_hist') || '[]'); } catch(e) { return []; }
@@ -3806,7 +3760,7 @@ function renderPeopleScreen(el) {
 
   // This device
   var me = getThisPerson();
-  html += '<div style="font-family:\'DM Mono\',monospace;font-size:10px;letter-spacing:1px;text-transform:uppercase;color:var(--rv-text-dim);margin-bottom:10px">this device</div>';
+  html += '<div style="font-family:\'DM Mono\',monospace;font-size:8px;letter-spacing:1px;text-transform:uppercase;color:var(--rv-text-dim);margin-bottom:10px">this device</div>';
   if (me) {
     html += '<div style="display:flex;align-items:center;gap:12px;padding:14px 16px;border-radius:12px;background:var(--rv-input-bg);border:1px solid var(--rv-panel-border);margin-bottom:20px">';
     html += '<div style="width:40px;height:40px;border-radius:50%;background:'+me.colour+';display:flex;align-items:center;justify-content:center;font-family:\'Fraunces\',serif;font-size:18px;color:#fff;font-weight:200">'+me.name.slice(0,1).toUpperCase()+'</div>';
@@ -3819,7 +3773,7 @@ function renderPeopleScreen(el) {
   }
 
   // All people
-  html += '<div style="font-family:\'DM Mono\',monospace;font-size:10px;letter-spacing:1px;text-transform:uppercase;color:var(--rv-text-dim);margin-bottom:10px">the team</div>';
+  html += '<div style="font-family:\'DM Mono\',monospace;font-size:8px;letter-spacing:1px;text-transform:uppercase;color:var(--rv-text-dim);margin-bottom:10px">the team</div>';
   html += '<div style="display:flex;flex-direction:column;gap:8px;margin-bottom:20px">';
 
   FLOW_PEOPLE.forEach(function(person) {
@@ -3840,7 +3794,7 @@ function renderPeopleScreen(el) {
 
   // Add person form
   html += '<div style="padding:16px;border-radius:12px;background:var(--rv-input-bg);border:1px solid var(--rv-panel-border)">';
-  html += '<div style="font-family:\'DM Mono\',monospace;font-size:10px;letter-spacing:1px;text-transform:uppercase;color:var(--rv-text-dim);margin-bottom:12px">add someone</div>';
+  html += '<div style="font-family:\'DM Mono\',monospace;font-size:8px;letter-spacing:1px;text-transform:uppercase;color:var(--rv-text-dim);margin-bottom:12px">add someone</div>';
   html += '<div style="display:flex;gap:8px;margin-bottom:10px">';
   html += '<input id="new-person-name" type="text" placeholder="name" autocorrect="off" style="flex:1;padding:10px 12px;border-radius:8px;border:1px solid var(--rv-panel-border);background:var(--rv-input-bg);font-family:\'DM Mono\',monospace;font-size:13px;color:var(--rv-text-secondary);outline:none">';
   html += '<select id="new-person-role" style="padding:10px;border-radius:8px;border:1px solid var(--rv-panel-border);background:var(--rv-input-bg);font-family:\'DM Mono\',monospace;font-size:11px;color:var(--rv-text-secondary);outline:none">';
@@ -4075,7 +4029,7 @@ function renderKitchen() {
   // Recipe chips
   var recipeChips = '';
   if (RECIPES.length > 0) {
-    recipeChips = '<div style="margin-bottom:12px"><div style="font-family:\'DM Mono\',monospace;font-size:10px;letter-spacing:1px;text-transform:uppercase;color:var(--rv-text-dim);margin-bottom:6px">saved recipes</div>' +
+    recipeChips = '<div style="margin-bottom:12px"><div style="font-family:\'DM Mono\',monospace;font-size:8px;letter-spacing:1px;text-transform:uppercase;color:var(--rv-text-dim);margin-bottom:6px">saved recipes</div>' +
       '<div style="display:flex;flex-wrap:wrap;gap:6px">' +
       RECIPES.map(function(r){
         var ratio = getLatestRatio(r);
@@ -4104,7 +4058,7 @@ function renderKitchen() {
           // Carb total prominent
           '<div style="text-align:center;margin-bottom:12px">' +
             '<div style="font-family:\'Fraunces\',serif;font-weight:200;font-size:48px;color:rgba(255,160,60,0.95);letter-spacing:-2px;line-height:1">' + total.toFixed(0) + '</div>' +
-            '<div style="font-family:\'DM Mono\',monospace;font-size:10px;letter-spacing:1.5px;text-transform:uppercase;color:rgba(255,160,70,0.7)">grams carbs · GI ' + avgGI.toFixed(0) + '</div>' +
+            '<div style="font-family:\'DM Mono\',monospace;font-size:8px;letter-spacing:1.5px;text-transform:uppercase;color:rgba(255,160,70,0.7)">grams carbs · GI ' + avgGI.toFixed(0) + '</div>' +
           '</div>' +
           // Wait time
           '<div style="display:flex;align-items:center;gap:8px;margin-bottom:12px;padding:8px 10px;border-radius:8px;background:var(--rv-input-bg)">' +
@@ -4317,7 +4271,7 @@ function renderRecipeManager(el) {
       if(instances.length>0){
         html+='<div style="margin-top:8px;display:flex;flex-wrap:wrap;gap:4px">';
         instances.slice(-3).reverse().forEach(function(inst){
-          html+='<div style="font-family:\'DM Mono\',monospace;font-size:10px;color:var(--rv-text-dim);padding:3px 7px;border-radius:5px;background:var(--rv-input-bg)">'+
+          html+='<div style="font-family:\'DM Mono\',monospace;font-size:8px;color:var(--rv-text-dim);padding:3px 7px;border-radius:5px;background:var(--rv-input-bg)">'+
             new Date(inst.date).toLocaleDateString('en-GB',{day:'numeric',month:'short'})+' · '+inst.ratio.toFixed(3)+'g/g</div>';
         });
         html+='</div>';
@@ -4350,10 +4304,10 @@ function showRecipeForm(recipe) {
   html+='<div style="font-family:\'Fraunces\',serif;font-style:italic;font-weight:200;font-size:22px;color:rgba(200,180,80,0.9)">'+(isNew?'new recipe':'edit recipe')+'</div>';
   html+='</div>';
 
-  html+='<div style="margin-bottom:14px"><div style="font-family:\'DM Mono\',monospace;font-size:10px;letter-spacing:1px;text-transform:uppercase;color:var(--rv-text-muted);margin-bottom:5px">recipe name</div>';
+  html+='<div style="margin-bottom:14px"><div style="font-family:\'DM Mono\',monospace;font-size:8px;letter-spacing:1px;text-transform:uppercase;color:var(--rv-text-muted);margin-bottom:5px">recipe name</div>';
   html+='<input id="recipe-name" type="text" value="'+(recipe?recipe.name:'')+'" placeholder="e.g. Kaarina\'s Macaroni Laatikko" autocorrect="off" style="width:100%;padding:11px 14px;border-radius:9px;border:1px solid rgba(200,180,60,0.2);background:rgba(200,180,60,0.05);font-family:\'DM Mono\',monospace;font-size:13px;color:var(--rv-text-secondary);outline:none;box-sizing:border-box"></div>';
 
-  html+='<div style="margin-bottom:14px"><div style="font-family:\'DM Mono\',monospace;font-size:10px;letter-spacing:1px;text-transform:uppercase;color:var(--rv-text-muted);margin-bottom:6px">carb ingredients <span style="opacity:0.5">(skip zero-carb items like meat, eggs)</span></div>';
+  html+='<div style="margin-bottom:14px"><div style="font-family:\'DM Mono\',monospace;font-size:8px;letter-spacing:1px;text-transform:uppercase;color:var(--rv-text-muted);margin-bottom:6px">carb ingredients <span style="opacity:0.5">(skip zero-carb items like meat, eggs)</span></div>';
   html+='<div id="recipe-ings">';
   ings.forEach(function(ing,i){
     html+=recipeIngRow(i,ing.name,ing.c100,ing.gi);
@@ -4474,7 +4428,7 @@ function cookRecipe(id) {
   html+='<div id="cook-preview" style="padding:12px;border-radius:10px;background:var(--rv-input-bg);border:1px solid var(--rv-panel-border);margin-bottom:14px;font-family:\'DM Mono\',monospace;font-size:10px;color:var(--rv-text-muted)">enter weights above to see carb total</div>';
 
   // Batch weight
-  html+='<div style="margin-bottom:16px"><div style="font-family:\'DM Mono\',monospace;font-size:10px;letter-spacing:1px;text-transform:uppercase;color:var(--rv-text-muted);margin-bottom:6px">finished dish weight (g)</div>';
+  html+='<div style="margin-bottom:16px"><div style="font-family:\'DM Mono\',monospace;font-size:8px;letter-spacing:1px;text-transform:uppercase;color:var(--rv-text-muted);margin-bottom:6px">finished dish weight (g)</div>';
   html+='<input id="cook-batch-weight" type="number" inputmode="decimal" placeholder="weigh the whole dish" min="0" max="10000" step="1" oninput="updateCookPreview(\''+recipe.id+'\')" style="width:100%;padding:11px 14px;border-radius:9px;border:1px solid var(--rv-panel-border);background:var(--rv-input-bg);font-family:\'DM Mono\',monospace;font-size:16px;color:var(--rv-text-secondary);outline:none;box-sizing:border-box">';
   html+='</div>';
 
@@ -4606,7 +4560,7 @@ function buildKitchenWhisper(avgGI, totalCarbs) {
   }
 
   return '<div style="padding:8px 12px;border-radius:8px;background:var(--rv-input-bg);border-left:2px solid '+col+';margin-bottom:12px">' +
-    '<div style="font-family:\'DM Mono\',monospace;font-size:10px;letter-spacing:1px;text-transform:uppercase;color:var(--rv-text-dim);margin-bottom:3px">the river remembers</div>' +
+    '<div style="font-family:\'DM Mono\',monospace;font-size:8px;letter-spacing:1px;text-transform:uppercase;color:var(--rv-text-dim);margin-bottom:3px">the river remembers</div>' +
     '<div style="font-family:\'DM Mono\',monospace;font-size:10px;color:'+col+'">'+msg+'</div>' +
   '</div>';
 }
@@ -4843,15 +4797,15 @@ function renderSheet() {
     return '<div style="padding:6px 0;border-bottom:1px solid rgba(255,255,255,0.06)">' +
       '<div style="display:flex;align-items:center;gap:6px;margin-bottom:2px">' +
       '<div style="flex:1;font-family:\'DM Mono\',monospace;font-size:11px;color:rgba(220,235,250,0.9)">' + item.food.name + '</div>' +
-      (gi_i ? '<span style="font-family:\'DM Mono\',monospace;font-size:10px;color:'+giC+'">GI '+gi_i+'</span>' : '') +
+      (gi_i ? '<span style="font-family:\'DM Mono\',monospace;font-size:8px;color:'+giC+'">GI '+gi_i+'</span>' : '') +
       '</div>' +
       '<div style="display:flex;align-items:center;gap:4px">' +
-      '<span style="font-family:\'DM Mono\',monospace;font-size:10px;color:rgba(180,200,220,0.5)">g</span>' +
+      '<span style="font-family:\'DM Mono\',monospace;font-size:8px;color:rgba(180,200,220,0.5)">g</span>' +
       '<input type="number" value="' + item.grams + '" min="1" max="1000" step="1" ' +
         'style="width:54px;padding:4px 6px;border-radius:6px;border:1px solid rgba(255,255,255,0.14);' +
         'background:var(--rv-input-bg);font-family:\'DM Mono\',monospace;font-size:11px;color:rgba(220,235,250,0.9);text-align:right" ' +
         'onchange="updateItemGrams(' + idx + ',\'g\',this.value)">' +
-      '<span style="font-family:\'DM Mono\',monospace;font-size:10px;color:rgba(62,200,140,0.7)">carbs</span>' +
+      '<span style="font-family:\'DM Mono\',monospace;font-size:8px;color:rgba(62,200,140,0.7)">carbs</span>' +
       '<input type="number" value="' + item.carbs.toFixed(1) + '" min="0" max="200" step="0.5" ' +
         'style="width:50px;padding:4px 6px;border-radius:6px;border:1px solid rgba(62,180,120,0.2);' +
         'background:rgba(62,180,120,0.05);font-family:\'DM Mono\',monospace;font-size:11px;color:rgba(62,180,120,0.9);text-align:right" ' +
@@ -4900,7 +4854,7 @@ function renderSheet() {
         // Now dot
         '<circle cx="0" cy="' + (H - ((bg-minBG)/range)*(H-6) - 3).toFixed(0) + '" r="3" fill="rgba(62,180,120,0.9)"/>' +
       '</svg>' +
-      '<div style="display:flex;justify-content:space-between;font-family:\'DM Mono\',monospace;font-size:10px;color:rgba(180,200,220,0.35);margin-top:2px">' +
+      '<div style="display:flex;justify-content:space-between;font-family:\'DM Mono\',monospace;font-size:8px;color:rgba(180,200,220,0.35);margin-top:2px">' +
         '<span>now</span><span>+1h</span><span>+2h</span><span>+3h</span>' +
       '</div>' +
     '</div>' +
@@ -4930,7 +4884,7 @@ function renderSheet() {
           '<div style="font-family:\'Fraunces\',serif;font-weight:200;font-size:42px;' +
             'color:rgba(255,140,50,0.9);letter-spacing:-1px;line-height:1">' +
             totalCarbs.toFixed(0) + '</div>' +
-          '<div style="font-family:\'DM Mono\',monospace;font-size:10px;letter-spacing:1.5px;' +
+          '<div style="font-family:\'DM Mono\',monospace;font-size:8px;letter-spacing:1.5px;' +
             'text-transform:uppercase;color:rgba(255,140,50,0.4)">grams carbs · GI ' +
             avgGI.toFixed(0) + ' ' + giLabel + '</div>' +
         '</div>' +
@@ -4940,7 +4894,7 @@ function renderSheet() {
           'padding:8px 10px;border-radius:8px;background:var(--rv-input-bg);' +
           'border:1px solid var(--rv-panel-border)">' +
           '<div style="flex:1">' +
-            '<div style="font-family:\'DM Mono\',monospace;font-size:10px;letter-spacing:1px;' +
+            '<div style="font-family:\'DM Mono\',monospace;font-size:8px;letter-spacing:1px;' +
               'text-transform:uppercase;color:rgba(180,200,220,0.6);margin-bottom:2px">bolus wait</div>' +
             '<div style="font-family:\'Fraunces\',serif;font-style:italic;font-weight:200;' +
               'font-size:14px;color:rgba(200,220,240,0.8)">eat ~' + eatStr + ' (+' + eatWait + 'min)</div>' +
@@ -4961,7 +4915,7 @@ function renderSheet() {
         '</div>' +
 
         // Bolus input
-        '<div style="font-family:\'DM Mono\',monospace;font-size:11px;color:rgba(180,200,220,0.78);' +
+        '<div style="font-family:\'DM Mono\',monospace;font-size:9px;color:rgba(180,200,220,0.6);' +
           'letter-spacing:1px;text-transform:uppercase;margin-bottom:8px">insulin given</div>' +
         '<div style="display:flex;align-items:center;gap:10px;margin-bottom:6px">' +
           '<input id="in-bolus" type="number" inputmode="decimal" placeholder="—" value="' + (_bolusVal||'') + '" ' +
@@ -5007,7 +4961,7 @@ function renderSheet() {
       '</span></div>' +
       '<span style="font-family:\'DM Mono\',monospace;font-size:9px;color:rgba(180,200,220,0.5);letter-spacing:1px;text-transform:uppercase">when</span>' +
       '<input id="in-time" type="datetime-local" style="flex:1;padding:8px 10px;border-radius:8px;border:1px solid rgba(255,255,255,0.15);background:var(--rv-input-bg);font-family:\'DM Mono\',monospace;font-size:12px;color:rgba(200,220,240,0.8);outline:none" onchange="onTimeChange(this.value)">' +
-      '<button onclick="setTimeNow()" style="padding:6px 10px;border-radius:7px;border:1px solid var(--rv-panel-border);background:var(--rv-input-bg);font-family:\'DM Mono\',monospace;font-size:11px;color:rgba(180,200,220,0.78);cursor:pointer">now</button>' +
+      '<button onclick="setTimeNow()" style="padding:6px 10px;border-radius:7px;border:1px solid var(--rv-panel-border);background:var(--rv-input-bg);font-family:\'DM Mono\',monospace;font-size:9px;color:rgba(180,200,220,0.6);cursor:pointer">now</button>' +
     '</div>' +
 
     // Food search
@@ -5030,18 +4984,13 @@ function renderSheet() {
           '<svg viewBox="0 0 16 16" width="13" height="13" fill="none"><rect x="1" y="3.5" width="14" height="10" rx="2" stroke="currentColor" stroke-width="1.3"/><circle cx="8" cy="8.5" r="2.5" stroke="currentColor" stroke-width="1.3"/><path d="M5.5 3.5L6.5 1.5h3l1 2" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/></svg>' +
           'photo / label' +
         '</button>' +
-        '<button onclick="openScanPad()" style="flex:1;display:flex;align-items:center;justify-content:center;gap:6px;padding:9px 10px;border-radius:9px;border:1px solid rgba(255,200,80,0.25);background:rgba(255,200,80,0.05);font-family:\'DM Mono\',monospace;font-size:10px;color:rgba(255,200,120,0.7);cursor:pointer;touch-action:manipulation;transition:all .2s" title="scan handwritten meal notes">' +
-          '<svg viewBox="0 0 16 16" width="13" height="13" fill="none"><rect x="2" y="1" width="12" height="14" rx="2" stroke="currentColor" stroke-width="1.3"/><line x1="5" y1="5" x2="11" y2="5" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/><line x1="5" y1="8" x2="11" y2="8" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/><line x1="5" y1="11" x2="8" y2="11" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/></svg>' +
-          'scan pad' +
-        '</button>' +
       '</div>' +
       '<input type="file" id="food-photo-input" accept="image/*" capture="environment" style="display:none" onchange="handleFoodPhoto(this)">' +
-      '<input type="file" id="pad-photo-input" accept="image/*" capture="environment" style="display:none" onchange="handlePadPhoto(this)">' +
     '</div>' +
 
     // Meal items
     (itemsHTML ? '<div style="padding:0 18px;margin-bottom:10px">' +
-      '<div style="font-family:\'DM Mono\',monospace;font-size:11px;color:rgba(180,200,220,0.78);letter-spacing:1px;text-transform:uppercase;margin-bottom:6px">' +
+      '<div style="font-family:\'DM Mono\',monospace;font-size:9px;color:rgba(180,200,220,0.6);letter-spacing:1px;text-transform:uppercase;margin-bottom:6px">' +
         'meal · ' + totalCarbs.toFixed(0) + 'g carbs' +
         (avgGI && _mealItems.length > 0 ? ' · <span style="color:' + giCol + '">' + giLabel + ' (GI ' + avgGI.toFixed(0) + ')</span>' : '') +
       '</div>' +
@@ -5060,7 +5009,7 @@ function renderSheet() {
     // Manual insulin entry (if no meal)
     (totalCarbs === 0 ?
       '<div style="padding:0 18px;margin-bottom:12px">' +
-        '<div style="font-family:\'DM Mono\',monospace;font-size:11px;color:rgba(180,200,220,0.78);letter-spacing:1px;text-transform:uppercase;margin-bottom:8px">manual bolus / correction</div>' +
+        '<div style="font-family:\'DM Mono\',monospace;font-size:9px;color:rgba(180,200,220,0.6);letter-spacing:1px;text-transform:uppercase;margin-bottom:8px">manual bolus / correction</div>' +
         '<div style="display:flex;align-items:center;gap:10px">' +
           '<div style="width:8px;height:8px;border-radius:50%;background:rgba(40,85,200,0.8);flex-shrink:0"></div>' +
           '<input id="in-i" type="number" inputmode="decimal" placeholder="units" min="0" max="20" step="0.5"' +
@@ -5370,7 +5319,7 @@ function _showVoiceResults(items, transcript) {
     // Drag handle / close
     '<div onclick="_closeVoicePanel()" style="padding:10px 16px 6px;display:flex;align-items:center;justify-content:space-between;border-bottom:1px solid rgba(255,255,255,0.07);cursor:pointer">' +
       '<div style="width:36px;height:4px;border-radius:2px;background:rgba(255,255,255,0.18);margin:0 auto 0 0"></div>' +
-      '<div style="font-family:\'DM Mono\',monospace;font-size:10px;color:rgba(120,140,180,0.55);letter-spacing:.5px;text-align:right;max-width:75%;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">' + shortTranscript + '</div>' +
+      '<div style="font-family:\'DM Mono\',monospace;font-size:8px;color:rgba(120,140,180,0.55);letter-spacing:.5px;text-align:right;max-width:75%;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">' + shortTranscript + '</div>' +
     '</div>' +
     '<div style="padding:7px 16px 5px;font-family:\'DM Mono\',monospace;font-size:9px;color:rgba(62,200,140,0.7);letter-spacing:.8px;text-transform:uppercase;border-bottom:1px solid rgba(255,255,255,0.06)">heard · tap item to add</div>';
 
@@ -5540,529 +5489,6 @@ async function handleFoodPhoto(inputEl) {
 }
 
 var _photoFoodData = null; // set by handleFoodPhoto, consumed by addCustomFood
-
-// ── PAD SCAN — photo of handwritten meal notes → import into food log ──────
-
-function openScanPad() {
-  var input = document.getElementById('pad-photo-input');
-  if (input) input.click();
-}
-
-async function handlePadPhoto(inputEl) {
-  var file = inputEl.files && inputEl.files[0];
-  if (!file) return;
-  inputEl.value = '';
-  _showFoodAIStatus('reading pad…');
-  try {
-    var base64 = await new Promise(function(res, rej) {
-      var r = new FileReader();
-      r.onload = function() { res(r.result.split(',')[1]); };
-      r.onerror = function() { rej(new Error('Read failed')); };
-      r.readAsDataURL(file);
-    });
-    var mediaType = file.type || 'image/jpeg';
-    var systemPrompt = 'You read handwritten meal notes from a diabetes management notebook. ' +
-      'The notes typically list food items with their carbohydrate weights in grams, sometimes a total, ' +
-      'a BG reading in mmol/L (e.g. "7.4"), insulin units given (e.g. "3U" or "3 units"), ' +
-      'a wait time in minutes (e.g. "wait 15" or "15 min"), ' +
-      'and a meal label (breakfast/lunch/dinner/snack). A date or time may also appear. ' +
-      'Return ONLY a JSON object, no markdown, no explanation. Schema: ' +
-      '{"meal_label":"breakfast|lunch|dinner|snack|null",' +
-      '"date_hint":"date string as written or null",' +
-      '"time_hint":"time as written e.g. 07:24 or null",' +
-      '"bg_mmol":number_or_null,' +
-      '"units":number_or_null,' +
-      '"wait_mins":number_or_null,' +
-      '"total_carbs_written":number_or_null,' +
-      '"items":[{"name":"food name as written","carbs_written":number,"weight_g":number_or_null}],' +
-      '"notes":"any other text or null"}. ' +
-      'If carbs_written is not readable, omit that item. If nothing looks like meal notes, return {"error":"not meal notes"}.';
-    var resp = await fetch('https://orange-surf-6f98.john-king-uk.workers.dev/claude', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'anthropic-version': '2023-06-01' },
-      body: JSON.stringify({
-        model: 'claude-sonnet-4-5',
-        max_tokens: 600,
-        system: systemPrompt,
-        messages: [{ role: 'user', content: [
-          { type: 'image', source: { type: 'base64', media_type: mediaType, data: base64 } },
-          { type: 'text', text: 'Read the handwritten meal notes in this photo.' }
-        ]}]
-      })
-    });
-    if (!resp.ok) throw new Error('API ' + resp.status);
-    var data = await resp.json();
-    var text = ((data.content || [])[0] || {}).text || '{}';
-    var clean = text.replace(/```json|```/g, '').trim();
-    var fi = clean.indexOf('{'), li = clean.lastIndexOf('}');
-    if (fi < 0 || li < 0) throw new Error('No JSON');
-    var parsed = JSON.parse(clean.slice(fi, li + 1));
-    _hideFoodAIStatus();
-    if (parsed.error) { showToast('Could not read pad — try better lighting'); return; }
-    if (!parsed.items || parsed.items.length === 0) { showToast('No food items found in photo'); return; }
-    renderPadImportScreen(parsed);
-  } catch(err) {
-    _hideFoodAIStatus();
-    console.warn('[pad scan] error:', err);
-    showToast('Could not read pad — try again');
-  }
-}
-
-var _padImportData = null;
-var _padInferredT  = 0;
-
-// ── _inferPadTimestamp: prefer explicit time, fall back to CGM-matching, then label default ──
-function _inferPadTimestamp(parsed) {
-  var label = (parsed.meal_label || '').toLowerCase();
-
-  // 1. Explicit time_hint — use it with today's (or date_hint's) date, no future drift
-  if (parsed.time_hint) {
-    var tm = String(parsed.time_hint).match(/(\d{1,2})[:\.](\d{2})/);
-    if (tm) {
-      var baseDate = new Date();
-      if (parsed.date_hint) { var dh = new Date(parsed.date_hint); if (!isNaN(dh.getTime())) baseDate = dh; }
-      baseDate.setHours(parseInt(tm[1]), parseInt(tm[2]), 0, 0);
-      // If time is in the future, assume yesterday
-      if (baseDate.getTime() > Date.now() + 60000) baseDate.setDate(baseDate.getDate() - 1);
-      return baseDate.getTime();
-    }
-  }
-
-  // 2. BG hint — scan HISTORY_RAW for the closest mmol match in the plausible meal window
-  if (parsed.bg_mmol && HISTORY_RAW && HISTORY_RAW.length > 0) {
-    var bg = parsed.bg_mmol;
-    var now = Date.now();
-    // Search within last 8 hours
-    var candidates = HISTORY_RAW.filter(function(r) {
-      return r.t && (now - r.t) < 8 * 3600000 && (now - r.t) > 0;
-    });
-    var best = null, bestDelta = 999;
-    candidates.forEach(function(r) {
-      var delta = Math.abs((r.bg || r.sgv || 0) - bg);
-      if (delta < bestDelta) { bestDelta = delta; best = r; }
-    });
-    if (best && bestDelta < 0.8) return best.t;
-  }
-
-  // 3. Date hint without time — use label default time on that date
-  if (parsed.date_hint) {
-    var d = new Date(parsed.date_hint);
-    if (!isNaN(d.getTime())) {
-      var hr = label === 'breakfast' ? 8 : label === 'lunch' ? 13 : label === 'dinner' ? 19 : label === 'snack' ? 15 : 12;
-      d.setHours(hr, 0, 0, 0);
-      if (d.getTime() > Date.now() + 60000) d.setDate(d.getDate() - 1);
-      return d.getTime();
-    }
-  }
-
-  // 4. No info — use now, don't project into the future using label defaults
-  return Date.now();
-}
-
-function _esc(str) {
-  return String(str||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');
-}
-
-function renderPadImportScreen(parsed) {
-  _padImportData = parsed;
-  var el = document.getElementById('pad-import-overlay');
-  if (el) el.remove();
-  el = document.createElement('div');
-  el.id = 'pad-import-overlay';
-  el.style.cssText = 'position:fixed;inset:0;z-index:90;background:rgba(3,5,20,0.96);' +
-    'backdrop-filter:blur(16px);display:flex;flex-direction:column;align-items:center;' +
-    'overflow-y:auto;padding:24px 0 60px;pointer-events:auto;touch-action:pan-y';
-  el.addEventListener('touchstart', function(e){ e.stopPropagation(); }, { passive: true });
-
-  var inferredT = _inferPadTimestamp(parsed);
-  _padInferredT = inferredT;
-  var tzOff = new Date(inferredT).getTimezoneOffset() * 60000;
-  var dtISO = new Date(inferredT - tzOff).toISOString().slice(0, 16);
-  var nowISO = new Date(Date.now() - new Date().getTimezoneOffset()*60000).toISOString().slice(0,16);
-
-  var itemsHtml = parsed.items.map(function(item, idx) {
-    var match = resolveScannedFood(item.name);
-    var matchInfo = match
-      ? '<span style="color:rgba(62,200,140,0.8);font-size:10px;font-family:\'DM Mono\',monospace">✓ ' + match.name + (match.gi ? ' <span style="color:rgba(180,200,220,0.5)">GI' + match.gi + '</span>' : '') + '</span>'
-      : '<div style="display:flex;gap:4px">' +
-          '<button onclick="openAliasLinker(' + idx + ')" style="background:none;border:1px solid rgba(255,180,60,0.4);border-radius:5px;padding:3px 8px;cursor:pointer;font-family:\'DM Mono\',monospace;font-size:9px;color:rgba(255,180,60,0.9)">link</button>' +
-          '<button onclick="openAddFoodFromPad(' + idx + ')" style="background:none;border:1px solid rgba(62,200,140,0.4);border-radius:5px;padding:3px 8px;cursor:pointer;font-family:\'DM Mono\',monospace;font-size:9px;color:rgba(62,200,140,0.8)">+ add</button>' +
-        '</div>';
-    return '<div id="pad-item-' + idx + '" style="display:flex;align-items:center;gap:8px;padding:9px 0;border-bottom:1px solid rgba(255,255,255,0.05)">' +
-      '<button onclick="removePadItem(' + idx + ')" style="background:none;border:none;cursor:pointer;color:rgba(200,80,80,0.5);font-size:16px;padding:0 4px;flex-shrink:0;line-height:1">×</button>' +
-      '<input id="pad-name-' + idx + '" value="' + _esc(item.name) + '" ' +
-        'style="flex:1;background:rgba(255,255,255,0.05);border:1px solid rgba(255,255,255,0.12);border-radius:6px;' +
-        'padding:7px 9px;font-family:\'DM Mono\',monospace;font-size:12px;color:rgba(220,235,250,0.9);outline:none" ' +
-        'oninput="_padItemNameChanged(' + idx + ',this.value)">' +
-      '<div style="display:flex;align-items:center;gap:4px">' +
-        '<input id="pad-carbs-' + idx + '" type="number" value="' + (item.carbs_written || 0) + '" min="0" max="200" step="1" oninput="_updatePadTotal()" ' +
-          'style="width:54px;background:rgba(255,140,50,0.07);border:1px solid rgba(255,140,50,0.25);border-radius:6px;' +
-          'padding:7px 5px;font-family:\'DM Mono\',monospace;font-size:14px;color:rgba(255,140,50,0.95);text-align:center;outline:none">' +
-        '<span style="font-family:\'DM Mono\',monospace;font-size:10px;color:rgba(255,140,50,0.5)">g</span>' +
-      '</div>' +
-      '<div id="pad-match-' + idx + '" style="min-width:70px;text-align:right">' + matchInfo + '</div>' +
-    '</div>';
-  }).join('');
-
-  var labels = ['breakfast','lunch','dinner','snack'];
-  var currentLabel = (parsed.meal_label || '').toLowerCase();
-  var labelBtns = labels.map(function(l) {
-    var active = l === currentLabel;
-    return '<button onclick="setPadLabel(\'' + l + '\')" id="pad-lbl-' + l + '" style="padding:6px 12px;border-radius:7px;border:1px solid ' +
-      (active ? 'rgba(62,200,140,0.5)' : 'rgba(255,255,255,0.12)') + ';background:' +
-      (active ? 'rgba(62,200,140,0.1)' : 'transparent') + ';font-family:\'DM Mono\',monospace;font-size:10px;' +
-      'color:' + (active ? 'rgba(62,200,140,0.95)' : 'rgba(180,200,220,0.6)') + ';cursor:pointer">' + l + '</button>';
-  }).join('');
-
-  var totalWritten = parsed.total_carbs_written || parsed.items.reduce(function(s,i){ return s+(i.carbs_written||0); }, 0);
-
-  el.innerHTML =
-    '<div style="max-width:400px;width:100%;padding:0 20px">' +
-
-    // Header
-    '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:22px;padding-top:8px">' +
-      '<div style="font-family:\'Fraunces\',serif;font-style:italic;font-weight:200;font-size:24px;color:rgba(255,200,120,0.95)">pad import</div>' +
-      '<button onclick="document.getElementById(\'pad-import-overlay\').remove()" style="background:none;border:none;cursor:pointer;font-size:26px;color:rgba(180,200,220,0.5);padding:4px">×</button>' +
-    '</div>' +
-
-    // Meal label
-    '<div style="margin-bottom:16px">' +
-      '<div style="font-family:\'DM Mono\',monospace;font-size:10px;letter-spacing:1px;text-transform:uppercase;color:rgba(180,200,220,0.55);margin-bottom:8px">meal</div>' +
-      '<div style="display:flex;gap:8px;flex-wrap:wrap">' + labelBtns + '</div>' +
-    '</div>' +
-
-    // Timestamp
-    '<div style="margin-bottom:16px">' +
-      '<div style="font-family:\'DM Mono\',monospace;font-size:10px;letter-spacing:1px;text-transform:uppercase;color:rgba(180,200,220,0.55);margin-bottom:8px">' +
-        'when' + (parsed.date_hint ? ' · <span style="color:rgba(255,200,120,0.6);text-transform:none">' + _esc(parsed.date_hint) + '</span>' : '') + '</div>' +
-      '<div style="display:flex;gap:8px;align-items:center">' +
-        '<input id="pad-time" type="datetime-local" value="' + dtISO + '" ' +
-          'style="flex:1;padding:9px 11px;border-radius:8px;border:1px solid rgba(255,255,255,0.14);background:rgba(255,255,255,0.06);font-family:\'DM Mono\',monospace;font-size:13px;color:rgba(200,220,240,0.9);outline:none">' +
-        '<button onclick="document.getElementById(\'pad-time\').value=\'' + nowISO + '\'" style="padding:7px 11px;border-radius:7px;border:1px solid rgba(255,255,255,0.12);background:rgba(255,255,255,0.05);font-family:\'DM Mono\',monospace;font-size:10px;color:rgba(180,200,220,0.6);cursor:pointer">now</button>' +
-      '</div>' +
-    '</div>' +
-
-    // BG / units / wait row
-    ((parsed.bg_mmol || parsed.units || parsed.wait_mins) ?
-    '<div style="display:flex;gap:10px;margin-bottom:16px">' +
-      (parsed.bg_mmol ? '<div style="flex:1;padding:9px 11px;border-radius:8px;background:rgba(255,255,255,0.04);border:1px solid rgba(255,255,255,0.09)">' +
-        '<div style="font-family:\'DM Mono\',monospace;font-size:9px;color:rgba(180,200,220,0.5);margin-bottom:4px;letter-spacing:0.5px">BG on pad</div>' +
-        '<div style="font-family:\'DM Mono\',monospace;font-size:17px;color:rgba(200,220,255,0.85)">' + parsed.bg_mmol + ' <span style="font-size:10px;opacity:0.5">mmol</span></div>' +
-      '</div>' : '') +
-      (parsed.units ? '<div style="flex:1;padding:9px 11px;border-radius:8px;background:rgba(60,130,220,0.06);border:1px solid rgba(60,130,220,0.16)">' +
-        '<div style="font-family:\'DM Mono\',monospace;font-size:9px;color:rgba(60,130,220,0.6);margin-bottom:4px;letter-spacing:0.5px">insulin</div>' +
-        '<input id="pad-units" type="number" value="' + parsed.units + '" min="0" max="20" step="0.5" style="width:100%;background:none;border:none;font-family:\'DM Mono\',monospace;font-size:17px;color:rgba(60,130,220,0.9);outline:none">' +
-      '</div>' : '') +
-      (parsed.wait_mins ? '<div style="flex:1;padding:9px 11px;border-radius:8px;background:rgba(180,200,220,0.04);border:1px solid rgba(180,200,220,0.12)">' +
-        '<div style="font-family:\'DM Mono\',monospace;font-size:9px;color:rgba(180,200,220,0.5);margin-bottom:4px;letter-spacing:0.5px">wait (min)</div>' +
-        '<input id="pad-wait" type="number" value="' + parsed.wait_mins + '" min="0" max="60" step="5" style="width:100%;background:none;border:none;font-family:\'DM Mono\',monospace;font-size:17px;color:rgba(180,200,220,0.8);outline:none">' +
-      '</div>' :
-      '<div style="flex:1;padding:9px 11px;border-radius:8px;background:rgba(180,200,220,0.04);border:1px solid rgba(180,200,220,0.12)">' +
-        '<div style="font-family:\'DM Mono\',monospace;font-size:9px;color:rgba(180,200,220,0.5);margin-bottom:4px;letter-spacing:0.5px">wait (min)</div>' +
-        '<input id="pad-wait" type="number" value="0" min="0" max="60" step="5" style="width:100%;background:none;border:none;font-family:\'DM Mono\',monospace;font-size:17px;color:rgba(180,200,220,0.8);outline:none">' +
-      '</div>') +
-    '</div>' :
-    // No bg/units but always show wait
-    '<div style="margin-bottom:16px;display:flex;gap:10px">' +
-      '<div style="flex:1;padding:9px 11px;border-radius:8px;background:rgba(180,200,220,0.04);border:1px solid rgba(180,200,220,0.12)">' +
-        '<div style="font-family:\'DM Mono\',monospace;font-size:9px;color:rgba(180,200,220,0.5);margin-bottom:4px;letter-spacing:0.5px">bolus wait (min)</div>' +
-        '<input id="pad-wait" type="number" value="0" min="0" max="60" step="5" style="width:100%;background:none;border:none;font-family:\'DM Mono\',monospace;font-size:17px;color:rgba(180,200,220,0.8);outline:none">' +
-      '</div>' +
-    '</div>') +
-
-    // Items
-    '<div style="margin-bottom:16px">' +
-      '<div style="font-family:\'DM Mono\',monospace;font-size:10px;letter-spacing:1px;text-transform:uppercase;color:rgba(180,200,220,0.55);margin-bottom:10px">items — edit as needed</div>' +
-      '<div id="pad-items-list">' + itemsHtml + '</div>' +
-      '<button onclick="addPadItemRow()" style="margin-top:10px;width:100%;padding:7px;border-radius:8px;border:1px dashed rgba(255,255,255,0.12);background:transparent;font-family:\'DM Mono\',monospace;font-size:10px;color:rgba(180,200,220,0.5);cursor:pointer">+ add item</button>' +
-    '</div>' +
-
-    // Total
-    '<div style="padding:11px 14px;border-radius:9px;background:rgba(255,140,50,0.06);border:1px solid rgba(255,140,50,0.18);margin-bottom:22px;display:flex;justify-content:space-between;align-items:center">' +
-      '<span style="font-family:\'DM Mono\',monospace;font-size:11px;color:rgba(255,140,50,0.6)">total carbs</span>' +
-      '<div>' +
-        '<span id="pad-calc-total" style="font-family:\'DM Mono\',monospace;font-size:20px;color:rgba(255,140,50,0.95)">' + totalWritten.toFixed(0) + '</span>' +
-        '<span style="font-family:\'DM Mono\',monospace;font-size:11px;color:rgba(255,140,50,0.5)"> g</span>' +
-      '</div>' +
-    '</div>' +
-
-    // Actions
-    '<div style="display:flex;gap:10px">' +
-      '<button onclick="commitPadImport()" style="flex:1;padding:14px;border-radius:11px;border:1px solid rgba(255,200,80,0.35);background:rgba(255,200,80,0.09);font-family:\'Fraunces\',serif;font-style:italic;font-weight:200;font-size:18px;color:rgba(255,200,120,0.95);cursor:pointer">add to log</button>' +
-      '<button onclick="document.getElementById(\'pad-import-overlay\').remove()" style="padding:14px 18px;border-radius:11px;border:1px solid rgba(255,255,255,0.09);background:transparent;font-family:\'DM Mono\',monospace;font-size:11px;color:rgba(180,200,220,0.5);cursor:pointer">cancel</button>' +
-    '</div>' +
-    '</div>';
-
-  document.body.appendChild(el);
-}
-
-function setPadLabel(label) {
-  if (!_padImportData) return;
-  _padImportData.meal_label = label;
-  ['breakfast','lunch','dinner','snack'].forEach(function(l) {
-    var btn = document.getElementById('pad-lbl-' + l);
-    if (!btn) return;
-    var a = l === label;
-    btn.style.border = a ? '1px solid rgba(62,200,140,0.5)' : '1px solid rgba(255,255,255,0.12)';
-    btn.style.background = a ? 'rgba(62,200,140,0.1)' : 'transparent';
-    btn.style.color = a ? 'rgba(62,200,140,0.95)' : 'rgba(180,200,220,0.6)';
-  });
-}
-
-function removePadItem(idx) {
-  var row = document.getElementById('pad-item-' + idx);
-  if (row) row.style.display = 'none';
-  if (_padImportData && _padImportData.items[idx]) _padImportData.items[idx]._removed = true;
-  _updatePadTotal();
-}
-
-function _updatePadTotal() {
-  var items = _padImportData && _padImportData.items || [];
-  var total = 0;
-  items.forEach(function(item, i) {
-    if (item._removed) return;
-    var inp = document.getElementById('pad-carbs-' + i);
-    total += inp ? (parseFloat(inp.value) || 0) : (item.carbs_written || 0);
-  });
-  var el = document.getElementById('pad-calc-total');
-  if (el) el.textContent = total.toFixed(0);
-}
-
-function _padItemNameChanged(idx, val) {
-  if (!_padImportData || !_padImportData.items[idx]) return;
-  _padImportData.items[idx].name = val;
-  var match = resolveScannedFood(val);
-  var matchEl = document.getElementById('pad-match-' + idx);
-  if (matchEl) {
-    matchEl.innerHTML = match
-      ? '<span style="color:rgba(62,200,140,0.8);font-size:10px;font-family:\'DM Mono\',monospace">✓ ' + match.name + (match.gi ? ' <span style="color:rgba(180,200,220,0.5)">GI' + match.gi + '</span>' : '') + '</span>'
-      : '<div style="display:flex;gap:4px">' +
-          '<button onclick="openAliasLinker(' + idx + ')" style="background:none;border:1px solid rgba(255,180,60,0.4);border-radius:5px;padding:3px 8px;cursor:pointer;font-family:\'DM Mono\',monospace;font-size:9px;color:rgba(255,180,60,0.9)">link</button>' +
-          '<button onclick="openAddFoodFromPad(' + idx + ')" style="background:none;border:1px solid rgba(62,200,140,0.4);border-radius:5px;padding:3px 8px;cursor:pointer;font-family:\'DM Mono\',monospace;font-size:9px;color:rgba(62,200,140,0.8)">+ add</button>' +
-        '</div>';
-  }
-}
-
-function addPadItemRow() {
-  if (!_padImportData) return;
-  var idx = _padImportData.items.length;
-  _padImportData.items.push({ name: '', carbs_written: 0 });
-  var list = document.getElementById('pad-items-list');
-  if (!list) return;
-  var row = document.createElement('div');
-  row.id = 'pad-item-' + idx;
-  row.style.cssText = 'display:flex;align-items:center;gap:8px;padding:9px 0;border-bottom:1px solid rgba(255,255,255,0.05)';
-  row.innerHTML =
-    '<button onclick="removePadItem(' + idx + ')" style="background:none;border:none;cursor:pointer;color:rgba(200,80,80,0.5);font-size:16px;padding:0 4px;flex-shrink:0;line-height:1">×</button>' +
-    '<input id="pad-name-' + idx + '" value="" placeholder="food name" oninput="_padItemNameChanged(' + idx + ',this.value)" ' +
-      'style="flex:1;background:rgba(255,255,255,0.05);border:1px solid rgba(255,255,255,0.12);border-radius:6px;padding:7px 9px;font-family:\'DM Mono\',monospace;font-size:12px;color:rgba(220,235,250,0.9);outline:none">' +
-    '<div style="display:flex;align-items:center;gap:4px">' +
-      '<input id="pad-carbs-' + idx + '" type="number" value="0" min="0" max="200" step="1" oninput="_updatePadTotal()" ' +
-        'style="width:54px;background:rgba(255,140,50,0.07);border:1px solid rgba(255,140,50,0.25);border-radius:6px;padding:7px 5px;font-family:\'DM Mono\',monospace;font-size:14px;color:rgba(255,140,50,0.95);text-align:center;outline:none">' +
-      '<span style="font-family:\'DM Mono\',monospace;font-size:10px;color:rgba(255,140,50,0.5)">g</span>' +
-    '</div>' +
-    '<div id="pad-match-' + idx + '" style="min-width:70px;text-align:right">' +
-      '<div style="display:flex;gap:4px">' +
-        '<button onclick="openAliasLinker(' + idx + ')" style="background:none;border:1px solid rgba(255,180,60,0.4);border-radius:5px;padding:3px 8px;cursor:pointer;font-family:\'DM Mono\',monospace;font-size:9px;color:rgba(255,180,60,0.9)">link</button>' +
-        '<button onclick="openAddFoodFromPad(' + idx + ')" style="background:none;border:1px solid rgba(62,200,140,0.4);border-radius:5px;padding:3px 8px;cursor:pointer;font-family:\'DM Mono\',monospace;font-size:9px;color:rgba(62,200,140,0.8)">+ add</button>' +
-      '</div>' +
-    '</div>';
-  list.appendChild(row);
-}
-
-// ── Add food directly from pad import (when item not in library) ──────────
-function openAddFoodFromPad(itemIdx) {
-  var item = _padImportData && _padImportData.items[itemIdx];
-  if (!item) return;
-  var nameEl  = document.getElementById('pad-name-' + itemIdx);
-  var carbsEl = document.getElementById('pad-carbs-' + itemIdx);
-  var name  = (nameEl ? nameEl.value.trim() : item.name) || '';
-  var carbs = carbsEl ? (parseFloat(carbsEl.value) || 0) : (item.carbs_written || 0);
-
-  // Estimate c100 from carbs and weight_g if available, otherwise use carbs as c100
-  var g     = item.weight_g || 100;
-  var c100  = g > 0 ? parseFloat((carbs / g * 100).toFixed(1)) : carbs;
-
-  var el = document.getElementById('add-food-pad-overlay');
-  if (el) el.remove();
-  el = document.createElement('div');
-  el.id = 'add-food-pad-overlay';
-  el.style.cssText = 'position:fixed;inset:0;z-index:96;background:rgba(3,5,20,0.97);backdrop-filter:blur(16px);display:flex;flex-direction:column;align-items:center;justify-content:center;padding:32px;pointer-events:auto';
-  el.addEventListener('click', function(e){ if(e.target===el) el.remove(); });
-
-  el.innerHTML =
-    '<div style="max-width:340px;width:100%">' +
-    '<div style="font-family:\'Fraunces\',serif;font-style:italic;font-weight:200;font-size:22px;color:rgba(62,200,140,0.9);margin-bottom:6px">add to library</div>' +
-    '<div style="font-family:\'DM Mono\',monospace;font-size:11px;color:rgba(180,200,220,0.6);margin-bottom:20px">this item will be saved and matched next time</div>' +
-
-    '<div style="margin-bottom:12px">' +
-      '<div style="font-family:\'DM Mono\',monospace;font-size:10px;letter-spacing:0.5px;text-transform:uppercase;color:rgba(180,200,220,0.5);margin-bottom:6px">food name</div>' +
-      '<input id="afp-name" value="' + _esc(name) + '" style="width:100%;padding:9px 12px;border-radius:8px;border:1px solid rgba(255,255,255,0.14);background:rgba(255,255,255,0.06);font-family:\'DM Mono\',monospace;font-size:13px;color:rgba(220,235,250,0.9);outline:none;box-sizing:border-box">' +
-    '</div>' +
-
-    '<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:12px">' +
-      '<div>' +
-        '<div style="font-family:\'DM Mono\',monospace;font-size:10px;letter-spacing:0.5px;text-transform:uppercase;color:rgba(255,140,50,0.6);margin-bottom:6px">carbs per 100g</div>' +
-        '<input id="afp-c100" type="number" value="' + c100 + '" min="0" max="100" step="0.1" style="width:100%;padding:9px 10px;border-radius:8px;border:1px solid rgba(255,140,50,0.22);background:rgba(255,140,50,0.05);font-family:\'DM Mono\',monospace;font-size:15px;color:rgba(255,140,50,0.9);text-align:center;outline:none">' +
-      '</div>' +
-      '<div>' +
-        '<div style="font-family:\'DM Mono\',monospace;font-size:10px;letter-spacing:0.5px;text-transform:uppercase;color:rgba(180,200,220,0.5);margin-bottom:6px">GI (1–100)</div>' +
-        '<input id="afp-gi" type="number" value="55" min="1" max="100" step="1" style="width:100%;padding:9px 10px;border-radius:8px;border:1px solid rgba(180,200,220,0.18);background:rgba(180,200,220,0.04);font-family:\'DM Mono\',monospace;font-size:15px;color:rgba(180,200,220,0.85);text-align:center;outline:none">' +
-      '</div>' +
-    '</div>' +
-
-    '<div style="margin-bottom:20px">' +
-      '<div style="font-family:\'DM Mono\',monospace;font-size:10px;letter-spacing:0.5px;text-transform:uppercase;color:rgba(180,200,220,0.5);margin-bottom:6px">serving size (g)</div>' +
-      '<input id="afp-gserv" type="number" value="' + Math.round(g) + '" min="1" max="1000" step="1" style="width:100%;padding:9px 10px;border-radius:8px;border:1px solid rgba(255,255,255,0.12);background:rgba(255,255,255,0.04);font-family:\'DM Mono\',monospace;font-size:15px;color:rgba(200,220,240,0.85);text-align:center;outline:none">' +
-    '</div>' +
-
-    '<div style="display:flex;gap:8px">' +
-      '<button onclick="confirmAddFoodFromPad(' + itemIdx + ')" style="flex:1;padding:12px;border-radius:10px;border:1px solid rgba(62,200,140,0.35);background:rgba(62,200,140,0.08);font-family:\'Fraunces\',serif;font-style:italic;font-weight:200;font-size:16px;color:rgba(62,200,140,0.95);cursor:pointer">save to library</button>' +
-      '<button onclick="document.getElementById(\'add-food-pad-overlay\').remove()" style="padding:12px 14px;border-radius:10px;border:1px solid rgba(255,255,255,0.1);background:transparent;font-family:\'DM Mono\',monospace;font-size:10px;color:rgba(180,200,220,0.5);cursor:pointer">cancel</button>' +
-    '</div>' +
-    '</div>';
-
-  document.body.appendChild(el);
-}
-
-function confirmAddFoodFromPad(itemIdx) {
-  var name  = (document.getElementById('afp-name')  || {}).value || '';
-  var c100  = parseFloat((document.getElementById('afp-c100')  || {}).value) || 0;
-  var gi    = parseInt((document.getElementById('afp-gi')     || {}).value) || 55;
-  var gserv = parseFloat((document.getElementById('afp-gserv') || {}).value) || 100;
-
-  if (!name.trim()) { showToast('Enter a food name'); return; }
-
-  var newFood = { name: name.trim(), c100: c100, gi: Math.max(1, Math.min(100, gi)), g_serv: gserv, cat: 'custom' };
-  FOOD_LIBRARY.push(newFood);
-  saveFoodLibrary();
-
-  // Update match display in pad import screen
-  var matchEl = document.getElementById('pad-match-' + itemIdx);
-  if (matchEl) {
-    matchEl.innerHTML = '<span style="color:rgba(62,200,140,0.8);font-size:10px;font-family:\'DM Mono\',monospace">✓ ' + _esc(name.trim()) + ' <span style="color:rgba(180,200,220,0.5)">GI' + gi + '</span></span>';
-  }
-  // Also store GI back to the item so commit uses it
-  if (_padImportData && _padImportData.items[itemIdx]) {
-    _padImportData.items[itemIdx]._gi_override = gi;
-  }
-
-  document.getElementById('add-food-pad-overlay').remove();
-  showToast('"' + name.trim() + '" added to library');
-}
-
-// ── Alias linker ──────────────────────────────────────────────────────────
-function openAliasLinker(itemIdx) {
-  var item = _padImportData && _padImportData.items[itemIdx];
-  if (!item) return;
-  var nameEl = document.getElementById('pad-name-' + itemIdx);
-  var scannedName = (nameEl ? nameEl.value : item.name) || '';
-  var el = document.getElementById('alias-linker-overlay');
-  if (el) el.remove();
-  el = document.createElement('div');
-  el.id = 'alias-linker-overlay';
-  el.style.cssText = 'position:fixed;inset:0;z-index:95;background:rgba(3,5,20,0.97);backdrop-filter:blur(16px);display:flex;flex-direction:column;align-items:center;justify-content:center;padding:32px;pointer-events:auto';
-  el.addEventListener('click', function(e){ if(e.target===el) el.remove(); });
-  var all = FOOD_DB.concat(FOOD_LIBRARY);
-  el.innerHTML =
-    '<div style="max-width:340px;width:100%">' +
-    '<div style="font-family:\'Fraunces\',serif;font-style:italic;font-weight:200;font-size:22px;color:rgba(255,200,120,0.95);margin-bottom:6px">link to library</div>' +
-    '<div style="font-family:\'DM Mono\',monospace;font-size:11px;color:rgba(180,200,220,0.6);margin-bottom:18px">"<span style="color:rgba(255,200,120,0.8)">' + _esc(scannedName) + '</span>" will always be treated as…</div>' +
-    '<input id="alias-search" type="text" placeholder="search food library…" autocomplete="off" ' +
-      'style="width:100%;padding:10px 13px;border-radius:9px;border:1px solid rgba(255,255,255,0.14);background:rgba(255,255,255,0.07);font-family:\'DM Mono\',monospace;font-size:13px;color:rgba(220,235,250,0.9);outline:none;box-sizing:border-box;margin-bottom:10px" ' +
-      'oninput="_aliasSearchChanged(' + itemIdx + ',\'' + _esc(scannedName) + '\',this.value)">' +
-    '<div id="alias-results" style="max-height:240px;overflow-y:auto">' + _aliasResultsHtml(itemIdx, scannedName, all.slice(0,12)) + '</div>' +
-    '<div style="margin-top:14px"><button onclick="document.getElementById(\'alias-linker-overlay\').remove()" style="width:100%;padding:11px;border-radius:9px;border:1px solid rgba(255,255,255,0.1);background:transparent;font-family:\'DM Mono\',monospace;font-size:11px;color:rgba(180,200,220,0.5);cursor:pointer">cancel</button></div>' +
-    '</div>';
-  document.body.appendChild(el);
-}
-
-function _aliasResultsHtml(itemIdx, scannedName, foods) {
-  return foods.map(function(f) {
-    var name = typeof f === 'string' ? f : f.name;
-    var gi   = typeof f === 'object' && f.gi ? ' GI' + f.gi : '';
-    return '<button onclick="confirmAlias(' + itemIdx + ',\'' + _esc(scannedName) + '\',\'' + _esc(name) + '\')" ' +
-      'style="display:block;width:100%;text-align:left;padding:10px 13px;border-radius:8px;border:none;background:rgba(255,255,255,0.04);margin-bottom:4px;cursor:pointer;font-family:\'DM Mono\',monospace;font-size:12px;color:rgba(220,235,250,0.85)" ' +
-      'onmouseover="this.style.background=\'rgba(255,200,80,0.08)\'" onmouseout="this.style.background=\'rgba(255,255,255,0.04)\'">' +
-      name + '<span style="color:rgba(180,200,220,0.4);font-size:10px;margin-left:6px">' + gi + '</span></button>';
-  }).join('');
-}
-
-function _aliasSearchChanged(itemIdx, scannedName, query) {
-  var all = FOOD_DB.concat(FOOD_LIBRARY);
-  var q = query.toLowerCase();
-  var filtered = q ? all.filter(function(f){ return f.name.toLowerCase().includes(q); }) : all.slice(0,12);
-  var res = document.getElementById('alias-results');
-  if (res) res.innerHTML = _aliasResultsHtml(itemIdx, scannedName, filtered.slice(0,12));
-}
-
-function confirmAlias(itemIdx, scannedName, canonicalName) {
-  addFoodAlias(scannedName, canonicalName);
-  var match = resolveScannedFood(canonicalName);
-  var matchEl = document.getElementById('pad-match-' + itemIdx);
-  if (matchEl && match) {
-    matchEl.innerHTML = '<span style="color:rgba(62,200,140,0.8);font-size:10px;font-family:\'DM Mono\',monospace">✓ ' + match.name + (match.gi ? ' <span style="color:rgba(180,200,220,0.5)">GI' + match.gi + '</span>' : '') + '</span>';
-    if (_padImportData && _padImportData.items[itemIdx]) _padImportData.items[itemIdx]._gi_override = match.gi;
-  }
-  document.getElementById('alias-linker-overlay').remove();
-  showToast('"' + scannedName + '" → ' + canonicalName + ' saved');
-}
-
-// ── Commit pad import ──────────────────────────────────────────────────────
-function commitPadImport() {
-  if (!_padImportData) return;
-  var timeEl = document.getElementById('pad-time');
-  var t = timeEl && timeEl.value ? new Date(timeEl.value).getTime() : (_padInferredT || Date.now());
-  var waitEl = document.getElementById('pad-wait');
-  var waitMins = waitEl ? (parseInt(waitEl.value) || 0) : (_padImportData.wait_mins || 0);
-
-  var items = _padImportData.items || [];
-  var foodItems = [];
-  var totalCarbs = 0;
-
-  items.forEach(function(item, idx) {
-    if (item._removed) return;
-    var nameEl  = document.getElementById('pad-name-' + idx);
-    var carbsEl = document.getElementById('pad-carbs-' + idx);
-    var name  = (nameEl ? nameEl.value : item.name) || '';
-    var carbs = carbsEl ? (parseFloat(carbsEl.value) || 0) : (item.carbs_written || 0);
-    if (!name && carbs === 0) return;
-    var match = item._gi_override ? { gi: item._gi_override } : resolveScannedFood(name);
-    var gi = (match && match.gi) ? match.gi : 55;
-    foodItems.push({ name: name, carbs: carbs, gi: gi, g: item.weight_g || null, c_written: carbs, source: 'pad' });
-    totalCarbs += carbs;
-  });
-
-  if (foodItems.length === 0 && totalCarbs === 0) { showToast('No items to log'); return; }
-
-  var avgGI = foodItems.length > 0
-    ? foodItems.reduce(function(s,i){ return s+(i.gi||55)*i.carbs; }, 0) / Math.max(totalCarbs, 1)
-    : 55;
-
-  var unitsEl = document.getElementById('pad-units');
-  var u = unitsEl ? (parseFloat(unitsEl.value)||0) : (_padImportData.units||0);
-
-  // Bolus at t, carbs at t + waitMins (same pattern as regular food log)
-  var carbT = t + waitMins * 60000;
-
-  if (u > 0 && u <= 20) {
-    SESSION.push({ t: t, c: 0, u: u, waitMins: waitMins });
-    BOLUS_EVENTS.push({ t: t, c: 0, u: u, waitMins: waitMins });
-    LOGGED_EVENTS.push({ t: t, c: 0, u: u, waitMins: waitMins, note: 'bolus', local: true, source: 'pad' });
-  }
-  if (totalCarbs > 0) {
-    SESSION.push({ t: carbT, c: totalCarbs, u: 0, gi: avgGI, items: foodItems });
-    BOLUS_EVENTS.push({ t: carbT, c: totalCarbs, u: 0, gi: avgGI, items: foodItems });
-    LOGGED_EVENTS.push({ t: carbT, c: totalCarbs, u: 0, gi: avgGI, items: foodItems, note: 'carbs', source: 'pad', local: true });
-  }
-
-  try { localStorage.setItem('river_logged', JSON.stringify(LOGGED_EVENTS)); } catch(e) {}
-  try { localStorage.setItem('river_session', JSON.stringify(SESSION)); } catch(e) {}
-  syncAfterLog();
-
-  document.getElementById('pad-import-overlay').remove();
-  showToast(totalCarbs.toFixed(0) + 'g carbs' + (u > 0 ? ' + ' + u + 'U' : '') + (waitMins > 0 ? '\nwait ' + waitMins + 'min' : '') + '\nadded from pad');
-}
 
 // ── URL paste detection ──
 async function checkFoodPaste(val) {
@@ -6280,7 +5706,7 @@ function addCustomFood(name) {
     d.textContent = text;
     if (sub) {
       var s = document.createElement('span');
-      s.style.cssText = 'opacity:0.55;font-size:10px;margin-left:6px;text-transform:none;letter-spacing:0';
+      s.style.cssText = 'opacity:0.55;font-size:8px;margin-left:6px;text-transform:none;letter-spacing:0';
       s.textContent = sub;
       d.appendChild(s);
     }
@@ -6381,7 +5807,7 @@ function addCustomFood(name) {
 
   var giCalcBadge = document.createElement('div');
   giCalcBadge.id = 'new-food-gi-badge';
-  giCalcBadge.style.cssText = 'font-family:monospace;font-size:10px;color:rgba(200,160,60,0.5);letter-spacing:0.5px';
+  giCalcBadge.style.cssText = 'font-family:monospace;font-size:8px;color:rgba(200,160,60,0.5);letter-spacing:0.5px';
   giCalcBadge.textContent = 'calculated';
   giHeader.appendChild(giCalcBadge);
 
@@ -6515,7 +5941,7 @@ function _drawCurvePreview(gi, c100) {
   // Peak label
   var peakX = (peakMin / maxT) * W;
   ctx.fillStyle = 'rgba(' + col + ',0.7)';
-  ctx.font = "300 10px 'DM Mono',monospace";
+  ctx.font = "300 8px 'DM Mono',monospace";
   ctx.textAlign = 'center';
   ctx.fillText('peak ~' + peakMin + 'min', Math.max(30, Math.min(W - 30, peakX)), 10);
 }
@@ -7617,7 +7043,7 @@ function timePickerHTML(id, defaultDate, allowFuture) {
   var val = toDatetimeLocal(defaultDate);
   var max = allowFuture ? '' : 'max="' + toDatetimeLocal(new Date()) + '"';
   return '<div style="margin:14px 0 10px">' +
-    '<div style="font-family:\'DM Mono\',monospace;font-size:10px;letter-spacing:1px;' +
+    '<div style="font-family:\'DM Mono\',monospace;font-size:8px;letter-spacing:1px;' +
       'text-transform:uppercase;color:var(--rv-close-btn);margin-bottom:5px">when</div>' +
     '<div style="display:flex;align-items:center;gap:8px">' +
     '<div id="' + id + '-display" style="flex:1;font-family:\'Fraunces\',serif;' +
@@ -7672,7 +7098,7 @@ function openHypoLog() {
     s+='style="width:36px;padding:4px;border-radius:6px;border:1px solid rgba(255,210,40,0.3);background:rgba(50,40,5,0.5);';
     s+='font-family:\'DM Mono\',monospace;font-size:14px;color:rgba(255,230,120,0.95);text-align:center;outline:none;touch-action:manipulation" ';
     s+='onchange="hypoQtyChanged(\''+t.id+'\','+carbs_each+',this.value)">';
-    s+='<span style="font-family:\'DM Mono\',monospace;font-size:10px;color:rgba(255,210,40,0.4);letter-spacing:.5px">'+t.unit+'s</span>';
+    s+='<span style="font-family:\'DM Mono\',monospace;font-size:8px;color:rgba(255,210,40,0.4);letter-spacing:.5px">'+t.unit+'s</span>';
     s+='</div>';
     s+='<button onclick="hypoQtyStep(\''+t.id+'\','+carbs_each+',1)" style="width:28px;height:28px;border-radius:7px;border:1px solid rgba(255,210,40,0.3);background:rgba(50,40,5,0.5);font-size:16px;color:rgba(255,225,80,0.9);cursor:pointer;touch-action:manipulation;display:flex;align-items:center;justify-content:center;line-height:1">+</button>';
     s+='</div>';
@@ -7780,8 +7206,10 @@ function logCorrection(){
   if(u>10){showToast('⚠️ '+u.toFixed(1)+'U logged — double-check this dose');}
   var now=getTimeVal('corr-time');
   SESSION.push({t:now,c:0,u:u});
-  try{localStorage.setItem('river_session',JSON.stringify(SESSION));}catch(e){}
   BOLUS_EVENTS.push({t:now,c:0,u:u,logged_by:_thisPersonId||'unknown'});
+  LOGGED_EVENTS.push({t:now,c:0,u:u,note:'correction',logged_by:_thisPersonId||'unknown',local:true});
+  try{localStorage.setItem('river_session',JSON.stringify(SESSION));}catch(e){}
+  try{localStorage.setItem('river_logged',JSON.stringify(LOGGED_EVENTS));}catch(e){}
   ALERTS.snooze('corr_nudge',90*60000); ALERTS.snooze('corr_high',90*60000);
   _riverPebble=null;
   syncAfterLog();
@@ -8029,7 +7457,7 @@ function buildSetupScreen() {
         never to any third party. This app has no backend.
       </div>
     </div>
-    <div style="text-align:center;margin-top:10px;font-family:'DM Mono',monospace;font-size:10px;color:rgba(40,55,50,0.15);letter-spacing:1px">__BUILD_ID__</div>
+    <div style="text-align:center;margin-top:10px;font-family:'DM Mono',monospace;font-size:8px;color:rgba(40,55,50,0.15);letter-spacing:1px">__BUILD_ID__</div>
   </div>
 </div>`;
 }
@@ -8369,7 +7797,7 @@ function renderFoodManager(el) {
     if (items.length === 0) return;
 
     html += '<div style="margin-bottom:20px">';
-    html += '<div style="font-family:\'DM Mono\',monospace;font-size:10px;letter-spacing:1.5px;text-transform:uppercase;color:var(--rv-text-dim);margin-bottom:8px;padding-bottom:4px;border-bottom:1px solid rgba(255,255,255,0.06)">' + (catLabels[cat]||cat) + '</div>';
+    html += '<div style="font-family:\'DM Mono\',monospace;font-size:8px;letter-spacing:1.5px;text-transform:uppercase;color:var(--rv-text-dim);margin-bottom:8px;padding-bottom:4px;border-bottom:1px solid rgba(255,255,255,0.06)">' + (catLabels[cat]||cat) + '</div>';
 
     items.forEach(function(f, i) {
       var isCustom = FOOD_LIBRARY.some(function(l){ return l.name===f.name; });
@@ -8449,7 +7877,7 @@ function showFoodEditForm(f) {
   var fld = function(id, label, val, type, placeholder, note) {
     var v = (val!==undefined&&val!==null) ? val : '';
     return '<div style="margin-bottom:14px">' +
-      '<div style="font-family:\'DM Mono\',monospace;font-size:10px;letter-spacing:1px;text-transform:uppercase;color:var(--rv-text-muted);margin-bottom:5px">' + label + (note?'<span style="opacity:0.5;margin-left:6px;font-size:7px">'+note+'</span>':'') + '</div>' +
+      '<div style="font-family:\'DM Mono\',monospace;font-size:8px;letter-spacing:1px;text-transform:uppercase;color:var(--rv-text-muted);margin-bottom:5px">' + label + (note?'<span style="opacity:0.5;margin-left:6px;font-size:7px">'+note+'</span>':'') + '</div>' +
       '<input id="fe-'+id+'" type="'+(type||'text')+'" value="'+v+'" placeholder="'+(placeholder||'')+'" ' +
       'style="width:100%;padding:10px 12px;border-radius:9px;border:1px solid var(--rv-panel-border);background:var(--rv-input-bg);font-family:\'DM Mono\',monospace;font-size:14px;color:rgba(220,230,240,0.9);outline:none;box-sizing:border-box">' +
       '</div>';
@@ -8467,7 +7895,7 @@ function showFoodEditForm(f) {
   html += '<div id="fe-serv-preview" style="font-family:\'DM Mono\',monospace;font-size:11px;color:rgba(62,207,160,0.6);margin-bottom:14px;min-height:18px"></div>';
 
   html += '<div style="margin-bottom:14px">';
-  html += '<div style="font-family:\'DM Mono\',monospace;font-size:10px;letter-spacing:1px;text-transform:uppercase;color:var(--rv-text-muted);margin-bottom:5px">category</div>';
+  html += '<div style="font-family:\'DM Mono\',monospace;font-size:8px;letter-spacing:1px;text-transform:uppercase;color:var(--rv-text-muted);margin-bottom:5px">category</div>';
   html += '<select id="fe-cat" style="width:100%;padding:10px 12px;border-radius:9px;border:1px solid var(--rv-panel-border);background:var(--rv-input-bg);font-family:\'DM Mono\',monospace;font-size:13px;color:rgba(220,230,240,0.8);outline:none">' + catOpts + '</select>';
   html += '</div>';
 
@@ -8812,7 +8240,7 @@ function openOrbRadialMenu() {
     ].join(';');
     btn.innerHTML =
       '<span style="font-size:18px;line-height:1;color:' + item.col + '">' + item.icon + '</span>' +
-      '<span style="font-family:\'DM Mono\',monospace;font-size:10px;letter-spacing:0.5px;color:rgba(200,220,240,0.7);text-transform:uppercase;line-height:1">' + item.label + '</span>';
+      '<span style="font-family:\'DM Mono\',monospace;font-size:8px;letter-spacing:0.5px;color:rgba(200,220,240,0.7);text-transform:uppercase;line-height:1">' + item.label + '</span>';
 
     btn.addEventListener('click', function(e) {
       e.stopPropagation();
@@ -9224,8 +8652,8 @@ function openDebugPanel() {
 
     // Error log with copy button
     '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px">' +
-      '<div style="font-size:10px;letter-spacing:1px;text-transform:uppercase;color:var(--rv-text-dim)">log</div>' +
-      '<button id="copy-log-btn" onclick="var t=(window.__debugLog||[]).join(\"\\n\");navigator.clipboard.writeText(t).then(function(){var b=document.getElementById(\'copy-log-btn\');b.textContent=\'\u2713 copied\';setTimeout(function(){b.textContent=\'copy\'},1500)})" style="padding:2px 7px;border-radius:5px;border:1px solid var(--rv-panel-border);background:var(--rv-input-bg);color:var(--rv-text-muted);font-family:monospace;font-size:10px;cursor:pointer">copy</button>' +
+      '<div style="font-size:8px;letter-spacing:1px;text-transform:uppercase;color:var(--rv-text-dim)">log</div>' +
+      '<button id="copy-log-btn" onclick="var t=(window.__debugLog||[]).join(\"\\n\");navigator.clipboard.writeText(t).then(function(){var b=document.getElementById(\'copy-log-btn\');b.textContent=\'\u2713 copied\';setTimeout(function(){b.textContent=\'copy\'},1500)})" style="padding:2px 7px;border-radius:5px;border:1px solid var(--rv-panel-border);background:var(--rv-input-bg);color:var(--rv-text-muted);font-family:monospace;font-size:8px;cursor:pointer">copy</button>' +
     '</div>' +
     '<div id="debug-content" style="margin-bottom:10px;min-height:20px;font-size:9px;line-height:1.5;user-select:text;-webkit-user-select:text"></div>' +
 
@@ -9234,7 +8662,7 @@ function openDebugPanel() {
 
     // Bug report
     '<div style="margin-bottom:8px">' +
-      '<div style="font-size:10px;letter-spacing:1px;text-transform:uppercase;color:var(--rv-text-muted);margin-bottom:5px">report a bug</div>' +
+      '<div style="font-size:8px;letter-spacing:1px;text-transform:uppercase;color:var(--rv-text-muted);margin-bottom:5px">report a bug</div>' +
       '<div style="display:flex;gap:6px">' +
         '<input id="bug-input" type="text" placeholder="describe what broke..." ' +
           'style="flex:1;padding:6px 8px;border-radius:7px;border:1px solid rgba(255,80,80,0.25);background:rgba(255,80,80,0.05);font-family:monospace;font-size:10px;color:rgba(255,200,200,0.85);outline:none" ' +
@@ -9246,7 +8674,7 @@ function openDebugPanel() {
 
     // Feature request
     '<div style="margin-bottom:10px">' +
-      '<div style="font-size:10px;letter-spacing:1px;text-transform:uppercase;color:var(--rv-text-muted);margin-bottom:5px">request a feature</div>' +
+      '<div style="font-size:8px;letter-spacing:1px;text-transform:uppercase;color:var(--rv-text-muted);margin-bottom:5px">request a feature</div>' +
       '<div style="display:flex;gap:6px">' +
         '<input id="feature-input" type="text" placeholder="describe what you want..." ' +
           'style="flex:1;padding:6px 8px;border-radius:7px;border:1px solid rgba(62,130,220,0.25);background:rgba(62,130,220,0.05);font-family:monospace;font-size:10px;color:rgba(150,180,255,0.85);outline:none" ' +
@@ -9306,141 +8734,94 @@ async function deployToGitHub() {
 }
 
 // ── EVENT EDITOR — edit or delete a logged event ─────────────────────
-var _eeItems = [];
-
 function openEventEditor(eventIdx) {
+  var events = [...LOGGED_EVENTS, ...SESSION.map((s,i) => ({...s, _session: true, _idx: i}))];
+  // Find by index in BOLUS_EVENTS
   var ev = BOLUS_EVENTS[eventIdx];
   if (!ev) return;
+
   var ex = document.getElementById('event-edit-overlay');
   if (ex) ex.remove();
 
-  _eeItems = (ev.items || []).map(function(i){ return Object.assign({}, i); });
-
   var el = document.createElement('div');
   el.id  = 'event-edit-overlay';
-  el.style.cssText = 'position:fixed;inset:0;z-index:80;background:rgba(3,5,20,0.93);' +
+  el.style.cssText = 'position:fixed;inset:0;z-index:80;background:rgba(3,5,20,0.92);' +
     'backdrop-filter:blur(16px);display:flex;flex-direction:column;align-items:center;' +
-    'overflow-y:auto;padding:28px 20px 60px;pointer-events:auto;touch-action:pan-y';
+    'justify-content:center;padding:32px;pointer-events:auto;touch-action:pan-y';
   el.addEventListener('touchstart', function(e){e.stopPropagation();},{passive:true});
   el.addEventListener('click', function(e){ if(e.target===el) el.remove(); });
 
   var dt = new Date(ev.t);
+  var timeStr = dt.toLocaleDateString('en-GB',{weekday:'short',day:'numeric',month:'short'}) +
+    ' · ' + dt.toLocaleTimeString('en-GB',{hour:'2-digit',minute:'2-digit'});
+
+  // Build time value for datetime-local input
   var tzOffset = dt.getTimezoneOffset() * 60000;
-  var dtLocalISO = new Date(ev.t - tzOffset).toISOString().slice(0,16);
-  var hasItems = _eeItems.length > 0;
-  var sourceTag = ev.source === 'pad' ? ' · <span style="color:rgba(255,200,80,0.6);font-size:9px;font-weight:400">pad</span>' : '';
-
-  var itemRows = _eeItems.map(function(item, i) {
-    if (item._removed) return '';
-    return '<div id="ee-item-' + i + '" style="display:flex;align-items:center;gap:8px;padding:8px 0;border-bottom:1px solid rgba(255,255,255,0.05)">' +
-      '<button onclick="eeRemoveItem(' + i + ')" style="background:none;border:none;cursor:pointer;color:rgba(200,80,80,0.45);font-size:16px;padding:0 3px;flex-shrink:0;line-height:1">×</button>' +
-      '<input id="ee-iname-' + i + '" value="' + _esc(item.name || '') + '" ' +
-        'style="flex:1;background:rgba(255,255,255,0.05);border:1px solid rgba(255,255,255,0.1);border-radius:6px;padding:6px 8px;font-family:\'DM Mono\',monospace;font-size:12px;color:rgba(220,235,250,0.85);outline:none">' +
-      '<div style="display:flex;align-items:center;gap:3px">' +
-        '<input id="ee-icarbs-' + i + '" type="number" value="' + (item.carbs || 0) + '" min="0" max="200" step="1" oninput="eeUpdateTotals()" ' +
-          'style="width:50px;background:rgba(255,140,50,0.06);border:1px solid rgba(255,140,50,0.2);border-radius:6px;padding:6px 4px;font-family:\'DM Mono\',monospace;font-size:13px;color:rgba(255,140,50,0.9);text-align:center;outline:none">' +
-        '<span style="font-family:\'DM Mono\',monospace;font-size:9px;color:rgba(255,140,50,0.4)">g</span>' +
-      '</div>' +
-      (item.gi ? '<span style="font-family:\'DM Mono\',monospace;font-size:9px;color:rgba(180,200,220,0.35);flex-shrink:0">GI' + item.gi + '</span>' : '') +
-    '</div>';
-  }).join('');
-
-  var itemsSection = hasItems
-    ? '<div style="margin-bottom:16px">' +
-        '<div style="font-family:\'DM Mono\',monospace;font-size:10px;letter-spacing:1px;text-transform:uppercase;color:rgba(180,200,220,0.55);margin-bottom:10px">items' + sourceTag + '</div>' +
-        '<div id="ee-items-list">' + itemRows + '</div>' +
-        '<button onclick="eeAddItem()" style="margin-top:8px;width:100%;padding:6px;border-radius:7px;border:1px dashed rgba(255,255,255,0.1);background:transparent;font-family:\'DM Mono\',monospace;font-size:10px;color:rgba(180,200,220,0.4);cursor:pointer">+ add item</button>' +
-      '</div>'
-    : '';
+  var dtLocalISO = new Date(dt.getTime() - tzOffset).toISOString().slice(0,16);
 
   el.innerHTML =
-    '<div style="max-width:380px;width:100%">' +
-    '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:22px">' +
-      '<div style="font-family:\'Fraunces\',serif;font-style:italic;font-weight:200;font-size:22px;color:rgba(180,220,200,0.85)">edit entry</div>' +
-      '<button onclick="document.getElementById(\'event-edit-overlay\').remove()" style="background:none;border:none;cursor:pointer;font-size:24px;color:var(--rv-text-muted);padding:4px">×</button>' +
+    '<div style="max-width:320px;width:100%">' +
+    '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:20px">' +
+      '<div style="font-family:\'Fraunces\',serif;font-style:italic;font-weight:200;font-size:20px;' +
+        'color:rgba(180,220,200,0.8)">edit entry</div>' +
+      '<button onclick="document.getElementById(\'event-edit-overlay\').remove()" ' +
+        'style="background:none;border:none;cursor:pointer;font-size:22px;color:var(--rv-text-muted);padding:4px">×</button>' +
     '</div>' +
+    // Time editor — editable for all event types
     '<div style="margin-bottom:16px">' +
-      '<div style="font-family:\'DM Mono\',monospace;font-size:10px;letter-spacing:1px;text-transform:uppercase;color:rgba(180,200,220,0.55);margin-bottom:8px">when</div>' +
-      '<input id="ee-time" type="datetime-local" value="' + dtLocalISO + '" style="width:100%;padding:10px 13px;border-radius:8px;border:1px solid var(--rv-panel-border);background:var(--rv-input-bg);font-family:\'DM Mono\',monospace;font-size:14px;color:rgba(200,220,240,0.85);outline:none;box-sizing:border-box">' +
+      '<div style="font-family:\'DM Mono\',monospace;font-size:8px;letter-spacing:1px;' +
+        'text-transform:uppercase;color:var(--rv-text-muted);margin-bottom:6px">when</div>' +
+      '<input id="ee-time" type="datetime-local" value="' + dtLocalISO + '" ' +
+        'style="width:100%;padding:9px 12px;border-radius:8px;border:1px solid var(--rv-panel-border);' +
+        'background:var(--rv-input-bg);font-family:\'DM Mono\',monospace;font-size:13px;' +
+        'color:rgba(200,220,240,0.8);outline:none;box-sizing:border-box">' +
     '</div>' +
-    itemsSection +
-    '<div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;margin-bottom:22px">' +
+    '<div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;margin-bottom:20px">' +
       '<div>' +
-        '<div style="font-family:\'DM Mono\',monospace;font-size:10px;letter-spacing:1px;text-transform:uppercase;color:rgba(255,140,50,0.6);margin-bottom:7px">' + (hasItems ? 'total carbs' : 'carbs (g)') + '</div>' +
-        '<input id="ee-carbs" type="number" value="' + (ev.c||0) + '" min="0" max="300" step="1" ' +
-          (hasItems ? 'readonly ' : '') +
-          'style="width:100%;padding:11px;border-radius:8px;border:1px solid rgba(255,140,50,' + (hasItems?'0.12':'0.22') + ');background:rgba(255,140,50,' + (hasItems?'0.03':'0.06') + ');font-family:\'DM Mono\',monospace;font-size:18px;color:rgba(255,140,50,' + (hasItems?'0.5':'0.95') + ');text-align:center;outline:none">' +
+        '<div style="font-family:\'DM Mono\',monospace;font-size:8px;letter-spacing:1px;' +
+          'text-transform:uppercase;color:rgba(255,140,50,0.5);margin-bottom:5px">carbs (g)</div>' +
+        '<input id="ee-carbs" type="number" value="' + (ev.c||0) + '" min="0" max="200" step="1" ' +
+          'style="width:100%;padding:10px;border-radius:8px;border:1px solid rgba(255,140,50,0.2);' +
+          'background:rgba(255,140,50,0.05);font-family:\'DM Mono\',monospace;font-size:16px;' +
+          'color:rgba(255,140,50,0.9);text-align:center;outline:none">' +
       '</div>' +
       '<div>' +
-        '<div style="font-family:\'DM Mono\',monospace;font-size:10px;letter-spacing:1px;text-transform:uppercase;color:rgba(60,130,220,0.6);margin-bottom:7px">insulin (U)</div>' +
-        '<input id="ee-units" type="number" value="' + (ev.u||0) + '" min="0" max="20" step="0.5" style="width:100%;padding:11px;border-radius:8px;border:1px solid rgba(60,130,220,0.22);background:rgba(60,130,220,0.06);font-family:\'DM Mono\',monospace;font-size:18px;color:rgba(60,130,220,0.95);text-align:center;outline:none">' +
+        '<div style="font-family:\'DM Mono\',monospace;font-size:8px;letter-spacing:1px;' +
+          'text-transform:uppercase;color:rgba(60,130,220,0.5);margin-bottom:5px">insulin (U)</div>' +
+        '<input id="ee-units" type="number" value="' + (ev.u||0) + '" min="0" max="20" step="0.5" ' +
+          'style="width:100%;padding:10px;border-radius:8px;border:1px solid rgba(60,130,220,0.2);' +
+          'background:rgba(60,130,220,0.05);font-family:\'DM Mono\',monospace;font-size:16px;' +
+          'color:rgba(60,130,220,0.9);text-align:center;outline:none">' +
       '</div>' +
       '<div>' +
-        '<div style="font-family:\'DM Mono\',monospace;font-size:10px;letter-spacing:1px;text-transform:uppercase;color:rgba(180,200,220,0.55);margin-bottom:7px">wait (min)</div>' +
-        '<input id="ee-wait" type="number" value="' + (ev.waitMins||0) + '" min="0" max="60" step="5" style="width:100%;padding:11px;border-radius:8px;border:1px solid rgba(180,200,220,0.15);background:rgba(180,200,220,0.04);font-family:\'DM Mono\',monospace;font-size:18px;color:rgba(200,220,240,0.9);text-align:center;outline:none">' +
+        '<div style="font-family:\'DM Mono\',monospace;font-size:8px;letter-spacing:1px;' +
+          'text-transform:uppercase;color:var(--rv-text-muted);margin-bottom:5px">wait (min)</div>' +
+        '<input id="ee-wait" type="number" value="' + (ev.waitMins||0) + '" min="0" max="60" step="5" ' +
+          'style="width:100%;padding:10px;border-radius:8px;border:1px solid var(--rv-panel-border);' +
+          'background:var(--rv-input-bg);font-family:\'DM Mono\',monospace;font-size:16px;' +
+          'color:rgba(200,200,200,0.9);text-align:center;outline:none">' +
       '</div>' +
     '</div>' +
     '<div style="display:flex;gap:8px">' +
-      '<button onclick="saveEventEdit(' + eventIdx + ')" style="flex:1;padding:13px;border-radius:10px;border:1px solid rgba(62,180,120,0.3);background:rgba(62,180,120,0.08);font-family:\'Fraunces\',serif;font-style:italic;font-weight:200;font-size:17px;color:rgba(62,180,120,0.95);cursor:pointer">save</button>' +
-      '<button onclick="deleteEvent(' + eventIdx + ')" style="padding:13px 16px;border-radius:10px;border:1px solid rgba(200,60,60,0.2);background:transparent;font-family:\'DM Mono\',monospace;font-size:11px;color:rgba(200,80,80,0.55);cursor:pointer">delete</button>' +
-      '<button onclick="document.getElementById(\'event-edit-overlay\').remove()" style="padding:13px 14px;border-radius:10px;border:1px solid var(--rv-panel-border);background:transparent;font-family:\'DM Mono\',monospace;font-size:11px;color:var(--rv-close-btn);cursor:pointer">cancel</button>' +
+      '<button onclick="saveEventEdit(' + eventIdx + ')" ' +
+        'style="flex:1;padding:12px;border-radius:10px;border:1px solid rgba(62,180,120,0.3);' +
+        'background:rgba(62,180,120,0.08);font-family:\'Fraunces\',serif;font-style:italic;' +
+        'font-weight:200;font-size:16px;color:rgba(62,180,120,0.9);cursor:pointer">save</button>' +
+      '<button onclick="deleteEvent(' + eventIdx + ')" ' +
+        'style="padding:12px 16px;border-radius:10px;border:1px solid rgba(200,60,60,0.2);' +
+        'background:transparent;font-family:\'DM Mono\',monospace;font-size:10px;' +
+        'color:rgba(200,80,80,0.5);cursor:pointer">delete</button>' +
+      '<button onclick="document.getElementById(\'event-edit-overlay\').remove()" ' +
+        'style="padding:12px 14px;border-radius:10px;border:1px solid var(--rv-panel-border);' +
+        'background:transparent;font-family:\'DM Mono\',monospace;font-size:10px;' +
+        'color:var(--rv-close-btn);cursor:pointer">cancel</button>' +
     '</div></div>';
 
   document.body.appendChild(el);
 }
 
-function eeRemoveItem(i) {
-  _eeItems[i]._removed = true;
-  var row = document.getElementById('ee-item-' + i);
-  if (row) row.style.display = 'none';
-  eeUpdateTotals();
-}
-
-function eeAddItem() {
-  var i = _eeItems.length;
-  _eeItems.push({ name: '', carbs: 0, gi: 55 });
-  var list = document.getElementById('ee-items-list');
-  if (!list) return;
-  var row = document.createElement('div');
-  row.id = 'ee-item-' + i;
-  row.style.cssText = 'display:flex;align-items:center;gap:8px;padding:8px 0;border-bottom:1px solid rgba(255,255,255,0.05)';
-  row.innerHTML =
-    '<button onclick="eeRemoveItem(' + i + ')" style="background:none;border:none;cursor:pointer;color:rgba(200,80,80,0.45);font-size:16px;padding:0 3px;flex-shrink:0;line-height:1">×</button>' +
-    '<input id="ee-iname-' + i + '" value="" placeholder="food name" style="flex:1;background:rgba(255,255,255,0.05);border:1px solid rgba(255,255,255,0.1);border-radius:6px;padding:6px 8px;font-family:\'DM Mono\',monospace;font-size:12px;color:rgba(220,235,250,0.85);outline:none">' +
-    '<div style="display:flex;align-items:center;gap:3px">' +
-      '<input id="ee-icarbs-' + i + '" type="number" value="0" min="0" max="200" step="1" oninput="eeUpdateTotals()" style="width:50px;background:rgba(255,140,50,0.06);border:1px solid rgba(255,140,50,0.2);border-radius:6px;padding:6px 4px;font-family:\'DM Mono\',monospace;font-size:13px;color:rgba(255,140,50,0.9);text-align:center;outline:none">' +
-      '<span style="font-family:\'DM Mono\',monospace;font-size:9px;color:rgba(255,140,50,0.4)">g</span>' +
-    '</div>';
-  list.appendChild(row);
-}
-
-function eeUpdateTotals() {
-  var total = 0;
-  _eeItems.forEach(function(item, i) {
-    if (item._removed) return;
-    var inp = document.getElementById('ee-icarbs-' + i);
-    total += inp ? (parseFloat(inp.value) || 0) : (item.carbs || 0);
-  });
-  var carbEl = document.getElementById('ee-carbs');
-  if (carbEl && carbEl.readOnly) carbEl.value = total.toFixed(0);
-}
-
 function saveEventEdit(idx) {
-  var editedItems = null;
-  if (_eeItems && _eeItems.length > 0) {
-    editedItems = _eeItems.filter(function(item, i) {
-      if (item._removed) return false;
-      var nameEl  = document.getElementById('ee-iname-'  + i);
-      var carbsEl = document.getElementById('ee-icarbs-' + i);
-      if (nameEl)  item.name  = nameEl.value.trim();
-      if (carbsEl) item.carbs = parseFloat(carbsEl.value) || 0;
-      return item.name || item.carbs > 0;
-    });
-  }
-
-  var c = (editedItems && editedItems.length > 0)
-    ? editedItems.reduce(function(s,i){ return s+(i.carbs||0); }, 0)
-    : (parseFloat(document.getElementById('ee-carbs').value) || 0);
+  var c        = parseFloat(document.getElementById('ee-carbs').value) || 0;
   var u        = parseFloat(document.getElementById('ee-units').value) || 0;
   var waitMins = parseInt(document.getElementById('ee-wait').value)    || 0;
   var timeEl   = document.getElementById('ee-time');
@@ -9448,25 +8829,29 @@ function saveEventEdit(idx) {
 
   if (!BOLUS_EVENTS[idx]) { var el=document.getElementById('event-edit-overlay'); if(el) el.remove(); return; }
 
-  var oldT    = BOLUS_EVENTS[idx].t;
+  var oldT = BOLUS_EVENTS[idx].t;
   var oldWait = BOLUS_EVENTS[idx].waitMins || 0;
 
+  // --- Apply changes to BOLUS_EVENTS entry ---
   BOLUS_EVENTS[idx].c = c;
   BOLUS_EVENTS[idx].u = u;
   BOLUS_EVENTS[idx].waitMins = waitMins;
-  if (editedItems) BOLUS_EVENTS[idx].items = editedItems;
   if (newT && newT !== oldT) BOLUS_EVENTS[idx].t = newT;
   var updatedT = BOLUS_EVENTS[idx].t;
 
+  // --- If this is a bolus event (u > 0) and wait changed, reposition linked carb chip ---
+  // The carb event sits at bolusT + waitMins*60000. Find it and move it.
   if (u > 0) {
     var oldCarbT = oldT + oldWait * 60000;
     var newCarbT = updatedT + waitMins * 60000;
     if (oldCarbT !== newCarbT) {
+      // Reposition in BOLUS_EVENTS
       var carbIdx = BOLUS_EVENTS.findIndex(function(e, i) {
         return i !== idx && e.c > 0 && e.u === 0 && Math.abs(e.t - oldCarbT) < 5 * 60000;
       });
       if (carbIdx >= 0) {
         BOLUS_EVENTS[carbIdx].t = newCarbT;
+        // Sync carb event through SESSION and LOGGED_EVENTS too
         var csi = SESSION.findIndex(function(s){ return Math.abs(s.t - oldCarbT) < 5*60000 && s.c > 0 && !s.u; });
         if (csi >= 0) SESSION[csi].t = newCarbT;
         var cli = LOGGED_EVENTS.findIndex(function(s){ return Math.abs(s.t - oldCarbT) < 5*60000 && s.c > 0 && !s.u; });
@@ -9475,18 +8860,18 @@ function saveEventEdit(idx) {
     }
   }
 
+  // --- Sync the edited event through SESSION ---
   var si = SESSION.findIndex(function(s){ return Math.abs(s.t - oldT) < 60000; });
   if (si >= 0) {
     SESSION[si].c = c; SESSION[si].u = u;
-    if (editedItems) SESSION[si].items = editedItems;
     if (newT && newT !== oldT) SESSION[si].t = updatedT;
   }
   try { localStorage.setItem('river_session', JSON.stringify(SESSION)); } catch(e) {}
 
+  // --- Sync through LOGGED_EVENTS ---
   var li = LOGGED_EVENTS.findIndex(function(s){ return Math.abs(s.t - oldT) < 60000; });
   if (li >= 0) {
     LOGGED_EVENTS[li].c = c; LOGGED_EVENTS[li].u = u;
-    if (editedItems) LOGGED_EVENTS[li].items = editedItems;
     if (newT && newT !== oldT) LOGGED_EVENTS[li].t = updatedT;
   }
   try { localStorage.setItem('river_logged', JSON.stringify(LOGGED_EVENTS)); } catch(e) {}
@@ -9782,7 +9167,7 @@ function _vsThemeBtn(name, bg, line, iob, carbHot, carbCool) {
     'style="padding:10px 8px;border-radius:9px;border:1px solid var(--rv-panel-border);' +
     'background:'+bg+';cursor:pointer;display:flex;flex-direction:column;align-items:center;gap:5px">' +
     '<div style="display:flex;gap:4px">'+dots+'</div>' +
-    '<div style="font-family:\'DM Mono\',monospace;font-size:10px;color:var(--rv-text-muted)">'+name+'</div>' +
+    '<div style="font-family:\'DM Mono\',monospace;font-size:8px;color:var(--rv-text-muted)">'+name+'</div>' +
     '</button>';
 }
 
@@ -9909,7 +9294,7 @@ function openTreatmentPanel() {
     '</div>' +
 
     // Basal
-    '<div style="font-family:\'DM Mono\',monospace;font-size:10px;letter-spacing:1.5px;text-transform:uppercase;' +
+    '<div style="font-family:\'DM Mono\',monospace;font-size:8px;letter-spacing:1.5px;text-transform:uppercase;' +
       'color:rgba(80,140,220,0.5);margin-bottom:10px">basal</div>' +
     '<div style="' + rowStyle('rgba(200,220,240,0.7)') + '">' +
       '<span style="color:rgba(140,180,220,0.6)">Degludec</span>' +
@@ -9918,7 +9303,7 @@ function openTreatmentPanel() {
     '</div>' +
 
     // Hypo defaults
-    '<div style="font-family:\'DM Mono\',monospace;font-size:10px;letter-spacing:1.5px;text-transform:uppercase;' +
+    '<div style="font-family:\'DM Mono\',monospace;font-size:8px;letter-spacing:1.5px;text-transform:uppercase;' +
       'color:rgba(255,210,40,0.5);margin-bottom:10px;margin-top:20px">hypo defaults</div>' +
     '<div style="' + rowStyle('rgba(255,210,40,0.8)') + '">' +
       '<span style="color:rgba(200,180,80,0.6)">threshold</span>' +
@@ -9930,12 +9315,12 @@ function openTreatmentPanel() {
     '</div>' +
 
     // Ratios
-    '<div style="font-family:\'DM Mono\',monospace;font-size:10px;letter-spacing:1.5px;text-transform:uppercase;' +
+    '<div style="font-family:\'DM Mono\',monospace;font-size:8px;letter-spacing:1.5px;text-transform:uppercase;' +
       'color:rgba(255,150,50,0.5);margin-bottom:10px;margin-top:20px">ratios</div>' +
     ratioHTML +
 
     // Bolus model
-    '<div style="font-family:\'DM Mono\',monospace;font-size:10px;letter-spacing:1.5px;text-transform:uppercase;' +
+    '<div style="font-family:\'DM Mono\',monospace;font-size:8px;letter-spacing:1.5px;text-transform:uppercase;' +
       'color:rgba(100,180,140,0.5);margin-bottom:10px;margin-top:20px">bolus model</div>' +
     '<div style="' + rowStyle('rgba(200,220,240,0.6)') + '">' +
       '<span style="color:rgba(140,180,160,0.6)">Novorapid</span>' +
@@ -9943,7 +9328,7 @@ function openTreatmentPanel() {
       '<span style="color:rgba(100,140,120,0.5)">4hr tail</span>' +
     '</div>' +
 
-    '<div style="font-family:\'DM Mono\',monospace;font-size:10px;color:rgba(120,140,160,0.35);' +
+    '<div style="font-family:\'DM Mono\',monospace;font-size:8px;color:rgba(120,140,160,0.35);' +
       'text-align:center;margin-top:28px;line-height:1.6">' +
       'ratios & settings are reference only<br>always confirm with your clinical team' +
     '</div>' +
