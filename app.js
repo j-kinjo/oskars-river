@@ -8376,51 +8376,51 @@ let _orbPressTimer = null;
 let _whisperOpen   = false;
 var _radialDefaultT = null; // Set by long-press to pre-fill modals with river time at press position
 
-// ── LONG PRESS DEBUG HUD ─────────────────────────────────────────────────
 function _lpLog(msg) {
   var el = document.getElementById('_lp_debug');
   if (!el) {
     el = document.createElement('div');
     el.id = '_lp_debug';
-    el.style.cssText = 'position:fixed;top:60px;left:0;right:0;z-index:9999;pointer-events:none;font-family:monospace;font-size:11px;line-height:1.6;padding:6px 10px;background:rgba(0,0,0,0.75);color:#0f0;white-space:pre-wrap;max-height:180px;overflow:hidden';
+    el.style.cssText = 'position:fixed;top:60px;left:0;right:0;z-index:9999;pointer-events:none;font-family:monospace;font-size:11px;line-height:1.6;padding:6px 10px;background:rgba(0,0,0,0.82);color:#0f0;white-space:pre-wrap;max-height:200px;overflow:hidden';
     document.body.appendChild(el);
   }
+  var t = (Date.now()%100000).toString().slice(-5);
   var lines = el.textContent.split('\n');
-  lines.unshift(msg);
-  el.textContent = lines.slice(0,10).join('\n');
+  lines.unshift(t+' '+msg);
+  el.textContent = lines.slice(0,12).join('\n');
 }
 
 function setupOrbLongPress() {
   const cv = document.getElementById('c');
   if (!cv) return;
-  _lpLog('setup OK');
+  _lpLog('SETUP OK');
 
   var _orbTouchStartT = 0;
   var _pressClientX   = 0;
   var _pressClientY   = 0;
 
   cv.addEventListener('touchstart', function(e) {
-    _lpLog('tstart n=' + e.touches.length + ' timer=' + (!!_orbPressTimer));
+    _lpLog('TSTART n='+e.touches.length+' tmr='+!!_orbPressTimer);
     if (e.touches.length > 1) {
       if (_orbPressTimer) { clearTimeout(_orbPressTimer); _orbPressTimer = null; }
       _orbTouchStartT = 0;
       return;
     }
-    if (_orbPressTimer) { _lpLog('GUARD: timer running, skip'); return; }
+    if (_orbPressTimer) { _lpLog('GUARD-skip'); return; }
     const t = e.touches[0];
     _pressClientX = t.clientX;
     _pressClientY = t.clientY;
     _orbTouchStartT = Date.now();
     _orbLongPressHint = 1.0;
     _orbPressTimer = setTimeout(function() {
-      _lpLog('TIMER FIRED → opening menu');
+      _lpLog('FIRED → menu');
       _orbPressTimer = null;
       if (navigator.vibrate) navigator.vibrate(30);
       var rect = cv.getBoundingClientRect();
       _radialDefaultT = xT(_pressClientX - rect.left);
       openOrbRadialMenu(_pressClientX);
     }, 600);
-    _lpLog('timer set');
+    _lpLog('TMR-SET');
   }, {passive:true});
 
   cv.addEventListener('touchmove', function(e) {
@@ -8428,9 +8428,9 @@ function setupOrbLongPress() {
       var t = e.touches[0];
       var dx = t.clientX - _pressClientX;
       var dy = t.clientY - _pressClientY;
-      var dist = Math.sqrt(dx*dx + dy*dy);
-      if (dist > 10) {
-        _lpLog('MOVE CANCEL dist=' + dist.toFixed(0));
+      var d = Math.sqrt(dx*dx+dy*dy);
+      if (d > 10) {
+        _lpLog('MOVE-CANCEL d='+d.toFixed(1));
         clearTimeout(_orbPressTimer);
         _orbPressTimer = null;
         _orbTouchStartT = 0;
@@ -8439,15 +8439,12 @@ function setupOrbLongPress() {
   }, {passive:true});
 
   cv.addEventListener('touchend', function() {
-    var dur = Date.now() - _orbTouchStartT;
-    _lpLog('tend dur=' + dur + ' timer=' + (!!_orbPressTimer));
+    var dur = _orbTouchStartT ? Date.now() - _orbTouchStartT : -1;
+    _lpLog('TEND dur='+dur+' tmr='+!!_orbPressTimer);
     if (_orbPressTimer) {
       clearTimeout(_orbPressTimer);
       _orbPressTimer = null;
-      if (dur < 500 && _orbTouchStartT > 0) {
-        _orbTapHint = 1.0;
-        _orbTapHintT = Date.now();
-      }
+      if (dur < 500 && dur > 0) { _orbTapHint=1.0; _orbTapHintT=Date.now(); }
     }
     _orbTouchStartT = 0;
   }, {passive:true});
@@ -8516,15 +8513,18 @@ function openOrbRadialMenu(pressX) {
   // Guard: ignore close events for 350ms after open — prevents the finger-lift from the
   // long-press immediately firing a click/touchend on the backdrop and closing the menu.
   var _menuOpenT = Date.now();
-  function _canClose() { return Date.now() - _menuOpenT > 350; }
+  function _canClose() { return Date.now() - _menuOpenT > 600; }
 
-  // Close on backdrop — touchend only (click fires too late and catches the lift from long-press)
   bg.addEventListener('touchend', function(e) {
+    var age = Date.now()-_menuOpenT;
+    _lpLog('BG-TEND age='+age+' canClose='+_canClose());
     if (!_canClose()) return;
     e.preventDefault();
     closeOrbRadialMenu();
   });
   bg.addEventListener('click', function() {
+    var age = Date.now()-_menuOpenT;
+    _lpLog('BG-CLICK age='+age+' canClose='+_canClose());
     if (!_canClose()) return;
     closeOrbRadialMenu();
   });
