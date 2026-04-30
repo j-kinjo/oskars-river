@@ -11283,9 +11283,11 @@ function commitPadImport() {
     : 55;
 
   if (u > 0) {
-    SESSION.push({t:t, c:0, u:u, source:'pad'});
-    BOLUS_EVENTS.push({t:t, c:0, u:u, source:'pad'});
-    LOGGED_EVENTS.push({t:t, c:0, u:u, note:'bolus', source:'pad', logged_by:_thisPersonId||'unknown', local:true});
+    // Store waitMins on the bolus event so the event editor can correctly
+    // find and reposition the linked carb event when wait time is edited.
+    SESSION.push({t:t, c:0, u:u, waitMins:waitMins, source:'pad'});
+    BOLUS_EVENTS.push({t:t, c:0, u:u, waitMins:waitMins, source:'pad'});
+    LOGGED_EVENTS.push({t:t, c:0, u:u, waitMins:waitMins, note:'bolus', source:'pad', logged_by:_thisPersonId||'unknown', local:true});
     topUpIOB(u);
   }
   if (totalCarbs > 0) {
@@ -11318,7 +11320,23 @@ function commitPadImport() {
     saveMealHistory();
   }
 
-  showToast(totalCarbs.toFixed(0) + 'g carbs from pad\nadded to the flow');
+  // Set eat reminder — same as logMealEntry
+  if (u > 0 && waitMins > 0) {
+    var eatAt = t + waitMins * 60000;
+    if (_eatReminder) clearTimeout(_eatReminder);
+    _eatReminder = setTimeout(function() {
+      if (document.getElementById('sheet') && document.getElementById('sheet').classList.contains('open')) return;
+      showRiverPebble('time to eat (~' + waitMins + 'min since bolus)', 'eat');
+      if (navigator.vibrate) navigator.vibrate([200, 100, 200]);
+    }, Math.max(0, eatAt - Date.now()));
+  }
+
+  // Build a meaningful toast covering both bolus and carbs
+  var parts = [];
+  if (u > 0) parts.push(u.toFixed(1) + 'U insulin');
+  if (totalCarbs > 0) parts.push(totalCarbs.toFixed(0) + 'g carbs');
+  if (u > 0 && waitMins > 0) parts.push('eat in ' + waitMins + 'min');
+  showToast((parts.join(' · ') || 'logged') + '\nadded to the flow');
 }
 
 // ── Load aliases on startup ──────────────────────────────────────────────
