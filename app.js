@@ -1894,6 +1894,11 @@ function drawOrb(pal, d) {
   if (!d) return;
   const x    = NOW_X * W;
   const y    = bgToY(d.bg);
+  window._orbScreenX = x;
+  window._orbScreenY = y;
+  // Export orb screen position so the DOM long-press button can track it
+  window._orbScreenX = x;
+  window._orbScreenY = y;
   const t    = Date.now() / 1000;
 
   // Colour shifts with BG value
@@ -8377,89 +8382,88 @@ let _whisperOpen   = false;
 var _radialDefaultT = null; // Set by long-press to pre-fill modals with river time at press position
 
 function setupOrbLongPress() {
-  const cv = document.getElementById('c');
-  if (!cv) return;
+  // ── DOM BUTTON APPROACH ───────────────────────────────────────────────
+  // Invisible button positioned over the orb each frame via rAF.
+  // Completely decoupled from canvas touch/scroll system.
+  // No passive:false conflicts. No scroll interference.
 
-  var _orbTouchStartT = 0;
-  var _pressClientX   = 0;
-  var _pressClientY   = 0;
+  var btn = document.getElementById('_orb_btn');
+  if (!btn) {
+    btn = document.createElement('div');
+    btn.id = '_orb_btn';
+    btn.style.cssText = [
+      'position:fixed',
+      'width:110px',
+      'height:110px',
+      'border-radius:50%',
+      'z-index:30',
+      'touch-action:none',
+      'pointer-events:auto',
+      'cursor:pointer',
+      '-webkit-user-select:none',
+      'user-select:none',
+      'background:transparent',
+      '-webkit-tap-highlight-color:transparent',
+    ].join(';');
+    document.body.appendChild(btn);
+  }
 
-  cv.addEventListener('touchstart', function(e) {
-    if (e.touches.length > 1) {
-      if (_orbPressTimer) { clearTimeout(_orbPressTimer); _orbPressTimer = null; }
-      _orbTouchStartT = 0;
-      return;
-    }
-    // Don't reset a running timer — spurious re-fires during a hold would restart the clock
+  // Reposition each frame to track the orb
+  (function positionBtn() {
+    var cx = (typeof window._orbScreenX === 'number') ? window._orbScreenX : (NOW_X * W);
+    var cy = (typeof window._orbScreenY === 'number') ? window._orbScreenY : (window.innerHeight * 0.5);
+    btn.style.left = (cx - 55) + 'px';
+    btn.style.top  = (cy - 55) + 'px';
+    requestAnimationFrame(positionBtn);
+  })();
+
+  var _pressX = 0, _pressY = 0, _pressing = false;
+
+  function _startPress(clientX, clientY) {
     if (_orbPressTimer) return;
-    const t = e.touches[0];
-    _pressClientX = t.clientX;
-    _pressClientY = t.clientY;
-    _orbTouchStartT = Date.now();
+    _pressing = true;
+    _pressX = clientX;
+    _pressY = clientY;
     _orbLongPressHint = 1.0;
     _orbPressTimer = setTimeout(function() {
-      _orbPressTimer = null; // clear before opening so touchstart guard resets
+      _orbPressTimer = null;
+      if (!_pressing) return;
       if (navigator.vibrate) navigator.vibrate(30);
-      var rect = cv.getBoundingClientRect();
-      _radialDefaultT = xT(_pressClientX - rect.left);
-      openOrbRadialMenu(_pressClientX);
-    }, 600);
-  }, {passive:true});
-
-  cv.addEventListener('touchmove', function(e) {
-    if (_orbPressTimer) {
-      var t = e.touches[0];
-      var dx = t.clientX - _pressClientX;
-      var dy = t.clientY - _pressClientY;
-      if (Math.sqrt(dx*dx + dy*dy) > 10) {
-        clearTimeout(_orbPressTimer);
-        _orbPressTimer = null;
-        _orbTouchStartT = 0;
-      }
-    }
-  }, {passive:true});
-
-  cv.addEventListener('touchend', function() {
-    var dur = _orbTouchStartT ? Date.now() - _orbTouchStartT : -1;
-    if (_orbPressTimer) {
-      clearTimeout(_orbPressTimer);
-      _orbPressTimer = null;
-      if (dur > 0 && dur < 500) { _orbTapHint=1.0; _orbTapHintT=Date.now(); }
-    }
-    _orbTouchStartT = 0;
-  }, {passive:true});
-
-  cv.addEventListener('mousedown', function(e) {
-    _pressClientX = e.clientX;
-    _orbTouchStartT = Date.now();
-    _orbLongPressHint = 1.0;
-    _orbPressTimer = setTimeout(function() {
-      var rect = cv.getBoundingClientRect();
-      _radialDefaultT = xT(_pressClientX - rect.left);
-      openOrbRadialMenu(_pressClientX);
+      openOrbRadialMenu(_pressX);
     }, 500);
-  });
+  }
 
-  cv.addEventListener('mousemove', function() {
-    if (_orbPressTimer) {
-      clearTimeout(_orbPressTimer);
-      _orbPressTimer = null;
-    }
-    _orbTouchStartT = 0;
-  });
+  function _cancelPress() {
+    _pressing = false;
+    if (_orbPressTimer) { clearTimeout(_orbPressTimer); _orbPressTimer = null; }
+  }
 
-  cv.addEventListener('mouseup', function() {
-    var dur = Date.now() - _orbTouchStartT;
-    if (_orbPressTimer) {
-      clearTimeout(_orbPressTimer);
-      _orbPressTimer = null;
-      if (dur < 400 && _orbTouchStartT > 0) {
-        _orbTapHint = 1.0;
-        _orbTapHintT = Date.now();
-      }
-    }
-    _orbTouchStartT = 0;
-  });
+  function _moveCheck(clientX, clientY) {
+    if (!_orbPressTimer) return;
+    var dx = clientX - _pressX, dy = clientY - _pressY;
+    if (dx*dx + dy*dy > 144) _cancelPress(); // >12px = scroll intent
+  }
+
+  btn.addEventListener('touchstart', function(e) {
+    if (e.touches.length > 1) { _cancelPress(); return; }
+    e.stopPropagation();
+    _startPress(e.touches[0].clientX, e.touches[0].clientY);
+  }, {passive:true});
+
+  btn.addEventListener('touchmove', function(e) {
+    if (e.touches.length === 1) _moveCheck(e.touches[0].clientX, e.touches[0].clientY);
+  }, {passive:true});
+
+  btn.addEventListener('touchend', function(e) {
+    e.stopPropagation();
+    var wasPressing = _pressing;
+    _cancelPress();
+    if (wasPressing) { _orbTapHint = 1.0; _orbTapHintT = Date.now(); }
+  }, {passive:true});
+
+  btn.addEventListener('mousedown', function(e) { _startPress(e.clientX, e.clientY); });
+  btn.addEventListener('mousemove', function(e) { _moveCheck(e.clientX, e.clientY); });
+  btn.addEventListener('mouseup',   function()  { _cancelPress(); });
 }
 
 function openOrbRadialMenu(pressX) {
