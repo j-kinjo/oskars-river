@@ -8472,8 +8472,21 @@ function openOrbRadialMenu(pressX) {
   el.appendChild(bg);
   setTimeout(function(){ bg.style.opacity = '1'; }, 10);
 
-  // Close on backdrop tap
-  bg.addEventListener('click', function() { closeOrbRadialMenu(); });
+  // Guard: ignore close events for 350ms after open — prevents the finger-lift from the
+  // long-press immediately firing a click/touchend on the backdrop and closing the menu.
+  var _menuOpenT = Date.now();
+  function _canClose() { return Date.now() - _menuOpenT > 350; }
+
+  // Close on backdrop — touchend only (click fires too late and catches the lift from long-press)
+  bg.addEventListener('touchend', function(e) {
+    if (!_canClose()) return;
+    e.preventDefault();
+    closeOrbRadialMenu();
+  });
+  bg.addEventListener('click', function() {
+    if (!_canClose()) return;
+    closeOrbRadialMenu();
+  });
 
   // Radial buttons
   var numItems = items.length;
