@@ -6492,6 +6492,57 @@ const DEMO_SCENARIOS = [
     bgColor: 'rgba(20,30,70,0.7)',
   },
 
+  // ── NEW BREAKFAST SCENARIOS ──────────────────────────────────────────
+  {
+    id: 'happy_state',
+    name: 'Happy state',
+    desc: 'Ticking along at 5.5. Forces balanced. Nothing to act on.',
+    emoji: '\u223c',
+    bgColor: 'rgba(30,110,70,0.7)',
+  },
+  {
+    id: 'breakfast_too_early',
+    name: 'Bolus too early',
+    desc: 'Porridge bolused 10min pre-food. Insulin peaks before carbs arrive. Now is 11:45.',
+    emoji: '\u21d3\u21d1',
+    bgColor: 'rgba(80,40,140,0.7)',
+  },
+  {
+    id: 'breakfast_too_late',
+    name: 'Bolus too late',
+    desc: 'Porridge bolused 30min post-food. Carbs peak before insulin. Now is 11:45.',
+    emoji: '\u21d1\u21d1',
+    bgColor: 'rgba(180,60,30,0.7)',
+  },
+  {
+    id: 'breakfast_goldilocks',
+    name: 'Goldilocks bolus',
+    desc: 'Porridge bolused 20min pre-food. Carbs and insulin arrive together. Now is 11:45.',
+    emoji: '\u2714',
+    bgColor: 'rgba(30,120,80,0.7)',
+  },
+  {
+    id: 'running_high',
+    name: 'Running high',
+    desc: 'Stuck at 14+ for 90min. IOB cleared. Correction given 15min ago.',
+    emoji: '\u25b2',
+    bgColor: 'rgba(160,80,20,0.7)',
+  },
+  {
+    id: 'pre_hypo_snack',
+    name: 'Pre-hypo snack',
+    desc: 'Dropping to 4.2 with active IOB. 2 jelly babies. Gentle recovery, no rebound.',
+    emoji: '\u21d3',
+    bgColor: 'rgba(50,90,200,0.7)',
+  },
+  {
+    id: 'active_hypo',
+    name: 'Active hypo',
+    desc: 'At 3.2. Glucose tabs just logged. COB lifting. Recovery underway.',
+    emoji: '\u26a1',
+    bgColor: 'rgba(30,50,180,0.7)',
+  },
+
 ];
 
 // Generate scenario history — returns {history, bolus_events, now_offset}
@@ -6664,6 +6715,217 @@ function generateScenario(id) {
       break;
     }
 
+    // ── NEW SCENARIOS ────────────────────────────────────────────────────
+
+    case 'happy_state': {
+      // Gentle cruise at 5.5, small sine variations. 4h window. No active forces.
+      // A small snack 3h ago, fully resolved. Just the zen.
+      for (let m=240; m>=0; m-=5) {
+        const wave = Math.sin(m*0.07)*0.4 + Math.sin(m*0.19)*0.15;
+        const bg   = 5.5 + wave;
+        pushPt(m, parseFloat(bg.toFixed(1)), 0, 0);
+      }
+      break;
+    }
+
+    case 'breakfast_too_early': {
+      // now = 11:45. Breakfast at 7:15 with 10min pre-bolus (too early).
+      // Overnight: 8.0 dropping gently to 5.5 by 7:00, dawn nudges to 5.8.
+      // Bolus at 7:05 (270min ago). Food at 7:15 (260min ago).
+      // Insulin peaks before carbs — BG dips to ~4.0 at ~40min post-bolus,
+      // then carbs arrive late and overshoot to ~12. Settles by 10:30.
+      // now = 11:45 so 4.5h of history
+      const nowMins = 270; // 4.5h = 270min
+      for (let m = nowMins; m >= 0; m -= 5) {
+        let bg, iob, cob;
+        // Overnight descent 8→5.5 over first 60min, then dawn creep
+        if (m > nowMins - 60) {
+          const t = nowMins - m; // mins from start
+          bg  = 8.0 - t * 0.042 + Math.sin(t*0.08)*0.2;
+          iob = 0; cob = 0;
+        } else if (m > nowMins - 60 && m <= nowMins) {
+          bg = 5.5; iob = 0; cob = 0;
+        } else {
+          // m relative to bolus time (bolus = 270min ago => m=270 is bolus time)
+          const sinceFood   = nowMins - 10 - m;  // mins since food (food = 260min ago)
+          const sinceBolus  = nowMins - m;        // mins since bolus (bolus = 270min ago)
+          if (sinceBolus < 0) {
+            bg = 5.8; iob = 0; cob = 0;
+          } else {
+            // IOB: peaks fast, decays over 4h
+            iob = sinceBolus < 240 ? 3.0 * Math.exp(-sinceBolus / 85) : 0;
+            // COB: porridge medium GI, peaks ~45min after eating
+            const sf = Math.max(0, sinceFood);
+            cob = sf < 240 ? 38 * (sf/45) * Math.exp(-(sf-45)/55) * (sf>0?1:0) : 0;
+            cob = Math.max(0, cob);
+            // BG: insulin hits first (dip), then carbs rescue but overshoot
+            const preFood  = 5.8 - Math.min(sinceBolus, 40) * 0.048; // insulin dip
+            const dip      = Math.max(3.8, preFood);
+            const carbLift = sf > 0 ? Math.min(sf/45, 1) * 7.5 * Math.exp(-(sf-45)/70) : 0;
+            bg = dip + Math.max(0, carbLift);
+            // Overshoot peak ~12, settled by 3h post-food
+            if (sf > 180) bg = Math.max(5.0, 12 - (sf-180)*0.035);
+            bg = Math.max(3.8, Math.min(13, bg));
+          }
+        }
+        pushPt(m, parseFloat(bg.toFixed(1)), parseFloat(Math.max(0,iob).toFixed(2)), parseFloat(Math.max(0,cob).toFixed(1)));
+      }
+      pushBolus(270, 0, 3.0);     // bolus
+      pushBolus(260, 38, 0);      // porridge carbs
+      break;
+    }
+
+    case 'breakfast_too_late': {
+      // now = 11:45. Breakfast at 7:15, bolus at 7:45 (30min post-food, too late).
+      // Carbs absorb unchecked for 30min — BG rockets to 14+ before insulin catches up.
+      // Settles but still elevated at 11:45.
+      const nowMins = 270;
+      for (let m = nowMins; m >= 0; m -= 5) {
+        let bg, iob, cob;
+        if (m > 260) {
+          // Pre-breakfast: overnight 8→5.5
+          const t = nowMins - m;
+          bg  = 8.0 - t * 0.047;
+          bg  = Math.max(5.5, bg);
+          iob = 0; cob = 0;
+        } else {
+          const sinceFood   = 260 - m;  // food 260min ago
+          const sinceBolus  = Math.max(0, 230 - m); // bolus 230min ago (30min after food)
+          iob = sinceBolus > 0 ? 3.0 * Math.max(0, Math.exp(-sinceBolus/85)) : 0;
+          const sf = Math.max(0, sinceFood);
+          cob = sf < 240 ? Math.max(0, 38 * (sf/40) * Math.exp(-(sf-40)/50)) : 0;
+          // Carbs absorb freely for 30min — steep rocket
+          if (sf < 30) {
+            bg = 5.5 + sf * 0.28; // fast rise unchecked
+          } else if (sf < 90) {
+            bg = 5.5 + 30*0.28 + (sf-30)*0.1; // continues rising, insulin just starting
+          } else {
+            bg = 5.5 + 30*0.28 + 60*0.1 - (sf-90)*0.06;
+          }
+          bg = Math.max(6.5, Math.min(15.5, bg));
+          // Elevated plateau by 11:45
+          if (sf > 230) bg = Math.max(7.5, bg);
+        }
+        pushPt(m, parseFloat(bg.toFixed(1)), parseFloat(Math.max(0,iob).toFixed(2)), parseFloat(Math.max(0,cob).toFixed(1)));
+      }
+      pushBolus(230, 0, 3.0);    // bolus 30min after food
+      pushBolus(260, 38, 0);     // porridge carbs
+      break;
+    }
+
+    case 'breakfast_goldilocks': {
+      // now = 11:45. Breakfast 7:15 with 20min pre-bolus (just right).
+      // Insulin and carbs arrive together — BG rises to 8.5, clean return to range.
+      const nowMins = 270;
+      for (let m = nowMins; m >= 0; m -= 5) {
+        let bg, iob, cob;
+        if (m > 250) {
+          const t = nowMins - m;
+          bg = 8.0 - t * 0.047;
+          bg = Math.max(5.5, bg);
+          iob = 0; cob = 0;
+        } else {
+          const sinceBolus = 250 - m;  // bolus 250min ago (20min pre-food)
+          const sinceFood  = 230 - m;  // food 230min ago
+          iob = sinceBolus < 240 ? 3.0 * Math.max(0, Math.exp(-sinceBolus/85)) : 0;
+          const sf = Math.max(0, sinceFood);
+          cob = sf > 0 && sf < 240 ? Math.max(0, 38 * (sf/45) * Math.exp(-(sf-45)/55)) : 0;
+          // Well-matched: gentle rise to 8.5, clean return
+          if (sinceBolus < 20) {
+            bg = 5.5 - sinceBolus * 0.025; // slight pre-food dip as insulin starts
+          } else if (sf < 0) {
+            bg = 5.0;
+          } else if (sf < 60) {
+            bg = 5.0 + sf * 0.06; // gentle rise, insulin matching carbs
+          } else if (sf < 120) {
+            bg = 5.0 + 60*0.06 + (sf-60)*0.01; // plateaus near 8.5
+          } else {
+            bg = 8.5 - (sf-120) * 0.02; // gentle return
+          }
+          bg = Math.max(4.8, Math.min(9.0, bg));
+        }
+        pushPt(m, parseFloat(bg.toFixed(1)), parseFloat(Math.max(0,iob).toFixed(2)), parseFloat(Math.max(0,cob).toFixed(1)));
+      }
+      pushBolus(250, 0, 3.0);   // bolus 20min pre-food
+      pushBolus(230, 38, 0);    // porridge carbs
+      break;
+    }
+
+    case 'running_high': {
+      // Stuck at 14+ for 90min. IOB from earlier meal cleared.
+      // Correction of 1.5U given 15min ago. Starting to come down.
+      for (let m = 120; m >= 0; m -= 5) {
+        let bg, iob, cob;
+        cob = 0;
+        if (m > 15) {
+          // Plateau high with slow drift
+          bg  = 14.2 + Math.sin(m*0.1)*0.4;
+          iob = 0;
+        } else {
+          // Correction 15min ago starting to work
+          const sincCorr = 15 - m;
+          iob = 1.5 * Math.exp(-sincCorr/90);
+          bg  = 14.2 - sincCorr * 0.04;
+          bg  = Math.max(13.0, bg);
+        }
+        pushPt(m, parseFloat(bg.toFixed(1)), parseFloat(iob.toFixed(2)), 0);
+      }
+      pushBolus(15, 0, 1.5); // correction
+      break;
+    }
+
+    case 'pre_hypo_snack': {
+      // BG dropping steadily to 4.2 with residual IOB.
+      // 2 jelly babies (11g, high GI) given 20min ago. Gentle lift, no rebound.
+      for (let m = 120; m >= 0; m -= 5) {
+        let bg, iob, cob;
+        if (m > 20) {
+          // Dropping: overcorrection earlier, IOB still active
+          const sinceDrop = 120 - m;
+          iob = 0.8 * Math.max(0, 1 - sinceDrop/100);
+          cob = 0;
+          bg  = 7.2 - sinceDrop * 0.025;
+          bg  = Math.max(4.0, bg);
+        } else {
+          // Jelly babies 20min ago — fast GI, gentle lift
+          const sinceSnack = 20 - m;
+          iob = 0.2 * Math.max(0, Math.exp(-sinceSnack/80));
+          cob = 11 * Math.max(0, 1 - sinceSnack/30);
+          bg  = 4.2 + sinceSnack * 0.055;
+          bg  = Math.min(6.5, bg);
+        }
+        pushPt(m, parseFloat(bg.toFixed(1)), parseFloat(iob.toFixed(2)), parseFloat(cob.toFixed(1)));
+      }
+      pushBolus(20, 11, 0); // jelly babies carbs only
+      break;
+    }
+
+    case 'active_hypo': {
+      // BG hit 3.1 at 20min ago. Glucose tabs (12g) just logged.
+      // COB lifting BG. Recovery underway. No insulin.
+      for (let m = 120; m >= 0; m -= 5) {
+        let bg, iob, cob;
+        if (m > 20) {
+          // Descent into hypo
+          const sinceDrop = 120 - m;
+          iob = 1.2 * Math.max(0, Math.exp(-sinceDrop/70));
+          cob = 0;
+          bg  = 8.5 - sinceDrop * 0.049;
+          bg  = Math.max(3.0, bg);
+        } else {
+          // Glucose tabs — very high GI, fast absorption
+          const sinceRx = 20 - m;
+          cob = 12 * Math.max(0, 1 - sinceRx/25);
+          iob = 0.3 * Math.max(0, Math.exp(-sinceRx/60));
+          bg  = 3.1 + sinceRx * 0.12;
+          bg  = Math.min(9.0, bg);
+        }
+        pushPt(m, parseFloat(bg.toFixed(1)), parseFloat(iob.toFixed(2)), parseFloat(cob.toFixed(1)));
+      }
+      pushBolus(20, 12, 0); // glucose tabs
+      break;
+    }
+
     default:
       // Fallback — flat
       for (let m=120; m>=0; m-=5) pushPt(m, 7.0, 0, 0);
@@ -6688,10 +6950,11 @@ function loadScenario(id) {
   // Clear session
   SESSION.length = 0;
 
-  // Reset view to now
+  // Reset view to now — breakfast scenarios use 4.5h window to show full arc
   updateCGMBounds();
   viewTime = CGM_END;
-  viewSpan = 2 * 3600000;
+  var _breakfastScenarios = ['breakfast_too_early','breakfast_too_late','breakfast_goldilocks','happy_state'];
+  viewSpan = _breakfastScenarios.indexOf(id) >= 0 ? 4.5 * 3600000 : 2 * 3600000;
 
   // Close selector
   var sel = document.getElementById('scenario-selector');
