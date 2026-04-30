@@ -781,13 +781,13 @@ function drawBGTrail(pal) {
   CX.strokeStyle = `rgba(${pal.bgLine.join(',')},1)`;
   CX.lineWidth   = 16;
   CX.lineJoin    = 'round'; CX.lineCap = 'round';
-  _drawSmoothLine(ptsNoGap);
+  _drawSmoothLine(pts);  // gap-aware — lifts pen at sensor gaps
   CX.stroke();
 
   // Mid glow
   CX.globalAlpha = 0.22;
   CX.lineWidth   = 6;
-  _drawSmoothLine(ptsNoGap);
+  _drawSmoothLine(pts);  // gap-aware
   CX.stroke();
 
   // Core — segmented by zone colour
@@ -812,17 +812,24 @@ function drawBGTrail(pal) {
         // Check if this gap extends to the present (active gap)
         var gapIsActive = pts[i].t >= (HISTORY_RAW.length > 0 ? HISTORY_RAW[HISTORY_RAW.length-1].t : 0) - 30000;
         if (!gapIsActive) {
-          CX.save();
-          CX.globalAlpha = 0.15;
-          CX.strokeStyle = 'rgba(180,200,220,1)';
-          CX.lineWidth = 1;
-          CX.setLineDash([3, 8]);
-          CX.beginPath();
-          CX.moveTo(pts[i-1].x, pts[i-1].y);
-          CX.lineTo(pts[i].x, pts[i].y);
-          CX.stroke();
-          CX.setLineDash([]);
-          CX.restore();
+          // Find first real point after the gap
+          let afterGap = null;
+          for (let gi = i; gi < pts.length; gi++) {
+            if (!pts[gi].gap) { afterGap = pts[gi]; break; }
+          }
+          if (afterGap) {
+            CX.save();
+            CX.globalAlpha = 0.15;
+            CX.strokeStyle = 'rgba(180,200,220,1)';
+            CX.lineWidth = 1;
+            CX.setLineDash([3, 8]);
+            CX.beginPath();
+            CX.moveTo(pts[i-1].x, pts[i-1].y);
+            CX.lineTo(afterGap.x, afterGap.y);
+            CX.stroke();
+            CX.setLineDash([]);
+            CX.restore();
+          }
         }
       }
       seg = []; segCol = null;
@@ -913,13 +920,19 @@ function drawBGTrail(pal) {
 function _drawSmoothLine(pts) {
   if (pts.length < 2) return;
   CX.beginPath();
-  CX.moveTo(pts[0].x, pts[0].y);
-  for (let i=1; i<pts.length-1; i++) {
-    const mx = (pts[i].x + pts[i+1].x)/2;
-    const my = (pts[i].y + pts[i+1].y)/2;
-    CX.quadraticCurveTo(pts[i].x, pts[i].y, mx, my);
+  let penDown = false;
+  for (let i=0; i<pts.length; i++) {
+    if (pts[i].gap) { penDown = false; continue; } // lift pen at sensor gaps
+    if (!penDown) { CX.moveTo(pts[i].x, pts[i].y); penDown = true; continue; }
+    const next = pts[i+1] && !pts[i+1].gap ? pts[i+1] : null;
+    if (next) {
+      const mx = (pts[i].x + next.x)/2;
+      const my = (pts[i].y + next.y)/2;
+      CX.quadraticCurveTo(pts[i].x, pts[i].y, mx, my);
+    } else {
+      CX.lineTo(pts[i].x, pts[i].y);
+    }
   }
-  CX.lineTo(pts[pts.length-1].x, pts[pts.length-1].y);
 }
 
 // ── FORCE RIBBONS ─────────────────────────────────────────────────────
