@@ -6754,7 +6754,6 @@ function openScenarioSelector() {
   requestAnimationFrame(function(){ el.style.opacity='1'; });
 }
 
-var openDemoSelector = openScenarioSelector; // alias
 function closeScenarioSelector() {
   var el = document.getElementById('scenario-selector');
   if (el) { el.style.opacity='0'; setTimeout(function(){ el.remove(); }, 300); }
@@ -8477,10 +8476,6 @@ function openOrbRadialMenu(pressX) {
     { label: 'basal',      icon: '▬', fn: 'openBasalLog()',       col: 'rgba(40,200,160,0.9)'  },
     { label: 'whisper',    icon: '◌', fn: 'openWhisper()',        col: 'rgba(140,200,180,0.9)' },
   ];
-  // In demo mode, replace whisper with scenarios so user can switch scenario
-  if (_activeDemoId) {
-    items[items.length - 1] = { label: 'scenarios', icon: '◈', fn: 'openScenarioSelector()', col: 'rgba(140,200,180,0.9)' };
-  }
 
   var el = document.createElement('div');
   el.id  = 'orb-radial-menu';
