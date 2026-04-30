@@ -8376,51 +8376,34 @@ let _orbPressTimer = null;
 let _whisperOpen   = false;
 var _radialDefaultT = null; // Set by long-press to pre-fill modals with river time at press position
 
-function _lpLog(msg) {
-  var el = document.getElementById('_lp_debug');
-  if (!el) {
-    el = document.createElement('div');
-    el.id = '_lp_debug';
-    el.style.cssText = 'position:fixed;top:60px;left:0;right:0;z-index:9999;pointer-events:none;font-family:monospace;font-size:11px;line-height:1.6;padding:6px 10px;background:rgba(0,0,0,0.82);color:#0f0;white-space:pre-wrap;max-height:200px;overflow:hidden';
-    document.body.appendChild(el);
-  }
-  var t = (Date.now()%100000).toString().slice(-5);
-  var lines = el.textContent.split('\n');
-  lines.unshift(t+' '+msg);
-  el.textContent = lines.slice(0,12).join('\n');
-}
-
 function setupOrbLongPress() {
   const cv = document.getElementById('c');
   if (!cv) return;
-  _lpLog('SETUP OK');
 
   var _orbTouchStartT = 0;
   var _pressClientX   = 0;
   var _pressClientY   = 0;
 
   cv.addEventListener('touchstart', function(e) {
-    _lpLog('TSTART n='+e.touches.length+' tmr='+!!_orbPressTimer);
     if (e.touches.length > 1) {
       if (_orbPressTimer) { clearTimeout(_orbPressTimer); _orbPressTimer = null; }
       _orbTouchStartT = 0;
       return;
     }
-    if (_orbPressTimer) { _lpLog('GUARD-skip'); return; }
+    // Don't reset a running timer — spurious re-fires during a hold would restart the clock
+    if (_orbPressTimer) return;
     const t = e.touches[0];
     _pressClientX = t.clientX;
     _pressClientY = t.clientY;
     _orbTouchStartT = Date.now();
     _orbLongPressHint = 1.0;
     _orbPressTimer = setTimeout(function() {
-      _lpLog('FIRED → menu');
-      _orbPressTimer = null;
+      _orbPressTimer = null; // clear before opening so touchstart guard resets
       if (navigator.vibrate) navigator.vibrate(30);
       var rect = cv.getBoundingClientRect();
       _radialDefaultT = xT(_pressClientX - rect.left);
       openOrbRadialMenu(_pressClientX);
     }, 600);
-    _lpLog('TMR-SET');
   }, {passive:true});
 
   cv.addEventListener('touchmove', function(e) {
@@ -8428,9 +8411,7 @@ function setupOrbLongPress() {
       var t = e.touches[0];
       var dx = t.clientX - _pressClientX;
       var dy = t.clientY - _pressClientY;
-      var d = Math.sqrt(dx*dx+dy*dy);
-      if (d > 10) {
-        _lpLog('MOVE-CANCEL d='+d.toFixed(1));
+      if (Math.sqrt(dx*dx + dy*dy) > 10) {
         clearTimeout(_orbPressTimer);
         _orbPressTimer = null;
         _orbTouchStartT = 0;
@@ -8440,11 +8421,10 @@ function setupOrbLongPress() {
 
   cv.addEventListener('touchend', function() {
     var dur = _orbTouchStartT ? Date.now() - _orbTouchStartT : -1;
-    _lpLog('TEND dur='+dur+' tmr='+!!_orbPressTimer);
     if (_orbPressTimer) {
       clearTimeout(_orbPressTimer);
       _orbPressTimer = null;
-      if (dur < 500 && dur > 0) { _orbTapHint=1.0; _orbTapHintT=Date.now(); }
+      if (dur > 0 && dur < 500) { _orbTapHint=1.0; _orbTapHintT=Date.now(); }
     }
     _orbTouchStartT = 0;
   }, {passive:true});
@@ -8483,8 +8463,11 @@ function setupOrbLongPress() {
 }
 
 function openOrbRadialMenu(pressX) {
+  // Always remove any existing menu and open fresh — never toggle closed.
+  // The old toggle caused: previous menu still dying (160ms fade) → timer fires
+  // → finds element → removes it → returns without opening. Menu never appeared.
   var ex = document.getElementById('orb-radial-menu');
-  if (ex) { ex.remove(); return; }
+  if (ex) ex.remove();
 
   var d     = dataAt ? dataAt(viewTime) : null;
   var orbX  = (pressX !== undefined) ? pressX : NOW_X * W;
@@ -8515,16 +8498,13 @@ function openOrbRadialMenu(pressX) {
   var _menuOpenT = Date.now();
   function _canClose() { return Date.now() - _menuOpenT > 600; }
 
+  // Close on backdrop — touchend only (click fires too late and catches the lift from long-press)
   bg.addEventListener('touchend', function(e) {
-    var age = Date.now()-_menuOpenT;
-    _lpLog('BG-TEND age='+age+' canClose='+_canClose());
     if (!_canClose()) return;
     e.preventDefault();
     closeOrbRadialMenu();
   });
   bg.addEventListener('click', function() {
-    var age = Date.now()-_menuOpenT;
-    _lpLog('BG-CLICK age='+age+' canClose='+_canClose());
     if (!_canClose()) return;
     closeOrbRadialMenu();
   });
