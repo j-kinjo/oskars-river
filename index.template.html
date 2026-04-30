@@ -93,22 +93,7 @@
   </svg>
 </div>
 
-<!-- Return to Now button — appears when scrolled back -->
-<button id="now-btn" onclick="returnToNow()" style="
-  position:fixed;
-  bottom:calc(max(20px,env(safe-area-inset-bottom,20px)) + 54px);
-  left:14px;
-  pointer-events:auto;touch-action:manipulation;z-index:20;
-  padding:7px 14px;border-radius:20px;
-  border:1px solid rgba(255,255,255,0.2);
-  background:rgba(0,0,0,0.22);
-  backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px);
-  font-family:'DM Mono',monospace;font-size:10px;letter-spacing:.8px;
-  color:rgba(255,255,255,0.6);text-transform:uppercase;
-  cursor:pointer;z-index:20;pointer-events:auto;
-  opacity:0;transition:opacity .3s">
-  ◉ now
-</button>
+<!-- Return to Now button — created and positioned by app.js (right side) -->
 
 <!-- flow-dock: empty — food/hypo/correct now accessed via orb radial menu (long-press orb) -->
 <div id="flow-dock" style="display:none;pointer-events:none"></div>
