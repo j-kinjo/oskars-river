@@ -1896,9 +1896,6 @@ function drawOrb(pal, d) {
   const y    = bgToY(d.bg);
   window._orbScreenX = x;
   window._orbScreenY = y;
-  // Export orb screen position so the DOM long-press button can track it
-  window._orbScreenX = x;
-  window._orbScreenY = y;
   const t    = Date.now() / 1000;
 
   // Colour shifts with BG value
@@ -6702,12 +6699,58 @@ function loadScenario(id) {
 
   _activeDemoId = id;
 
-  // Toast
+  // Show scenario name as toast, then welcome card on first load
   var sc = DEMO_SCENARIOS.find(function(s){ return s.id===id; });
-  if (sc) showToast(sc.name + '\n' + sc.desc);
+  if (sc) showToast(sc.name);
 }
 
 var _activeDemoId = null;
+var openDemoSelector = function() { openScenarioSelector(); }; // alias
+
+function showDemoWelcome() {
+  // Full-screen welcome card for demo mode — readable, dismissable
+  var ex = document.getElementById('_demo_welcome');
+  if (ex) ex.remove();
+  var el = document.createElement('div');
+  el.id = '_demo_welcome';
+  el.style.cssText = [
+    'position:fixed','inset:0','z-index:95',
+    'display:flex','align-items:center','justify-content:center',
+    'padding:24px',
+    'background:rgba(3,5,18,0.88)',
+    'backdrop-filter:blur(20px)',
+    '-webkit-backdrop-filter:blur(20px)',
+    'transition:opacity .4s','opacity:0',
+  ].join(';');
+  el.innerHTML = [
+    '<div style="max-width:360px;width:100%;text-align:center">',
+      '<div style="font-family:\'Fraunces\',serif;font-style:italic;font-weight:200;font-size:32px;',
+        'color:rgba(200,230,255,0.95);letter-spacing:-1px;margin-bottom:8px">Oskar\'s River</div>',
+      '<div style="font-family:\'DM Mono\',monospace;font-size:10px;letter-spacing:2px;',
+        'text-transform:uppercase;color:rgba(140,180,220,0.5);margin-bottom:28px">demo mode</div>',
+      '<div style="font-family:\'DM Mono\',monospace;font-size:12px;line-height:1.7;',
+        'color:rgba(180,210,240,0.75);margin-bottom:32px">',
+        'Explore a live glucose flow.<br>',
+        'Hold the orb to log food, corrections,<br>',
+        'hypos — or switch scenario.',
+      '</div>',
+      '<button onclick="document.getElementById(\'_demo_welcome\').style.opacity=\'0\';setTimeout(function(){document.getElementById(\'_demo_welcome\').remove();},400);" style="',
+        'padding:12px 32px;border-radius:24px;border:1px solid rgba(100,180,255,0.3);',
+        'background:rgba(40,80,140,0.4);',
+        'font-family:\'DM Mono\',monospace;font-size:11px;letter-spacing:1px;',
+        'color:rgba(180,220,255,0.9);cursor:pointer;margin-bottom:16px;',
+        'display:block;width:100%;touch-action:manipulation">explore</button>',
+      '<button onclick="document.getElementById(\'_demo_welcome\').style.opacity=\'0\';setTimeout(function(){document.getElementById(\'_demo_welcome\').remove();openScenarioSelector();},400);" style="',
+        'padding:10px 32px;border-radius:24px;border:1px solid rgba(80,120,180,0.2);',
+        'background:transparent;',
+        'font-family:\'DM Mono\',monospace;font-size:10px;letter-spacing:1px;',
+        'color:rgba(140,180,220,0.5);cursor:pointer;',
+        'display:block;width:100%;touch-action:manipulation">choose scenario</button>',
+    '</div>',
+  ].join('');
+  document.body.appendChild(el);
+  requestAnimationFrame(function(){ el.style.opacity='1'; });
+}
 
 function openScenarioSelector() {
   var existing = document.getElementById('scenario-selector');
@@ -7792,7 +7835,7 @@ async function connectCGM() {
     saveCGMConfig('manual', {});
     dismissSetup();
     setTimeout(function(){ loadScenario('equilibrium'); }, 200);
-    setTimeout(function(){ openDemoSelector(); }, 700);
+    setTimeout(function(){ showDemoWelcome(); }, 700);
     return;
   }
 
@@ -8486,6 +8529,10 @@ function openOrbRadialMenu(pressX) {
     { label: 'basal',      icon: '▬', fn: 'openBasalLog()',       col: 'rgba(40,200,160,0.9)'  },
     { label: 'whisper',    icon: '◌', fn: 'openWhisper()',        col: 'rgba(140,200,180,0.9)' },
   ];
+  if (_activeDemoId) {
+    // In demo mode: replace whisper with scenarios switcher
+    items[items.length - 1] = { label: 'scenarios', icon: '◈', fn: 'openScenarioSelector()', col: 'rgba(140,200,180,0.9)' };
+  }
 
   var el = document.createElement('div');
   el.id  = 'orb-radial-menu';
@@ -10177,7 +10224,7 @@ window.addEventListener('load',()=>{
   } else if (saved && saved.sourceId === 'manual') {
     // Demo mode — load a scenario then show the scenario selector
     setTimeout(function(){ loadScenario('equilibrium'); }, 400);
-    setTimeout(function(){ openDemoSelector(); }, 900);
+    setTimeout(function(){ showDemoWelcome(); }, 900);
   } else {
     // First run — show setup screen, load demo underneath so canvas isn't empty
     setTimeout(function(){ loadScenario('equilibrium'); }, 400);
