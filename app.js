@@ -6427,12 +6427,77 @@ function commitManualBolus() {
 
 const DEMO_SCENARIOS = [
 
+  // ── SCREENSHOT SCENARIOS — full morning, scrubable, "now" = 11:45am ──
+  {
+    id: 'happy_state',
+    name: 'Happy state',
+    desc: 'Ticking along at 5.5. Nothing dramatic. The goal.',
+    emoji: '~',
+    bgColor: 'rgba(30,120,80,0.7)',
+    viewSpan: 4 * 3600000,
+    group: 'morning',
+  },
+  {
+    id: 'breakfast_early_bolus',
+    name: 'Breakfast — bolus too early',
+    desc: 'Bolus 10min before eating. BG dips then carbs catch up late.',
+    emoji: '\u21d3\u25b2',
+    bgColor: 'rgba(60,80,180,0.7)',
+    viewSpan: 4 * 3600000,
+    group: 'morning',
+  },
+  {
+    id: 'breakfast_late_bolus',
+    name: 'Breakfast — bolus too late',
+    desc: 'Bolus 30min after eating. BG spikes hard before insulin arrives.',
+    emoji: '\u21d1\u21d1',
+    bgColor: 'rgba(180,80,30,0.7)',
+    viewSpan: 4 * 3600000,
+    group: 'morning',
+  },
+  {
+    id: 'breakfast_goldilocks',
+    name: 'Breakfast — goldilocks',
+    desc: '20min pre-bolus. Carbs and insulin meet. The textbook morning.',
+    emoji: '\u2714',
+    bgColor: 'rgba(30,120,80,0.7)',
+    viewSpan: 4 * 3600000,
+    group: 'morning',
+  },
+  {
+    id: 'running_high_correction',
+    name: 'Running high — correction',
+    desc: 'Sticky hyper at 13. IOB cleared. Correction given.',
+    emoji: '\u25c6',
+    bgColor: 'rgba(140,70,20,0.7)',
+    viewSpan: 3 * 3600000,
+    group: 'clinical',
+  },
+  {
+    id: 'pre_hypo_treatment',
+    name: 'Pre-hypo — jelly beans',
+    desc: 'Dropping toward 3.9. 2 jelly beans logged. BG recovering.',
+    emoji: '\u21d3\u25b2',
+    bgColor: 'rgba(40,80,200,0.7)',
+    group: 'clinical',
+  },
+  {
+    id: 'in_hypo',
+    name: 'In hypo — treatment logged',
+    desc: 'Below 3.9. Jelly babies given. COB lifting. Forces resolving.',
+    emoji: '\u25b2\u25b2',
+    bgColor: 'rgba(60,100,220,0.7)',
+    group: 'clinical',
+  },
+
+  // ── ORIGINAL VISUAL TESTBED SCENARIOS ──
   {
     id: 'equilibrium',
     name: 'Equilibrium',
     desc: 'Steady in range. Forces balanced. The zen state.',
-    emoji: '~',
+    emoji: '\u2248',
     bgColor: 'rgba(30,120,80,0.7)',
+    group: 'visual',
   },
   {
     id: 'meal_bolus',
@@ -6440,6 +6505,7 @@ const DEMO_SCENARIOS = [
     desc: 'Bolused 20min ago. Carbs absorbing. COB rising against IOB.',
     emoji: '\u25b2',
     bgColor: 'rgba(160,90,20,0.7)',
+    group: 'visual',
   },
   {
     id: 'post_meal_spike',
@@ -6447,6 +6513,7 @@ const DEMO_SCENARIOS = [
     desc: 'High GI meal, IOB not keeping up. The rocket ship.',
     emoji: '\u21d1\u21d1',
     bgColor: 'rgba(180,80,30,0.7)',
+    group: 'visual',
   },
   {
     id: 'correction_window',
@@ -6454,6 +6521,7 @@ const DEMO_SCENARIOS = [
     desc: 'Sticky hyper. IOB cleared. Safe to act.',
     emoji: '\u25c6',
     bgColor: 'rgba(140,80,30,0.7)',
+    group: 'visual',
   },
   {
     id: 'hypo_approach',
@@ -6461,6 +6529,7 @@ const DEMO_SCENARIOS = [
     desc: 'IOB overpowering. BG dropping. Snack needed soon.',
     emoji: '\u21d3',
     bgColor: 'rgba(40,80,180,0.7)',
+    group: 'visual',
   },
   {
     id: 'hypo_treatment',
@@ -6468,6 +6537,7 @@ const DEMO_SCENARIOS = [
     desc: 'Glucose tabs 20min ago. COB lifting BG. Forces resolving.',
     emoji: '\u25b2\u25b2',
     bgColor: 'rgba(60,100,200,0.7)',
+    group: 'visual',
   },
   {
     id: 'dawn_phenomenon',
@@ -6475,6 +6545,7 @@ const DEMO_SCENARIOS = [
     desc: '6am. BG creeping up from basal resistance. Low IOB, no COB.',
     emoji: '\u2197',
     bgColor: 'rgba(140,70,30,0.7)',
+    group: 'visual',
   },
   {
     id: 'overnight_flat',
@@ -6482,6 +6553,7 @@ const DEMO_SCENARIOS = [
     desc: '3am. Nothing active. Both forces at rest. Basal holding.',
     emoji: '\u2014',
     bgColor: 'rgba(20,30,70,0.7)',
+    group: 'visual',
   },
 
 ];
@@ -6504,6 +6576,261 @@ function generateScenario(id) {
   }
 
   switch(id) {
+
+    // ─────────────────────────────────────────────────────────────────────
+    // SCREENSHOT SCENARIOS — full morning history anchored to 11:45am "now"
+    // History runs from ~6:30am. "now" in the scenario = 11:45am today.
+    // viewTime is set to CGM_END (= 11:45am), scrub left to see the morning.
+    // ─────────────────────────────────────────────────────────────────────
+
+    case 'happy_state': {
+      // Smooth day. BG tracks 5.0–6.2 all morning with gentle variation.
+      // Small breakfast 3h ago, fully resolved. Nothing to worry about.
+      // "now" = 11:45am. History from 6:30am (315 min back).
+      const nowMs_happy = Date.now();
+      // Anchor scenario "now" to 11:45am wall-clock today
+      const today_happy = new Date();
+      today_happy.setHours(11, 45, 0, 0);
+      const scenarioNow_happy = today_happy.getTime();
+      const offset_happy = nowMs_happy - scenarioNow_happy;
+
+      // Breakfast at 7:30am = 255min before 11:45
+      const bfTime_happy = scenarioNow_happy - 255 * 60000; // 7:30am
+      const bfBolus_happy = scenarioNow_happy - 257 * 60000;
+
+      for (let m = 315; m >= 0; m -= 5) {
+        const t = scenarioNow_happy - m * 60000;
+        const elapsed_bf = Math.max(0, (t - bfTime_happy) / 60000);
+        let bg;
+        if (m > 260) {
+          // Pre-breakfast: gentle overnight drift 5.8→5.5
+          bg = 5.8 - (315 - m) * 0.006 + Math.sin(m * 0.09) * 0.3;
+        } else {
+          // Breakfast 30g porridge — small gentle rise, well-controlled
+          const iob = 3.2 * Math.exp(-elapsed_bf / 200) * Math.exp(-Math.pow(elapsed_bf / 75, 2) / 2);
+          const cob = 30 * (elapsed_bf / 30) * Math.exp(-elapsed_bf / 45) * 0.8;
+          bg = 5.5 + cob * 0.06 - iob * 0.15 + Math.sin(m * 0.07) * 0.2;
+          bg = Math.max(4.9, Math.min(7.0, bg));
+        }
+        hist.push({ t: t + offset_happy, bg: parseFloat(bg.toFixed(1)), iob: 0, cob: 0, pen: 1 });
+      }
+      bolus.push({ t: bfBolus_happy + offset_happy, c: 30, u: 2.5 });
+      break;
+    }
+
+    case 'breakfast_early_bolus': {
+      // Bolus given at 7:15am. Eating started 7:25am (10min after bolus).
+      // Insulin peaks ahead of carbs — BG dips to ~4.5 before carbs arrive,
+      // then overcorrects upward to ~11 as carbs surge past depleted IOB.
+      // "now" = 11:45am. Lunch is next.
+      const today_early = new Date();
+      today_early.setHours(11, 45, 0, 0);
+      const scenarioNow_early = today_early.getTime();
+      const offset_early = Date.now() - scenarioNow_early;
+
+      const bolusTime_early = scenarioNow_early - 270 * 60000; // 7:15am
+      const eatTime_early   = scenarioNow_early - 260 * 60000; // 7:25am (10min post-bolus)
+
+      for (let m = 315; m >= 0; m -= 5) {
+        const t = scenarioNow_early - m * 60000;
+        const elapsed_bols = Math.max(0, (t - bolusTime_early) / 60000);
+        const elapsed_eat  = Math.max(0, (t - eatTime_early)   / 60000);
+        let bg, iob, cob;
+
+        if (t < bolusTime_early) {
+          // Pre-bolus: gentle drop from overnight, dawn settling ~6.2→5.5
+          bg = 6.2 - (t - (scenarioNow_early - 315 * 60000)) / (bolusTime_early - (scenarioNow_early - 315 * 60000)) * 0.7;
+          bg += Math.sin(m * 0.08) * 0.3;
+          iob = 0; cob = 0;
+        } else {
+          // IOB builds then decays — biexponential-ish
+          iob = 3.0 * Math.exp(-elapsed_bols / 240) * (1 - Math.exp(-elapsed_bols / 25));
+          // COB from porridge — medium GI, peaks ~35min after eating
+          cob = elapsed_eat > 0
+            ? 40 * (elapsed_eat / 35) * Math.exp(-elapsed_eat / 50)
+            : 0;
+          cob = Math.max(0, cob);
+
+          // BG: insulin drags it down before carbs arrive
+          // Dip to ~4.4 at ~25min post-bolus, then carbs push it to ~11
+          const dip  = -iob * 0.45;
+          const rise = cob  * 0.08;
+          bg = 5.8 + dip + rise + Math.sin(m * 0.07) * 0.15;
+          bg = Math.max(3.8, Math.min(13.5, bg));
+        }
+        hist.push({ t: t + offset_early, bg: parseFloat(bg.toFixed(1)), iob: parseFloat(iob.toFixed(2)), cob: parseFloat(cob.toFixed(1)), pen: 1 });
+      }
+      bolus.push({ t: bolusTime_early + offset_early, c: 0,  u: 3.0 }); // bolus
+      bolus.push({ t: eatTime_early   + offset_early, c: 40, u: 0   }); // meal (porridge + almond milk)
+      break;
+    }
+
+    case 'breakfast_late_bolus': {
+      // Eating started 7:15am. Bolus given at 7:45am (30min after eating).
+      // Carbs fully absorbed before insulin — BG spikes to ~16, then crashes down.
+      const today_late = new Date();
+      today_late.setHours(11, 45, 0, 0);
+      const scenarioNow_late = today_late.getTime();
+      const offset_late = Date.now() - scenarioNow_late;
+
+      const eatTime_late   = scenarioNow_late - 270 * 60000; // 7:15am
+      const bolusTime_late = scenarioNow_late - 240 * 60000; // 7:45am
+
+      for (let m = 315; m >= 0; m -= 5) {
+        const t = scenarioNow_late - m * 60000;
+        const elapsed_eat  = Math.max(0, (t - eatTime_late)   / 60000);
+        const elapsed_bols = Math.max(0, (t - bolusTime_late) / 60000);
+        let bg, iob, cob;
+
+        if (t < eatTime_late) {
+          bg = 5.8 + Math.sin(m * 0.09) * 0.3;
+          iob = 0; cob = 0;
+        } else {
+          cob = 40 * (elapsed_eat / 30) * Math.exp(-elapsed_eat / 45);
+          cob = Math.max(0, cob);
+          iob = t > bolusTime_late
+            ? 3.0 * Math.exp(-elapsed_bols / 240) * (1 - Math.exp(-elapsed_bols / 25))
+            : 0;
+
+          // BG rockets up with carbs, insulin arrives late and drags it back
+          // Peak ~16 around 50-60min after eating, then long slow descent
+          const carbRise = cob * 0.28;
+          const insulDrop = iob * 0.55;
+          bg = 5.8 + carbRise - insulDrop + Math.sin(m * 0.07) * 0.2;
+          bg = Math.max(4.2, Math.min(17.5, bg));
+        }
+        hist.push({ t: t + offset_late, bg: parseFloat(bg.toFixed(1)), iob: parseFloat(iob.toFixed(2)), cob: parseFloat(cob.toFixed(1)), pen: 1 });
+      }
+      bolus.push({ t: eatTime_late   + offset_late, c: 40, u: 0   }); // meal first
+      bolus.push({ t: bolusTime_late + offset_late, c: 0,  u: 3.0 }); // bolus 30min later
+      break;
+    }
+
+    case 'breakfast_goldilocks': {
+      // Bolus at 7:15am. Eating at 7:35am (20min post-bolus). The Goldilocks window.
+      // Insulin and carbs arrive together. BG rises gently to ~8.5, settles back in range.
+      const today_gold = new Date();
+      today_gold.setHours(11, 45, 0, 0);
+      const scenarioNow_gold = today_gold.getTime();
+      const offset_gold = Date.now() - scenarioNow_gold;
+
+      const bolusTime_gold = scenarioNow_gold - 270 * 60000; // 7:15am
+      const eatTime_gold   = scenarioNow_gold - 250 * 60000; // 7:35am
+
+      for (let m = 315; m >= 0; m -= 5) {
+        const t = scenarioNow_gold - m * 60000;
+        const elapsed_bols = Math.max(0, (t - bolusTime_gold) / 60000);
+        const elapsed_eat  = Math.max(0, (t - eatTime_gold)   / 60000);
+        let bg, iob, cob;
+
+        if (t < bolusTime_gold) {
+          bg = 5.8 + Math.sin(m * 0.08) * 0.3;
+          iob = 0; cob = 0;
+        } else {
+          iob = 3.0 * Math.exp(-elapsed_bols / 240) * (1 - Math.exp(-elapsed_bols / 25));
+          cob = elapsed_eat > 0
+            ? 40 * (elapsed_eat / 35) * Math.exp(-elapsed_eat / 50)
+            : 0;
+          cob = Math.max(0, cob);
+
+          // Pre-eat: tiny insulin dip (0.3–0.5 drop), then carbs and insulin
+          // arrive together and largely cancel — gentle rise to ~8.5 max
+          const preDip  = t < eatTime_gold ? -iob * 0.25 : 0;
+          const netRise = cob * 0.07 - iob * 0.25;
+          bg = 5.8 + preDip + (t >= eatTime_gold ? netRise : 0) + Math.sin(m * 0.06) * 0.15;
+          bg = Math.max(4.8, Math.min(10.0, bg));
+        }
+        hist.push({ t: t + offset_gold, bg: parseFloat(bg.toFixed(1)), iob: parseFloat(iob.toFixed(2)), cob: parseFloat(cob.toFixed(1)), pen: 1 });
+      }
+      bolus.push({ t: bolusTime_gold + offset_gold, c: 0,  u: 3.0 });
+      bolus.push({ t: eatTime_gold   + offset_gold, c: 40, u: 0   });
+      break;
+    }
+
+    case 'running_high_correction': {
+      // BG has been running at 13–14 for 2h. Correction given 30min ago.
+      // IOB from correction active. BG slowly pulling down. Correction window was open.
+      for (let m = 180; m >= 0; m -= 5) {
+        const elapsed_corr = Math.max(0, (180 - 30 - (180 - m)));
+        // Actually: correction was 30min ago = elapsed from correction = m < 30 means within 30min of now
+        const minssinceCorr = m < 30 ? 30 - m : 0;
+        const iob = minssinceCorr > 0
+          ? 2.2 * Math.exp(-minssinceCorr / 240) * (1 - Math.exp(-minssinceCorr / 25))
+          : 0;
+        const bg = 14.2 - minssinceCorr * 0.055 + Math.sin(m * 0.1) * 0.35;
+        hist.push({ t: now - m * 60000, bg: parseFloat(Math.max(9, bg).toFixed(1)), iob: parseFloat(iob.toFixed(2)), cob: 0, pen: 1 });
+      }
+      bolus.push({ t: now - 30 * 60000, c: 0, u: 2.2 }); // correction
+      break;
+    }
+
+    case 'pre_hypo_treatment': {
+      // BG dropping. Was 7.5, IOB from lunch correction pulling it toward hypo.
+      // At 30min ago: BG hit 4.3, 2 jelly beans given (15g fast carbs).
+      // Now at 5.2 and stabilising. Silver mist visible — unnamed downward force.
+      for (let m = 120; m >= 0; m -= 5) {
+        let bg, iob, cob;
+        if (m > 60) {
+          // Earlier: BG declining from 7.5
+          const elapsed = 120 - m;
+          iob = 2.0 * Math.exp(-elapsed / 180);
+          cob = 0;
+          bg = 7.5 - elapsed * 0.045 + Math.sin(m * 0.1) * 0.2;
+        } else if (m > 30) {
+          // Approaching the decision point
+          const elapsed = 60 - m;
+          iob = 2.0 * Math.exp(-(60 + elapsed) / 180);
+          cob = 0;
+          bg = 7.5 - (120 - m) * 0.045;
+          bg = Math.max(4.1, bg);
+        } else {
+          // Jelly beans given 30min ago — 15g fast carbs
+          const elapsed_jb = 30 - m;
+          cob = 15 * Math.max(0, 1 - elapsed_jb / 25);
+          iob = 0;
+          bg = 4.2 + elapsed_jb * 0.038 + cob * 0.05;
+          bg = Math.min(7.0, bg);
+        }
+        hist.push({ t: now - m * 60000, bg: parseFloat(bg.toFixed(1)), iob: parseFloat(iob.toFixed(2)), cob: parseFloat(cob.toFixed(1)), pen: 1 });
+      }
+      bolus.push({ t: now - 90 * 60000, c: 0,  u: 2.0 }); // lunch correction
+      bolus.push({ t: now - 30 * 60000, c: 15, u: 0   }); // jelly beans
+      break;
+    }
+
+    case 'in_hypo': {
+      // BG went below 3.9. Now at 3.4. Jelly babies given 10min ago (15g).
+      // COB building but not yet lifting. Still in hypo. Waiting for the rise.
+      for (let m = 120; m >= 0; m -= 5) {
+        let bg, iob, cob;
+        if (m > 40) {
+          // Earlier decline from 9.5
+          const elapsed = 120 - m;
+          iob = 2.5 * Math.exp(-elapsed / 150);
+          bg = 9.5 - elapsed * 0.135;
+          bg = Math.max(3.1, bg);
+          cob = 0;
+        } else if (m > 10) {
+          // Hypo — falling further
+          const elapsed = 40 - m;
+          iob = 0.3;
+          bg = 3.8 - elapsed * 0.022;
+          bg = Math.max(3.0, bg);
+          cob = 0;
+        } else {
+          // Jelly babies 10min ago — 15g fast carbs
+          const elapsed_jb = 10 - m;
+          cob = 15 * Math.max(0, 1 - elapsed_jb / 20);
+          iob = 0.1;
+          bg = 3.2 + elapsed_jb * 0.02 + cob * 0.02;
+          bg = Math.min(4.5, bg);
+        }
+        hist.push({ t: now - m * 60000, bg: parseFloat(bg.toFixed(1)), iob: parseFloat(iob.toFixed(2)), cob: parseFloat(cob.toFixed(1)), pen: 1 });
+      }
+      bolus.push({ t: now - 75 * 60000, c: 0,  u: 2.5 }); // earlier correction (too aggressive)
+      bolus.push({ t: now - 10 * 60000, c: 15, u: 0   }); // jelly babies
+      break;
+    }
 
     case 'equilibrium': {
       // 2h of gentle in-range. Small meal 90min ago, fully resolved.
@@ -6683,7 +7010,14 @@ function loadScenario(id) {
   // Reset view to now
   updateCGMBounds();
   viewTime = CGM_END;
-  viewSpan = 2 * 3600000;
+  // Use scenario-specific viewSpan if defined, else default 2h
+  viewSpan = (sc && sc.viewSpan) ? sc.viewSpan : 2 * 3600000;
+
+  // Populate SESSION so meal pebbles / bubbles appear correctly
+  SESSION.length = 0;
+  for (const b of s.bolus) {
+    SESSION.push({ t: b.t, c: b.c || 0, u: b.u || 0, gi: b.gi || 55 });
+  }
 
   // Close selector
   var sel = document.getElementById('scenario-selector');
@@ -6723,23 +7057,34 @@ function openScenarioSelector() {
   inner += 'letter-spacing:2px;text-transform:uppercase;margin-top:4px">select a glycaemic state</div>';
   inner += '</div>';
 
-  inner += '<div style="display:flex;flex-direction:column;gap:8px">';
-  DEMO_SCENARIOS.forEach(function(sc) {
-    var active = _activeDemoId === sc.id;
-    inner += '<button onclick="loadScenario(\'' + sc.id + '\')" style="';
-    inner += 'display:flex;align-items:center;gap:14px;';
-    inner += 'padding:14px 16px;border-radius:12px;cursor:pointer;text-align:left;';
-    inner += 'background:' + (active ? 'rgba(50,100,150,0.3)' : 'rgba(20,30,50,0.5)') + ';';
-    inner += 'border:1px solid ' + (active ? 'rgba(100,160,220,0.3)' : 'rgba(80,110,150,0.12)') + ';';
-    inner += 'transition:all .15s;width:100%">';
-    inner += '<div style="font-size:18px;width:24px;text-align:center;flex-shrink:0;';
-    inner += 'font-family:\'DM Mono\',monospace;color:rgba(180,210,240,0.6)">' + sc.emoji + '</div>';
-    inner += '<div style="flex:1">';
-    inner += '<div style="font-family:\'Fraunces\',serif;font-weight:200;font-size:16px;';
-    inner += 'color:rgba(180,210,240,0.9)">' + sc.name + '</div>';
-    inner += '<div style="font-family:\'DM Mono\',monospace;font-size:10px;';
-    inner += 'color:rgba(150,180,210,0.45);margin-top:2px">' + sc.desc + '</div>';
-    inner += '</div></button>';
+  inner += '<div style="display:flex;flex-direction:column;gap:6px">';
+  var _sGroups = [
+    { key: 'morning',  label: 'Morning scenarios' },
+    { key: 'clinical', label: 'Clinical states' },
+    { key: 'visual',   label: 'Visual testbed' },
+  ];
+  _sGroups.forEach(function(g) {
+    var gScenes = DEMO_SCENARIOS.filter(function(sc){ return (sc.group||'visual') === g.key; });
+    if (!gScenes.length) return;
+    inner += '<div style="font-family:\'DM Mono\',monospace;font-size:9px;letter-spacing:2px;text-transform:uppercase;';
+    inner += 'color:rgba(150,180,210,0.3);padding:8px 4px 4px;margin-top:6px">' + g.label + '</div>';
+    gScenes.forEach(function(sc) {
+      var active = _activeDemoId === sc.id;
+      inner += '<button onclick="loadScenario(\'' + sc.id + '\')" style="';
+      inner += 'display:flex;align-items:center;gap:14px;';
+      inner += 'padding:14px 16px;border-radius:12px;cursor:pointer;text-align:left;';
+      inner += 'background:' + (active ? 'rgba(50,100,150,0.3)' : 'rgba(20,30,50,0.5)') + ';';
+      inner += 'border:1px solid ' + (active ? 'rgba(100,160,220,0.3)' : 'rgba(80,110,150,0.12)') + ';';
+      inner += 'transition:all .15s;width:100%">';
+      inner += '<div style="font-size:18px;width:24px;text-align:center;flex-shrink:0;';
+      inner += 'font-family:\'DM Mono\',monospace;color:rgba(180,210,240,0.6)">' + sc.emoji + '</div>';
+      inner += '<div style="flex:1">';
+      inner += '<div style="font-family:\'Fraunces\',serif;font-weight:200;font-size:16px;';
+      inner += 'color:rgba(180,210,240,0.9)">' + sc.name + '</div>';
+      inner += '<div style="font-family:\'DM Mono\',monospace;font-size:10px;';
+      inner += 'color:rgba(150,180,210,0.45);margin-top:2px">' + sc.desc + '</div>';
+      inner += '</div></button>';
+    });
   });
   inner += '</div>';
 
