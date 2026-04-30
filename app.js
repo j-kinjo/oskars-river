@@ -3616,9 +3616,6 @@ CV.addEventListener('touchmove',e=>{
 },{passive:true});
 CV.addEventListener('touchend',()=>{
   drag.on=false; drag.pending=false; pinch.on=false;
-  // Remove the non-passive drag handler after every touch ends.
-  // If left registered, iOS WebKit sees passive:false touchmove on the element
-  // and suppresses long-press recognition for all subsequent touches.
   if(_dragActiveListenerAttached) {
     CV.removeEventListener('touchmove', _onDragMoveActive);
     _dragActiveListenerAttached=false;
@@ -8379,41 +8376,61 @@ let _orbPressTimer = null;
 let _whisperOpen   = false;
 var _radialDefaultT = null; // Set by long-press to pre-fill modals with river time at press position
 
+// ── LONG PRESS DEBUG HUD ─────────────────────────────────────────────────
+function _lpLog(msg) {
+  var el = document.getElementById('_lp_debug');
+  if (!el) {
+    el = document.createElement('div');
+    el.id = '_lp_debug';
+    el.style.cssText = 'position:fixed;top:60px;left:0;right:0;z-index:9999;pointer-events:none;font-family:monospace;font-size:11px;line-height:1.6;padding:6px 10px;background:rgba(0,0,0,0.75);color:#0f0;white-space:pre-wrap;max-height:180px;overflow:hidden';
+    document.body.appendChild(el);
+  }
+  var lines = el.textContent.split('\n');
+  lines.unshift(msg);
+  el.textContent = lines.slice(0,10).join('\n');
+}
+
 function setupOrbLongPress() {
   const cv = document.getElementById('c');
   if (!cv) return;
+  _lpLog('setup OK');
 
   var _orbTouchStartT = 0;
   var _pressClientX   = 0;
   var _pressClientY   = 0;
 
   cv.addEventListener('touchstart', function(e) {
-    // Cancel long-press immediately if this is a pinch (2+ fingers)
+    _lpLog('tstart n=' + e.touches.length + ' timer=' + (!!_orbPressTimer));
     if (e.touches.length > 1) {
       if (_orbPressTimer) { clearTimeout(_orbPressTimer); _orbPressTimer = null; }
       _orbTouchStartT = 0;
       return;
     }
+    if (_orbPressTimer) { _lpLog('GUARD: timer running, skip'); return; }
     const t = e.touches[0];
     _pressClientX = t.clientX;
     _pressClientY = t.clientY;
     _orbTouchStartT = Date.now();
     _orbLongPressHint = 1.0;
     _orbPressTimer = setTimeout(function() {
+      _lpLog('TIMER FIRED → opening menu');
+      _orbPressTimer = null;
       if (navigator.vibrate) navigator.vibrate(30);
       var rect = cv.getBoundingClientRect();
       _radialDefaultT = xT(_pressClientX - rect.left);
       openOrbRadialMenu(_pressClientX);
     }, 600);
+    _lpLog('timer set');
   }, {passive:true});
 
   cv.addEventListener('touchmove', function(e) {
     if (_orbPressTimer) {
-      // Only cancel if finger has moved more than 10px (allow natural finger tremor)
       var t = e.touches[0];
       var dx = t.clientX - _pressClientX;
       var dy = t.clientY - _pressClientY;
-      if (Math.sqrt(dx*dx + dy*dy) > 10) {
+      var dist = Math.sqrt(dx*dx + dy*dy);
+      if (dist > 10) {
+        _lpLog('MOVE CANCEL dist=' + dist.toFixed(0));
         clearTimeout(_orbPressTimer);
         _orbPressTimer = null;
         _orbTouchStartT = 0;
@@ -8423,10 +8440,10 @@ function setupOrbLongPress() {
 
   cv.addEventListener('touchend', function() {
     var dur = Date.now() - _orbTouchStartT;
+    _lpLog('tend dur=' + dur + ' timer=' + (!!_orbPressTimer));
     if (_orbPressTimer) {
       clearTimeout(_orbPressTimer);
       _orbPressTimer = null;
-      // Short tap (< 500ms) — show the hint text
       if (dur < 500 && _orbTouchStartT > 0) {
         _orbTapHint = 1.0;
         _orbTapHintT = Date.now();
