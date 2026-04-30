@@ -567,7 +567,10 @@ function histAt(t) {
   if (t >= HISTORY_RAW[HISTORY_RAW.length-1].t) return HISTORY_RAW[HISTORY_RAW.length-1];
   let lo=0, hi=HISTORY_RAW.length-1;
   while (hi-lo>1) { const m=(lo+hi)>>1; HISTORY_RAW[m].t<=t?lo=m:hi=m; }
-  const a=HISTORY_RAW[lo], b=HISTORY_RAW[hi], f=(t-a.t)/(b.t-a.t);
+  const a=HISTORY_RAW[lo], b=HISTORY_RAW[hi];
+  // Don't interpolate across CGM gaps > 12 min (2+ missed readings) — return gap sentinel
+  if (b.t - a.t > 12 * 60000) return { bg: null, iob: 0, cob: 0, pen: 1, gap: true };
+  const f=(t-a.t)/(b.t-a.t);
   return { bg:a.bg+f*(b.bg-a.bg), iob:a.iob+f*(b.iob-a.iob),
            cob:a.cob+f*(b.cob-a.cob), pen:a.pen };
 }
@@ -735,6 +738,7 @@ function drawVoid(pal) {
 // Full vertical range — BG 2.0 maps near bottom, 18+ near top
 // Inverted: high BG = high on screen (upward force = upward position)
 function bgToY(bg) {
+  if (bg === null || bg === undefined || isNaN(bg)) return H * 0.5;
   const pad = H * 0.10;
   const frac = Math.max(0, Math.min(1, (bg - BG_MIN) / (BG_MAX - BG_MIN)));
   return (H - pad) - frac * (H - pad*2);
@@ -763,8 +767,9 @@ function drawBGTrail(pal) {
   for (let i=0; i<=n; i++) {
     const t = leftT + (i/n)*(viewTime-leftT);
     const d = dataAt(t);
-    const gap = inGap(t);
-    pts.push({ x: tX(t), y: bgToY(d.bg), bg: d.bg, t, gap });
+    const gap = inGap(t) || d.gap || d.bg === null;
+    const bg = (d.bg !== null && d.bg !== undefined) ? d.bg : 0;
+    pts.push({ x: tX(t), y: bgToY(bg), bg, t, gap });
   }
   if (pts.length < 2) return;
 
@@ -8346,6 +8351,7 @@ function setupOrbLongPress() {
 
   var _orbTouchStartT = 0;
   var _pressClientX   = 0;
+  var _pressClientY   = 0;
 
   cv.addEventListener('touchstart', function(e) {
     // Cancel long-press immediately if this is a pinch (2+ fingers)
@@ -8356,6 +8362,7 @@ function setupOrbLongPress() {
     }
     const t = e.touches[0];
     _pressClientX = t.clientX;
+    _pressClientY = t.clientY;
     _orbTouchStartT = Date.now();
     _orbLongPressHint = 1.0;
     _orbPressTimer = setTimeout(function() {
@@ -8366,12 +8373,18 @@ function setupOrbLongPress() {
     }, 600);
   }, {passive:true});
 
-  cv.addEventListener('touchmove', function() {
+  cv.addEventListener('touchmove', function(e) {
     if (_orbPressTimer) {
-      clearTimeout(_orbPressTimer);
-      _orbPressTimer = null;
+      // Only cancel if finger has moved more than 10px (allow natural finger tremor)
+      var t = e.touches[0];
+      var dx = t.clientX - _pressClientX;
+      var dy = t.clientY - _pressClientY;
+      if (Math.sqrt(dx*dx + dy*dy) > 10) {
+        clearTimeout(_orbPressTimer);
+        _orbPressTimer = null;
+        _orbTouchStartT = 0;
+      }
     }
-    _orbTouchStartT = 0;
   }, {passive:true});
 
   cv.addEventListener('touchend', function() {
