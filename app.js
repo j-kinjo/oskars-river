@@ -768,7 +768,7 @@ function drawBGTrail(pal) {
     const t = leftT + (i/n)*(viewTime-leftT);
     const d = dataAt(t);
     const gap = inGap(t) || d.gap || d.bg === null;
-    const bg = (d.bg !== null && d.bg !== undefined) ? d.bg : 0;
+    const bg = (d.bg !== null && d.bg !== undefined) ? d.bg : null; // null → bgToY returns mid-canvas
     pts.push({ x: tX(t), y: bgToY(bg), bg, t, gap });
   }
   if (pts.length < 2) return;
@@ -845,10 +845,11 @@ function drawBGTrail(pal) {
     CX.shadowBlur = 0;
   }
 
-  // Reading dots every ~15min
+  // Reading dots every ~15min — skip gap points (no real reading there)
   const dotGap = (viewSpan/W)*W/16;
   let lastDotT = 0;
   for (const p of pts) {
+    if (p.gap) continue; // don't render dots in sensor gaps
     if (p.t - lastDotT < dotGap) continue;
     lastDotT = p.t;
     const col = p.bg > BG_HIGH ? '#e68c28' : p.bg < BG_LOW ? '#5082dc' : `rgb(${pal.bgLine.join(',')})`;
