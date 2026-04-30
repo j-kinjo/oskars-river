@@ -3570,7 +3570,24 @@ function frame(ts) {
 // ── TOUCH / MOUSE ────────────────────────────────────────────
 // drag.pending = touch is down but hasn't moved 10px yet (long-press window)
 // drag.on      = confirmed drag in progress
+// KEY: iOS Safari suppresses long-press when passive:false touchmove is registered upfront on the element.
+// Fix: start with passive:true touchmove only. Attach non-passive handler dynamically only once drag confirmed.
 let drag={on:false,pending:false,x0:0,y0:0,t0:0}, pinch={on:false,d0:0,s0:0};
+var _dragActiveListenerAttached = false;
+
+function _onDragMoveActive(e) {
+  if(e.target.closest&&e.target.closest('#sheet,#flow-dock,.dock-btn,#whisper-overlay,#food-mgr-overlay,#hypo-overlay,#corr-overlay,#food-add-overlay,[id$=-overlay],button,input,textarea,select')) return;
+  if(e.touches.length===1 && drag.on) {
+    e.preventDefault();
+    viewTime=Math.max(CGM_START,Math.min(CGM_END,drag.t0-(e.touches[0].clientX-drag.x0)*(viewSpan/W))); _isAtNow=false;
+  } else if(pinch.on&&e.touches.length===2) {
+    e.preventDefault();
+    const dx=e.touches[0].clientX-e.touches[1].clientX;
+    const dy=e.touches[0].clientY-e.touches[1].clientY;
+    viewSpan=Math.max(MIN_SPAN,Math.min(MAX_SPAN,pinch.s0*(pinch.d0/Math.hypot(dx,dy))));
+  }
+}
+
 CV.addEventListener('touchstart',e=>{
   if(e.target.closest&&e.target.closest('#sheet,#flow-dock,.dock-btn,#whisper-overlay,#food-mgr-overlay,#hypo-overlay,#corr-overlay,#food-add-overlay,[id$=-overlay],button,input,textarea,select')) return;
   if(e.touches.length===1) drag={on:false,pending:true,x0:e.touches[0].clientX,y0:e.touches[0].clientY,t0:viewTime};
@@ -3583,22 +3600,20 @@ CV.addEventListener('touchstart',e=>{
 },{passive:true});
 CV.addEventListener('touchmove',e=>{
   if(e.target.closest&&e.target.closest('#sheet,#flow-dock,.dock-btn,#whisper-overlay,#food-mgr-overlay,#hypo-overlay,#corr-overlay,#food-add-overlay,[id$=-overlay],button,input,textarea,select')) return;
-  if(e.touches.length===1) {
-    if(drag.pending && !drag.on) {
-      const dx=e.touches[0].clientX-drag.x0, dy=e.touches[0].clientY-drag.y0;
-      if(Math.sqrt(dx*dx+dy*dy) > 10) { drag.on=true; drag.pending=false; }
+  if(e.touches.length===1 && drag.pending && !drag.on) {
+    const dx=e.touches[0].clientX-drag.x0, dy=e.touches[0].clientY-drag.y0;
+    if(Math.sqrt(dx*dx+dy*dy) > 10) {
+      drag.on=true; drag.pending=false;
+      if(!_dragActiveListenerAttached) {
+        _dragActiveListenerAttached=true;
+        CV.addEventListener('touchmove', _onDragMoveActive, {passive:false});
+      }
     }
-    if(drag.on) {
-      e.preventDefault();
-      viewTime=Math.max(CGM_START,Math.min(CGM_END,drag.t0-(e.touches[0].clientX-drag.x0)*(viewSpan/W))); _isAtNow=false;
-    }
-  } else if(pinch.on&&e.touches.length===2) {
-    e.preventDefault();
-    const dx=e.touches[0].clientX-e.touches[1].clientX;
-    const dy=e.touches[0].clientY-e.touches[1].clientY;
-    viewSpan=Math.max(MIN_SPAN,Math.min(MAX_SPAN,pinch.s0*(pinch.d0/Math.hypot(dx,dy))));
+  } else if(e.touches.length===2 && pinch.on && !_dragActiveListenerAttached) {
+    _dragActiveListenerAttached=true;
+    CV.addEventListener('touchmove', _onDragMoveActive, {passive:false});
   }
-},{passive:false});
+},{passive:true});
 CV.addEventListener('touchend',()=>{drag.on=false;drag.pending=false;pinch.on=false;},{passive:true});
 let md={on:false,x0:0,t0:0};
 CV.addEventListener('mousedown',e=>{if(!e.target.closest('#sheet,#flow-dock,.dock-btn,#whisper-overlay,#food-mgr-overlay,#hypo-overlay,#corr-overlay,#food-add-overlay,[id$=-overlay],button,input,textarea,select'))md={on:true,x0:e.clientX,t0:viewTime}});
