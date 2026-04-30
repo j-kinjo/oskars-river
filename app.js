@@ -577,7 +577,9 @@ function dataAt(t) {
   // Count SESSION entries and BOLUS_EVENTS after last CGM reading.
   // SESSION alone is lost on reload; BOLUS_EVENTS persists via Supabase sync.
   // Merge both (dedup by timestamp) so reservoirs survive hard reloads.
-  const _cgmFloor = (typeof CGM_END !== 'undefined' && CGM_END > 0) ? CGM_END - 5*60000 : 0;
+  // Use 6h floor so pad-imported events with past timestamps are still shown.
+  // CGM_END - 5min was too aggressive — it excluded anything logged before the last reading.
+  const _cgmFloor = Date.now() - 6 * 3600000;
   var _seen = {};
   var _sources = SESSION.concat(BOLUS_EVENTS);
   for (var _si = 0; _si < _sources.length; _si++) {
@@ -2151,7 +2153,9 @@ var _basalFrame = 0;
 function drawBasalReservoir(pal) {
   _basalFrame++;
   var lineY = dataAt ? bgToY(dataAt(viewTime).bg) : H * 0.5;
-  var barH   = 5;       // slightly thicker than before — more presence
+  // Bar height scales with dose: 3px per unit, clamped 4–14px
+  var dose   = (_TREATMENT || _TREATMENT_DEFAULTS).basalDose || 6;
+  var barH   = Math.max(4, Math.min(14, Math.round(dose * 0.55)));
   var barY   = 0;       // anchored to very top edge
   var alpha  = 0.45;    // more prominent — basal is always-on, not subtle
   var [r,g,b]= [40, 200, 160]; // teal — distinct from bolus blue and carb orange
@@ -2168,12 +2172,12 @@ function drawBasalReservoir(pal) {
   CX.fillStyle = barGr;
   CX.fillRect(0, barY, W, barH);
 
-  // Label on left
+  // Label on left — show live dose from settings
   CX.globalAlpha = 0.55;
   CX.fillStyle   = 'rgba('+r+','+g+','+b+',1)';
   CX.font        = "400 9px 'DM Mono',monospace";
   CX.textAlign   = 'left';
-  CX.fillText('basal  6U', 10, barY + 14);
+  CX.fillText('basal  ' + dose + 'U', 10, barY + 14);
   CX.globalAlpha = 1;
 
   // Spawn drops periodically — slow drip from bar down toward BG line
@@ -3062,7 +3066,8 @@ function returnToNow() {
   _isAtNow = true;
   viewTime = HISTORY_RAW.length > 0 ? HISTORY_RAW[HISTORY_RAW.length-1].t : Date.now();
   viewSpan = 2 * 3600000; // fixed 2h
-  document.getElementById('now-btn').style.display='none';
+  var nb = document.getElementById('now-btn');
+  if (nb) nb.style.opacity = '0';
 }
 
 // Track if user has scrolled away from now
@@ -3507,8 +3512,37 @@ function frame(ts) {
   // Show "return to now" when scrolled away from latest data
   const latestT = HISTORY_RAW.length > 0 ? HISTORY_RAW[HISTORY_RAW.length-1].t : Date.now();
   const awayFromNow = (latestT - viewTime) > 8 * 60000;
-  const nowBtn = document.getElementById('now-btn');
-  if (nowBtn) nowBtn.style.opacity = awayFromNow ? '0.85' : '0';
+  var nowBtn = document.getElementById('now-btn');
+  if (!nowBtn) {
+    // Create it if missing — position on right so it never gets lost during zoom/scroll
+    nowBtn = document.createElement('button');
+    nowBtn.id = 'now-btn';
+    nowBtn.textContent = 'now ›';
+    nowBtn.onclick = returnToNow;
+    nowBtn.style.cssText = [
+      'position:fixed',
+      'right:14px',
+      'bottom:80px',
+      'z-index:50',
+      'padding:8px 14px',
+      'border-radius:20px',
+      'border:1px solid rgba(62,180,120,0.35)',
+      'background:rgba(3,8,22,0.82)',
+      'backdrop-filter:blur(8px)',
+      "font-family:'DM Mono',monospace",
+      'font-size:10px',
+      'letter-spacing:0.5px',
+      'color:rgba(62,200,140,0.85)',
+      'cursor:pointer',
+      'transition:opacity .25s',
+      'opacity:0',
+      'pointer-events:none',
+      'touch-action:manipulation',
+    ].join(';');
+    document.body.appendChild(nowBtn);
+  }
+  nowBtn.style.opacity        = awayFromNow ? '0.9' : '0';
+  nowBtn.style.pointerEvents  = awayFromNow ? 'auto' : 'none';
 
   // time labels handled by drawTimeLabels
 
@@ -7110,9 +7144,9 @@ const CGM_SOURCES = {
 
 
   manual: {
-    name: 'Manual only',
-    icon: '✏️',
-    description: 'No live CGM connection. Log readings manually using the drop button.',
+    name: 'Demo mode',
+    icon: '🎬',
+    description: 'Explore Oskar\'s River with simulated data — no CGM required. Great for learning the interface or showing others how it works.',
     fields: [],
     async fetch()       { return []; },
     async fetchRecent() { return []; }
@@ -7275,6 +7309,65 @@ function logHypoTreatment(id){
 }
 
 // ── CORRECTION QUICK-LOG ──────────────────────────────────────────
+// ── BASAL LOG — confirm Degludec dose was given ─────────────────────────
+function openBasalLog() {
+  var ex = document.getElementById('basal-log-overlay');
+  if (ex) { ex.remove(); return; }
+
+  var dose = (_TREATMENT || _TREATMENT_DEFAULTS).basalDose || 6;
+  var now  = new Date();
+  var dtISO = now.getFullYear() + '-' +
+    String(now.getMonth()+1).padStart(2,'0') + '-' +
+    String(now.getDate()).padStart(2,'0') + 'T' +
+    String(now.getHours()).padStart(2,'0') + ':' +
+    String(now.getMinutes()).padStart(2,'0');
+
+  var el = document.createElement('div');
+  el.id = 'basal-log-overlay';
+  el.style.cssText = 'position:fixed;inset:0;z-index:60;background:rgba(3,5,20,0.9);backdrop-filter:blur(14px);display:flex;flex-direction:column;align-items:center;justify-content:center;padding:24px;transition:opacity .25s;opacity:0';
+  el.addEventListener('touchstart', function(e){ e.stopPropagation(); }, {passive:true});
+
+  el.innerHTML =
+    '<div style="max-width:340px;width:100%">' +
+    '<div style="font-family:\'Fraunces\',serif;font-style:italic;font-weight:200;font-size:24px;color:rgba(40,200,160,0.85);margin-bottom:4px">log basal</div>' +
+    '<div style="font-family:\'DM Mono\',monospace;font-size:9px;color:rgba(40,200,160,0.35);letter-spacing:1.5px;text-transform:uppercase;margin-bottom:24px">Degludec · confirm given</div>' +
+
+    '<div style="display:flex;align-items:center;gap:12px;margin-bottom:16px">' +
+    '<div style="font-family:\'DM Mono\',monospace;font-size:11px;color:rgba(120,160,180,0.5);flex:1">dose (U)</div>' +
+    '<input id="basal-log-dose" type="number" inputmode="decimal" min="0" max="80" step="0.5" value="' + dose + '" ' +
+    'style="width:80px;padding:10px;border-radius:8px;border:1px solid rgba(40,200,160,0.25);background:rgba(40,200,160,0.06);font-family:\'DM Mono\',monospace;font-size:16px;color:rgba(40,200,160,0.9);text-align:right;outline:none">' +
+    '</div>' +
+
+    '<div style="display:flex;align-items:center;gap:12px;margin-bottom:24px">' +
+    '<div style="font-family:\'DM Mono\',monospace;font-size:11px;color:rgba(120,160,180,0.5);flex:1">time</div>' +
+    '<input id="basal-log-dt" type="datetime-local" value="' + dtISO + '" ' +
+    'style="padding:10px;border-radius:8px;border:1px solid rgba(40,200,160,0.15);background:rgba(40,200,160,0.04);font-family:\'DM Mono\',monospace;font-size:12px;color:rgba(120,160,180,0.7);outline:none">' +
+    '</div>' +
+
+    '<button onclick="commitBasalLog()" style="width:100%;padding:13px;border-radius:10px;border:1px solid rgba(40,200,160,0.3);background:rgba(40,200,160,0.1);font-family:\'Fraunces\',serif;font-style:italic;font-weight:200;font-size:17px;color:rgba(40,200,160,0.9);cursor:pointer;margin-bottom:10px">✓ confirm given</button>' +
+    '<button onclick="document.getElementById(\'basal-log-overlay\').remove()" style="width:100%;padding:10px;border-radius:9px;border:none;background:none;font-family:\'DM Mono\',monospace;font-size:10px;color:rgba(120,140,160,0.3);cursor:pointer">cancel</button>' +
+    '</div>';
+
+  document.body.appendChild(el);
+  requestAnimationFrame(function(){ el.style.opacity = '1'; });
+}
+
+function commitBasalLog() {
+  var dtEl   = document.getElementById('basal-log-dt');
+  var doseEl = document.getElementById('basal-log-dose');
+  var t    = dtEl ? new Date(dtEl.value).getTime() : Date.now();
+  var dose = parseFloat(doseEl && doseEl.value) || (_TREATMENT || _TREATMENT_DEFAULTS).basalDose || 6;
+
+  LOGGED_EVENTS.push({ t: t, c: 0, u: dose, note: 'basal', logged_by: _thisPersonId || 'unknown', local: true });
+  try { localStorage.setItem('river_logged', JSON.stringify(LOGGED_EVENTS)); } catch(e) {}
+  syncAfterLog();
+
+  var overlay = document.getElementById('basal-log-overlay');
+  if (overlay) overlay.remove();
+
+  showToast('basal ' + dose + 'U logged ✓\nteam can see it in the flow');
+}
+
 function openCorrectionLog(){
   var d=dataAt(viewTime);
   var ISF=(new Date(viewTime).getHours()>=9&&new Date(viewTime).getHours()<15)?7.0:6.0;
@@ -7652,6 +7745,15 @@ async function connectCGM() {
   const status = document.getElementById('setup-status');
   const btn    = document.getElementById('connect-btn');
   if (!status || !btn) return;
+
+  // Demo mode — no credentials needed, just load and show scenarios
+  if (_selectedSource === 'manual') {
+    saveCGMConfig('manual', {});
+    dismissSetup();
+    setTimeout(function(){ loadScenario('equilibrium'); }, 200);
+    setTimeout(function(){ openDemoSelector(); }, 700);
+    return;
+  }
 
   // Collect field values
   const fields = {};
@@ -8246,6 +8348,12 @@ function setupOrbLongPress() {
   var _pressClientX   = 0;
 
   cv.addEventListener('touchstart', function(e) {
+    // Cancel long-press immediately if this is a pinch (2+ fingers)
+    if (e.touches.length > 1) {
+      if (_orbPressTimer) { clearTimeout(_orbPressTimer); _orbPressTimer = null; }
+      _orbTouchStartT = 0;
+      return;
+    }
     const t = e.touches[0];
     _pressClientX = t.clientX;
     _orbTouchStartT = Date.now();
@@ -8255,7 +8363,7 @@ function setupOrbLongPress() {
       var rect = cv.getBoundingClientRect();
       _radialDefaultT = xT(_pressClientX - rect.left);
       openOrbRadialMenu(_pressClientX);
-    }, 500);
+    }, 600);
   }, {passive:true});
 
   cv.addEventListener('touchmove', function() {
@@ -8271,8 +8379,8 @@ function setupOrbLongPress() {
     if (_orbPressTimer) {
       clearTimeout(_orbPressTimer);
       _orbPressTimer = null;
-      // Short tap (< 400ms) — show the hint text
-      if (dur < 400 && _orbTouchStartT > 0) {
+      // Short tap (< 500ms) — show the hint text
+      if (dur < 500 && _orbTouchStartT > 0) {
         _orbTapHint = 1.0;
         _orbTapHintT = Date.now();
       }
@@ -8327,6 +8435,7 @@ function openOrbRadialMenu(pressX) {
     { label: 'correct',    icon: '◎', fn: 'openCorrectionLog()',  col: 'rgba(80,130,220,0.9)'  },
     { label: 'hypo',       icon: '⬡', fn: 'openHypoLog()',        col: 'rgba(255,210,40,0.9)'  },
     { label: 'prick',      icon: '◆', fn: 'openBloodPrickLog()',  col: 'rgba(220,60,80,0.9)'   },
+    { label: 'basal',      icon: '▬', fn: 'openBasalLog()',       col: 'rgba(40,200,160,0.9)'  },
     { label: 'whisper',    icon: '◌', fn: 'openWhisper()',        col: 'rgba(140,200,180,0.9)' },
   ];
 
@@ -10005,8 +10114,9 @@ window.addEventListener('load',()=>{
     // Re-use saved credentials silently
     setTimeout(()=> startLivePolling(saved.sourceId, saved.fields), 0); // immediate — don't show stale data
   } else if (saved && saved.sourceId === 'manual') {
-    // Manual / demo mode — load equilibrium scenario
+    // Demo mode — load a scenario then show the scenario selector
     setTimeout(function(){ loadScenario('equilibrium'); }, 400);
+    setTimeout(function(){ openDemoSelector(); }, 900);
   } else {
     // First run — show setup screen, load demo underneath so canvas isn't empty
     setTimeout(function(){ loadScenario('equilibrium'); }, 400);
