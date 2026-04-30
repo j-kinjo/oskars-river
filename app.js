@@ -3614,7 +3614,16 @@ CV.addEventListener('touchmove',e=>{
     CV.addEventListener('touchmove', _onDragMoveActive, {passive:false});
   }
 },{passive:true});
-CV.addEventListener('touchend',()=>{drag.on=false;drag.pending=false;pinch.on=false;},{passive:true});
+CV.addEventListener('touchend',()=>{
+  drag.on=false; drag.pending=false; pinch.on=false;
+  // Remove the non-passive drag handler after every touch ends.
+  // If left registered, iOS WebKit sees passive:false touchmove on the element
+  // and suppresses long-press recognition for all subsequent touches.
+  if(_dragActiveListenerAttached) {
+    CV.removeEventListener('touchmove', _onDragMoveActive);
+    _dragActiveListenerAttached=false;
+  }
+},{passive:true});
 let md={on:false,x0:0,t0:0};
 CV.addEventListener('mousedown',e=>{if(!e.target.closest('#sheet,#flow-dock,.dock-btn,#whisper-overlay,#food-mgr-overlay,#hypo-overlay,#corr-overlay,#food-add-overlay,[id$=-overlay],button,input,textarea,select'))md={on:true,x0:e.clientX,t0:viewTime}});
 CV.addEventListener('mousemove',e=>{if(md.on)viewTime=Math.max(CGM_START,Math.min(CGM_END,md.t0-(e.clientX-md.x0)*(viewSpan/W)))});
@@ -8385,15 +8394,12 @@ function setupOrbLongPress() {
       _orbTouchStartT = 0;
       return;
     }
-    // If timer already running (spurious re-fire during hold), don't reset it
-    if (_orbPressTimer) return;
     const t = e.touches[0];
     _pressClientX = t.clientX;
     _pressClientY = t.clientY;
     _orbTouchStartT = Date.now();
     _orbLongPressHint = 1.0;
     _orbPressTimer = setTimeout(function() {
-      _orbPressTimer = null;
       if (navigator.vibrate) navigator.vibrate(30);
       var rect = cv.getBoundingClientRect();
       _radialDefaultT = xT(_pressClientX - rect.left);
