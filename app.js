@@ -8385,12 +8385,15 @@ function setupOrbLongPress() {
       _orbTouchStartT = 0;
       return;
     }
+    // If timer already running (spurious re-fire during hold), don't reset it
+    if (_orbPressTimer) return;
     const t = e.touches[0];
     _pressClientX = t.clientX;
     _pressClientY = t.clientY;
     _orbTouchStartT = Date.now();
     _orbLongPressHint = 1.0;
     _orbPressTimer = setTimeout(function() {
+      _orbPressTimer = null;
       if (navigator.vibrate) navigator.vibrate(30);
       var rect = cv.getBoundingClientRect();
       _radialDefaultT = xT(_pressClientX - rect.left);
