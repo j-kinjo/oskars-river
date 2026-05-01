@@ -6225,16 +6225,6 @@ function saveCustomFood(encodedName) {
   if (gEach) f.g_each = gEach;
   FOOD_LIBRARY.push(f);
   saveFoodLibrary();
-  // If called from pad scan, update the pad item instead of adding to plate
-  if (typeof window._padAddCallback === 'function') {
-    var cb = window._padAddCallback;
-    window._padAddCallback = null;
-    cb(f);
-    // Re-open pad import overlay (it was obscured by food-add-overlay)
-    var padOverlay = document.getElementById('pad-import-overlay');
-    if (padOverlay) padOverlay.style.display = '';
-    return;
-  }
   addFoodItem(name);
 }
 
@@ -11002,17 +10992,10 @@ function processPadPhoto(file) {
             },
             {
               type: 'text',
-              text: 'This is a handwritten meal/diabetes log. Extract ALL items listed, including those with 0 or no carbs written.\n\n' +
-                'CRITICAL CARB RULES:\n' +
-                '1. carbs_g = the TOTAL carbohydrate grams for that item AS EATEN (not per 100g unless weight_g is 100).\n' +
-                '2. If the note shows "Xg carbs" or "carbs: X" next to an item, use X directly as carbs_g.\n' +
-                '3. If the note shows a carbs-per-100g value (e.g. "9.9/100g" or "c100=9.9") AND a weight, calculate: carbs_g = (c100 * weight_g / 100). E.g. 9.9g/100g × 25g bag = 2.5g carbs.\n' +
-                '4. Decimal values like "9.9" or "2.5" must be preserved exactly — do NOT round to whole numbers.\n' +
-                '5. If no carbs are written for an item, set carbs_g to null (do NOT skip the item).\n' +
-                '6. Abbreviations: "clem"/"clementine" = fruit ~8g carbs per fruit; include if written even without explicit carb count.\n\n' +
+              text: 'This is a handwritten meal/diabetes log. Extract ALL of the following if present. ' +
                 'Return ONLY valid JSON, no preamble:\n' +
                 '{\n' +
-                '  "items": [{"name": string, "carbs_g": number|null, "weight_g": number|null}],\n' +
+                '  "items": [{name, carbs_g, weight_g}],\n' +
                 '  "total_carbs": number or null,\n' +
                 '  "bg_mmol": number or null,\n' +
                 '  "insulin_units": number or null,\n' +
@@ -11021,7 +11004,8 @@ function processPadPhoto(file) {
                 '  "time_written": "HH:MM" or null,\n' +
                 '  "date_written": "DD/MM/YYYY" or null\n' +
                 '}\n' +
-                'Include ALL items visible, even if carbs_g is null. Split compound descriptions into individual items. Look carefully for a time written near any BG reading.'
+                'Split compound descriptions into individual items. If weight_g is not written, estimate from context. ' +
+                'Look carefully for a time written near any BG reading.'
             }
           ]
         }]
@@ -11079,23 +11063,10 @@ function openPadImportScreen(parsed, file) {
 
   var items = (parsed.items||[]).map(function(i, idx){
     var match = resolveScannedFood(i.name);
-    var carbs;
-    if (match) {
-      // Use food library c100 × weight for matched items
-      carbs = Math.round((match.c100||0) * (i.weight_g||100) / 100 * 10) / 10;
-    } else if (i.carbs_g !== null && i.carbs_g !== undefined) {
-      // Use AI-extracted carbs directly, preserving decimals
-      carbs = Math.round(i.carbs_g * 10) / 10;
-    } else {
-      // No carbs written — leave blank so user must fill in
-      carbs = '';
-    }
     return {
       raw: i.name,
-      displayName: i.name,
-      grams: i.weight_g || null,
-      carbs: carbs,
-      carbsNull: (i.carbs_g === null || i.carbs_g === undefined) && !match,
+      grams: i.weight_g || 100,
+      carbs: match ? Math.round((match.c100||0) * (i.weight_g||100) / 100) : (i.carbs_g||0),
       matched: !!match,
       match: match,
       gi: match ? (match.gi||55) : 55,
@@ -11171,47 +11142,32 @@ function openPadImportScreen(parsed, file) {
     s += '<div style="font-size:9px;letter-spacing:1px;text-transform:uppercase;' +
       'color:rgba(200,220,240,0.4);margin-bottom:8px">items</div>';
     items.forEach(function(item, idx){
-      var carbsIsBlank = item.carbs === '' || item.carbs === null || item.carbs === undefined;
-      var carbBorderCol = carbsIsBlank ? 'rgba(220,80,80,0.5)' : 'rgba(255,140,50,0.2)';
-      var carbBgCol     = carbsIsBlank ? 'rgba(220,80,80,0.07)' : 'rgba(255,140,50,0.05)';
-      var carbVal       = carbsIsBlank ? '' : item.carbs;
-      s += '<div style="background:rgba(255,255,255,0.03);border-radius:8px;padding:10px 12px;margin-bottom:8px">';
-      // Row 1: editable name + carbs + delete
-      s += '<div style="display:flex;align-items:center;gap:8px">';
-      s += '<input type="text" value="' + (item.displayName||item.raw).replace(/"/g,'&quot;') + '" ' +
-        'onchange="window._padItems[' + idx + '].displayName=this.value;window._padItems[' + idx + '].raw=this.value" ' +
-        'style="flex:1;min-width:0;font-size:11px;padding:4px 7px;border-radius:5px;' +
-        'border:1px solid rgba(255,255,255,0.08);background:transparent;' +
-        'font-family:\'DM Mono\',monospace;' +
-        'color:' + (item.matched ? 'rgba(200,220,240,0.85)' : 'rgba(255,180,80,0.85)') + ';outline:none">';
-      s += '<input type="number" min="0" max="500" step="0.5" ' +
-        (carbVal !== '' ? 'value="' + carbVal + '" ' : '') +
-        'placeholder="?" ' +
-        'onchange="window._padItems[' + idx + '].carbs=this.value===\'\' ? \'\'  : parseFloat(this.value)||0;window._padUpdateTotal()" ' +
-        'style="width:54px;padding:6px;border-radius:6px;border:1px solid ' + carbBorderCol + ';' +
-        'background:' + carbBgCol + ';font-family:\'DM Mono\',monospace;font-size:14px;' +
+      s += '<div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;' +
+        'background:rgba(255,255,255,0.03);border-radius:8px;padding:10px 12px">';
+      s += '<div style="flex:1;font-size:11px;color:' +
+        (item.matched ? 'rgba(200,220,240,0.8)' : 'rgba(255,180,80,0.7)') + '">' +
+        item.raw + (item.matched ? '' : ' ?') + '</div>';
+      s += '<input type="number" min="0" max="500" step="1" value="' + Math.round(item.carbs) + '" ' +
+        'onchange="window._padItems[' + idx + '].carbs=parseFloat(this.value)||0;window._padUpdateTotal()" ' +
+        'style="width:54px;padding:6px;border-radius:6px;border:1px solid rgba(255,140,50,0.2);' +
+        'background:rgba(255,140,50,0.05);font-family:\'DM Mono\',monospace;font-size:14px;' +
         'color:rgba(255,140,50,0.9);text-align:center;outline:none">';
       s += '<span style="font-size:9px;color:rgba(200,220,240,0.3)">g</span>';
+      if (!item.matched) {
+        s += '<button onclick="openAliasLinker(' + idx + ')" ' +
+          'style="padding:4px 8px;border-radius:6px;border:1px solid rgba(255,180,80,0.3);' +
+          'background:rgba(255,180,80,0.07);font-family:\'DM Mono\',monospace;font-size:9px;' +
+          'color:rgba(255,180,80,0.8);cursor:pointer">link</button>';
+        s += '<button onclick="openAddFoodFromPad(' + idx + ')" ' +
+          'style="padding:4px 8px;border-radius:6px;border:1px solid rgba(62,180,120,0.3);' +
+          'background:rgba(62,180,120,0.07);font-family:\'DM Mono\',monospace;font-size:9px;' +
+          'color:rgba(62,180,120,0.8);cursor:pointer">+ add</button>';
+      }
       s += '<button onclick="window._padItems.splice(' + idx + ',1);window._padRerender()" ' +
         'style="background:none;border:none;cursor:pointer;font-size:14px;' +
         'color:rgba(200,220,240,0.3);padding:2px">×</button>';
       s += '</div>';
-      // Row 2: link / add buttons for unmatched items
-      if (!item.matched) {
-        s += '<div style="display:flex;gap:6px;margin-top:7px">';
-        s += '<button onclick="openAliasLinker(' + idx + ')" ' +
-          'style="padding:4px 8px;border-radius:6px;border:1px solid rgba(255,180,80,0.3);' +
-          'background:rgba(255,180,80,0.07);font-family:\'DM Mono\',monospace;font-size:9px;' +
-          'color:rgba(255,180,80,0.8);cursor:pointer">link to library</button>';
-        s += '<button onclick="openAddFoodFromPad(' + idx + ')" ' +
-          'style="padding:4px 8px;border-radius:6px;border:1px solid rgba(62,180,120,0.3);' +
-          'background:rgba(62,180,120,0.07);font-family:\'DM Mono\',monospace;font-size:9px;' +
-          'color:rgba(62,180,120,0.8);cursor:pointer">+ add to library</button>';
-        s += '</div>';
-      }
-      s += '</div>';
     });
-
 
     // Total + commit
     s += '<div style="display:flex;justify-content:space-between;align-items:center;' +
@@ -11234,36 +11190,13 @@ function openPadImportScreen(parsed, file) {
   window._padItems = items;
   window._padRerender = renderImportScreen;
   window._padUpdateTotal = function(){
-    var tot = window._padItems.reduce(function(s,i){ return s+(i.carbs===''||i.carbs===null||i.carbs===undefined ? 0 : parseFloat(i.carbs)||0); }, 0);
+    var tot = window._padItems.reduce(function(s,i){ return s+(parseFloat(i.carbs)||0); }, 0);
     var el2 = document.getElementById('pad-total');
-    if (el2) el2.textContent = tot.toFixed(1) + 'g';
+    if (el2) el2.textContent = tot.toFixed(0) + 'g';
   };
 
   renderImportScreen();
   document.body.appendChild(el);
-}
-
-function openAddFoodFromPad(itemIdx) {
-  // Opens the standard addCustomFood overlay pre-filled with the scanned item name,
-  // then on save patches the pad item with the new food's c100 and updates carbs.
-  var item = window._padItems[itemIdx];
-  if (!item) return;
-  var padName = item.displayName || item.raw;
-
-  // Stash a callback so saveCustomFood can update the pad item
-  window._padAddCallback = function(savedFood) {
-    if (!savedFood) return;
-    item.matched = true;
-    item.match   = savedFood;
-    item.carbs   = savedFood.c100 > 0
-      ? Math.round((savedFood.c100 * (item.grams||100) / 100) * 10) / 10
-      : item.carbs;
-    item.gi      = savedFood.gi || 55;
-    if (window._padRerender) window._padRerender();
-    showToast(padName + ' added to library');
-  };
-
-  addCustomFood(padName);
 }
 
 function openAliasLinker(itemIdx) {
@@ -11277,7 +11210,7 @@ function openAliasLinker(itemIdx) {
     'display:flex;flex-direction:column;padding:32px 20px;font-family:"DM Mono",monospace';
   el.innerHTML =
     '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px">' +
-      '<div style="font-size:14px;color:rgba(255,180,80,0.9)">link "' + (item.displayName||item.raw) + '" to…</div>' +
+      '<div style="font-size:14px;color:rgba(255,180,80,0.9)">link "' + item.raw + '" to…</div>' +
       '<button onclick="document.getElementById(\'alias-linker\').remove()" ' +
         'style="background:none;border:none;cursor:pointer;font-size:22px;' +
         'color:rgba(200,220,240,0.4)">×</button>' +
@@ -11343,7 +11276,7 @@ function commitPadImport() {
 
   var foodItems = items.map(function(i){
     var gi = i._gi_override || i.gi || 55;
-    return { name: i.displayName||i.raw, carbs: parseFloat(i.carbs)||0, gi: gi, g: i.grams, source: 'pad' };
+    return { name: i.raw, carbs: parseFloat(i.carbs)||0, gi: gi, g: i.grams, source: 'pad' };
   });
   var avgGI = foodItems.length && totalCarbs > 0
     ? foodItems.reduce(function(s,i){ return s + (i.gi||55) * (i.carbs||0); }, 0) / totalCarbs
