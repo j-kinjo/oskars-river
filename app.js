@@ -244,10 +244,26 @@ async function syncPullEvents(sinceT) {
     // Merge into LOGGED_EVENTS — update if exists (catches remote edits), insert if new
     var existsL = LOGGED_EVENTS.findIndex(function(e){ return e.t === row.t; });
     if (existsL >= 0) {
-      // Remote edit: update carbs/units in case they changed on another device
-      LOGGED_EVENTS[existsL].c = row.c||0;
-      LOGGED_EVENTS[existsL].u = row.u||0;
+      // Remote edit: update all fields in case they changed on another device
+      LOGGED_EVENTS[existsL].c    = row.c||0;
+      LOGGED_EVENTS[existsL].u    = row.u||0;
+      LOGGED_EVENTS[existsL].gi   = row.gi;
+      LOGGED_EVENTS[existsL].note = row.note;
       if (rowItems) LOGGED_EVENTS[existsL].items = rowItems;
+      LOGGED_EVENTS[existsL].local = false;
+      // ── CRITICAL: keep BOLUS_EVENTS in sync with the updated LOGGED_EVENTS entry ──
+      // Without this, COB/IOB curves use stale or missing data even though LOGGED_EVENTS is correct.
+      var existsB = BOLUS_EVENTS.findIndex(function(e){ return e.t === row.t; });
+      if (existsB >= 0) {
+        BOLUS_EVENTS[existsB].c    = row.c||0;
+        BOLUS_EVENTS[existsB].u    = row.u||0;
+        BOLUS_EVENTS[existsB].gi   = row.gi;
+        BOLUS_EVENTS[existsB].note = row.note;
+        if (rowItems) BOLUS_EVENTS[existsB].items = rowItems;
+      } else {
+        // BOLUS_EVENTS was missing this entry entirely — add it
+        BOLUS_EVENTS.push(LOGGED_EVENTS[existsL]);
+      }
     } else {
       var ev = { t: row.t, c: row.c||0, u: row.u||0, gi: row.gi, note: row.note, items: rowItems, local: false };
       LOGGED_EVENTS.push(ev);
