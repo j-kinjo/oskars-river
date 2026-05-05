@@ -226,7 +226,7 @@ async function syncPullEvents(sinceT) {
     return false;                       // gone from Supabase — drop
   });
   if (removedTs.size > 0) {
-    BOLUS_EVENTS = BOLUS_EVENTS.filter(function(e){ return !removedTs.has(e.t); });
+    // BOLUS_EVENTS is a live alias for LOGGED_EVENTS — already filtered above.
     console.log('[sync] removed ' + removedTs.size + ' stale local event(s): ' +
       Array.from(removedTs).map(function(t){
         return new Date(t).toLocaleTimeString('en-GB',{hour:'2-digit',minute:'2-digit'});
@@ -251,31 +251,20 @@ async function syncPullEvents(sinceT) {
       LOGGED_EVENTS[existsL].note = row.note;
       if (rowItems) LOGGED_EVENTS[existsL].items = rowItems;
       LOGGED_EVENTS[existsL].local = false;
-      // ── CRITICAL: keep BOLUS_EVENTS in sync with the updated LOGGED_EVENTS entry ──
-      // Without this, COB/IOB curves use stale or missing data even though LOGGED_EVENTS is correct.
-      var existsB = BOLUS_EVENTS.findIndex(function(e){ return e.t === row.t; });
-      if (existsB >= 0) {
-        BOLUS_EVENTS[existsB].c    = row.c||0;
-        BOLUS_EVENTS[existsB].u    = row.u||0;
-        BOLUS_EVENTS[existsB].gi   = row.gi;
-        BOLUS_EVENTS[existsB].note = row.note;
-        if (rowItems) BOLUS_EVENTS[existsB].items = rowItems;
-      } else {
-        // BOLUS_EVENTS was missing this entry entirely — add it
-        BOLUS_EVENTS.push(LOGGED_EVENTS[existsL]);
-      }
+      // BOLUS_EVENTS is a live alias — LOGGED_EVENTS[existsL] is already updated above.
     } else {
       var ev = { t: row.t, c: row.c||0, u: row.u||0, gi: row.gi, note: row.note, items: rowItems, local: false };
       LOGGED_EVENTS.push(ev);
-      // Also sync into BOLUS_EVENTS if not already there
-      var existsB = BOLUS_EVENTS.findIndex(function(e){ return e.t === row.t; });
-      if (existsB < 0) BOLUS_EVENTS.push(ev);
       // Do NOT push into SESSION — historical Supabase events must not drive dataAt().
       added++;
     }
   });
   // Always write back — removal may have changed the list even if added=0
   try { localStorage.setItem('river_logged', JSON.stringify(LOGGED_EVENTS)); } catch(e){}
+  // ── DEV ASSERTION: BOLUS_EVENTS and LOGGED_EVENTS must always be the same object ──
+  if (BOLUS_EVENTS !== LOGGED_EVENTS) {
+    console.error('[sync] ARRAY DIVERGENCE — BOLUS_EVENTS is no longer the same reference as LOGGED_EVENTS. This is a bug.');
+  }
   return added;
 }
 
@@ -430,7 +419,6 @@ function buildSupabaseSettingsHTML() {
 }
 
 
-var BOLUS_EVENTS = [];
 var LOGGED_EVENTS = [];
 try { LOGGED_EVENTS = JSON.parse(localStorage.getItem('river_logged')||'[]');
   // Keep only last 24h — viewable window when scrolling back. 6h was too short.
@@ -443,10 +431,13 @@ try { LOGGED_EVENTS = JSON.parse(localStorage.getItem('river_logged')||'[]');
     _loadSeenT[e.t] = true;
     return true;
   });
-  LOGGED_EVENTS.forEach(function(e){ BOLUS_EVENTS.push(e); });
   // Write trimmed+deduped list back so it doesn't grow indefinitely
   try { localStorage.setItem('river_logged', JSON.stringify(LOGGED_EVENTS)); } catch(_le){}
 } catch(err) {}
+
+// BOLUS_EVENTS is a live alias for LOGGED_EVENTS — single source of truth.
+// Do not push to BOLUS_EVENTS directly; push to LOGGED_EVENTS instead.
+var BOLUS_EVENTS = LOGGED_EVENTS;
 
 const POD_PAUSE_T  = 1773651600000;
 let CGM_START = HISTORY_RAW.length > 0 ? HISTORY_RAW[0].t : Date.now() - 2*3600000;
@@ -3810,7 +3801,6 @@ async function _loadOlderHistory() {
           if (typeof rowItems === 'string') { try { rowItems = JSON.parse(rowItems); } catch(_e) { rowItems = null; } }
           var ev = { t: row.t, c: row.c||0, u: row.u||0, gi: row.gi, note: row.note, items: rowItems, local: false };
           LOGGED_EVENTS.push(ev);
-          BOLUS_EVENTS.push(ev);
           addedEvs++;
         }
       });
@@ -5221,7 +5211,6 @@ function bolusNow() {
   if (u > 15) { showToast('⚠️ ' + u.toFixed(1) + 'U logged — double-check this dose'); }
   var t = getEntryTime() || Date.now();
   SESSION.push({t:t, c:0, u:u});
-  BOLUS_EVENTS.push({t:t, c:0, u:u});
   LOGGED_EVENTS.push({t:t, c:0, u:u, note:'bolus', logged_by:_thisPersonId||'unknown', local:true});
   try{localStorage.setItem('river_session',JSON.stringify(SESSION));}catch(e){}
   try{localStorage.setItem('river_logged',JSON.stringify(LOGGED_EVENTS));}catch(e){}
@@ -5266,7 +5255,6 @@ function logPlate() {
 
   if (total>0) {
     SESSION.push({t:carbT, c:total, u:0, gi:avgGI, items:foodItems});
-    BOLUS_EVENTS.push({t:carbT, c:total, u:0, gi:avgGI, items:foodItems});
     LOGGED_EVENTS.push({t:carbT, c:total, u:0, gi:avgGI, items:foodItems, note:'plate',
       logged_by:_thisPersonId||'unknown', local:true,
       therapy_snapshot: _currentTherapySnapshot(carbT),
@@ -7223,7 +7211,6 @@ function logMealEntry(carbsOnly) {
   // Log insulin at bolus time
   if (u > 0) {
     SESSION.push({t: t, c: 0, u: u});
-    BOLUS_EVENTS.push({t: t, c: 0, u: u});
     LOGGED_EVENTS.push({t: t, c: 0, u: u, note: 'bolus', local: true});
   }
 
@@ -7233,7 +7220,6 @@ function logMealEntry(carbsOnly) {
   });
   if (totalCarbs > 0) {
     SESSION.push({t: carbT, c: totalCarbs, u: 0, gi: avgGI, items: foodItems});
-    BOLUS_EVENTS.push({t: carbT, c: totalCarbs, u: 0, gi: avgGI, items: foodItems});
     LOGGED_EVENTS.push({t: carbT, c: totalCarbs, u: 0, gi: avgGI, items: foodItems, note: 'carbs', logged_by: _thisPersonId||'unknown', local: true,
       therapy_snapshot: _currentTherapySnapshot(carbT),
       pre_bg: _preBG(carbT)});
@@ -7867,9 +7853,9 @@ function loadScenario(id) {
   for (const h of s.history) HISTORY_RAW.push(h);
   HISTORY_RAW.sort((a,b) => a.t-b.t);
 
-  // Replace BOLUS_EVENTS
-  BOLUS_EVENTS.length = 0;
-  for (const b of s.bolus) BOLUS_EVENTS.push(b);
+  // Replace LOGGED_EVENTS with scenario bolus data (BOLUS_EVENTS is an alias)
+  LOGGED_EVENTS.length = 0;
+  for (const b of s.bolus) LOGGED_EVENTS.push(b);
 
   // Clear session
   SESSION.length = 0;
@@ -8570,7 +8556,6 @@ function logHypoTreatment(id){
   var now=getTimeVal('hypo-time');
   SESSION.push({t:now,c:carbs,u:0,note:'hypo:'+id});
   try{localStorage.setItem('river_session',JSON.stringify(SESSION));}catch(e){}
-  BOLUS_EVENTS.push({t:now,c:carbs,u:0,note:'hypo:'+id});
   LOGGED_EVENTS.push({t:now,c:carbs,u:0,note:'hypo:'+id,logged_by:_thisPersonId||'unknown', local:true});
   try{localStorage.setItem('river_logged',JSON.stringify(LOGGED_EVENTS));}catch(e){}
   syncAfterLog();
@@ -8697,7 +8682,6 @@ function logCorrection(){
   if(u>10){showToast('⚠️ '+u.toFixed(1)+'U logged — double-check this dose');}
   var now=getTimeVal('corr-time');
   SESSION.push({t:now,c:0,u:u});
-  BOLUS_EVENTS.push({t:now,c:0,u:u,logged_by:_thisPersonId||'unknown'});
   LOGGED_EVENTS.push({t:now,c:0,u:u,note:'correction',logged_by:_thisPersonId||'unknown',local:true});
   try{localStorage.setItem('river_session',JSON.stringify(SESSION));}catch(e){}
   try{localStorage.setItem('river_logged',JSON.stringify(LOGGED_EVENTS));}catch(e){}
@@ -8848,9 +8832,8 @@ function ingestReadings(readings) {
   _historyIsStale = false; // live data confirmed — show real BG
   // Purge scenario-only BOLUS_EVENTS (not in LOGGED_EVENTS) — demo data gone
   if (_activeDemoId) {
-    var _loggedTs = new Set(LOGGED_EVENTS.map(function(e){ return e.t; }));
-    BOLUS_EVENTS = BOLUS_EVENTS.filter(function(b){ return _loggedTs.has(b.t); });
-    SESSION      = SESSION.filter(function(s){ return _loggedTs.has(s.t); });
+    // BOLUS_EVENTS is an alias for LOGGED_EVENTS — no separate purge needed.
+    SESSION = SESSION.filter(function(s){ return LOGGED_EVENTS.some(function(e){ return e.t===s.t; }); });
     _activeDemoId = null;
   }
 }
@@ -10138,7 +10121,7 @@ function nukeLocalData() {
     keys.forEach(function(k){ try{localStorage.removeItem(k);}catch(_e){} });
     // Clear in-memory arrays defensively
     try{ if(typeof LOGGED_EVENTS!=='undefined') LOGGED_EVENTS.length=0; }catch(_e){}
-    try{ if(typeof BOLUS_EVENTS!=='undefined')  BOLUS_EVENTS.length=0;  }catch(_e){}
+    // BOLUS_EVENTS is a live alias for LOGGED_EVENTS — cleared above.
     try{ if(typeof SESSION!=='undefined')        SESSION.length=0;       }catch(_e){}
     try{ if(typeof MEAL_HISTORY!=='undefined')   MEAL_HISTORY.length=0;  }catch(_e){}
     try{ if(typeof HISTORY_RAW!=='undefined')    HISTORY_RAW.length=0;   }catch(_e){}
@@ -10286,9 +10269,8 @@ async function deployToGitHub() {
 
 // ── EVENT EDITOR — edit or delete a logged event ─────────────────────
 function openEventEditor(eventIdx) {
-  var events = [...LOGGED_EVENTS, ...SESSION.map((s,i) => ({...s, _session: true, _idx: i}))];
-  // Find by index in BOLUS_EVENTS
-  var ev = BOLUS_EVENTS[eventIdx];
+  // Find by index in LOGGED_EVENTS (BOLUS_EVENTS is a live alias)
+  var ev = LOGGED_EVENTS[eventIdx];
   if (!ev) return;
 
   var ex = document.getElementById('event-edit-overlay');
@@ -10395,17 +10377,17 @@ function saveEventEdit(idx) {
   var timeEl   = document.getElementById('ee-time');
   var newT     = timeEl && timeEl.value ? new Date(timeEl.value).getTime() : null;
 
-  if (!BOLUS_EVENTS[idx]) { var el=document.getElementById('event-edit-overlay'); if(el) el.remove(); return; }
+  if (!LOGGED_EVENTS[idx]) { var el=document.getElementById('event-edit-overlay'); if(el) el.remove(); return; }
 
-  var oldT = BOLUS_EVENTS[idx].t;
-  var oldWait = BOLUS_EVENTS[idx].waitMins || 0;
+  var oldT = LOGGED_EVENTS[idx].t;
+  var oldWait = LOGGED_EVENTS[idx].waitMins || 0;
 
-  // --- Apply changes to BOLUS_EVENTS entry ---
-  BOLUS_EVENTS[idx].c = c;
-  BOLUS_EVENTS[idx].u = u;
-  BOLUS_EVENTS[idx].waitMins = waitMins;
-  if (newT && newT !== oldT) BOLUS_EVENTS[idx].t = newT;
-  var updatedT = BOLUS_EVENTS[idx].t;
+  // --- Apply changes to LOGGED_EVENTS entry (BOLUS_EVENTS is a live alias) ---
+  LOGGED_EVENTS[idx].c = c;
+  LOGGED_EVENTS[idx].u = u;
+  LOGGED_EVENTS[idx].waitMins = waitMins;
+  if (newT && newT !== oldT) LOGGED_EVENTS[idx].t = newT;
+  var updatedT = LOGGED_EVENTS[idx].t;
 
   // --- If this is a bolus event (u > 0) and wait changed, reposition linked carb chip ---
   // The carb event sits at bolusT + waitMins*60000. Find it and move it.
@@ -10413,12 +10395,12 @@ function saveEventEdit(idx) {
     var oldCarbT = oldT + oldWait * 60000;
     var newCarbT = updatedT + waitMins * 60000;
     if (oldCarbT !== newCarbT) {
-      // Reposition in BOLUS_EVENTS
-      var carbIdx = BOLUS_EVENTS.findIndex(function(e, i) {
+      // Reposition linked carb event in LOGGED_EVENTS (BOLUS_EVENTS is a live alias)
+      var carbIdx = LOGGED_EVENTS.findIndex(function(e, i) {
         return i !== idx && e.c > 0 && e.u === 0 && Math.abs(e.t - oldCarbT) < 5 * 60000;
       });
       if (carbIdx >= 0) {
-        BOLUS_EVENTS[carbIdx].t = newCarbT;
+        LOGGED_EVENTS[carbIdx].t = newCarbT;
         // Sync carb event through SESSION and LOGGED_EVENTS too
         var csi = SESSION.findIndex(function(s){ return Math.abs(s.t - oldCarbT) < 5*60000 && s.c > 0 && !s.u; });
         if (csi >= 0) SESSION[csi].t = newCarbT;
@@ -10450,7 +10432,7 @@ function saveEventEdit(idx) {
 
   // ── Sync edit to Supabase ────────────────────────────────────────────
   if (SUPABASE_READY) {
-    var updatedEv = BOLUS_EVENTS[idx];
+    var updatedEv = LOGGED_EVENTS[idx];
     if (!updatedEv) return;
 
     if (newT && newT !== oldT) {
@@ -10473,9 +10455,9 @@ function saveEventEdit(idx) {
 
       // If carb event was repositioned, also delete/re-insert its Supabase row
       if (u > 0) {
-        var oldCarbT2 = oldT + (BOLUS_EVENTS[idx] ? (BOLUS_EVENTS[idx].waitMins || waitMins) : waitMins) * 60000;
+        var oldCarbT2 = oldT + (LOGGED_EVENTS[idx] ? (LOGGED_EVENTS[idx].waitMins || waitMins) : waitMins) * 60000;
         // find the carb event we moved
-        var movedCarb = BOLUS_EVENTS.find(function(e, i){ return i !== idx && e.c > 0 && !e.u && Math.abs(e.t - (updatedT + waitMins * 60000)) < 5 * 60000; });
+        var movedCarb = LOGGED_EVENTS.find(function(e, i){ return i !== idx && e.c > 0 && !e.u && Math.abs(e.t - (updatedT + waitMins * 60000)) < 5 * 60000; });
         if (movedCarb) {
           var oldCarbRow_t = oldT + oldWait * 60000;
           _deletedEventTs.add(oldCarbRow_t);
@@ -10845,9 +10827,9 @@ function _saveDeletedTs() {
 }
 
 function deleteEvent(idx) {
-  var ev = BOLUS_EVENTS[idx];
+  var ev = LOGGED_EVENTS[idx];
   var t  = ev && ev.t;
-  BOLUS_EVENTS.splice(idx, 1);
+  LOGGED_EVENTS.splice(idx, 1);
   if (t) {
     SESSION       = SESSION.filter(function(s){ return s.t !== t; });
     LOGGED_EVENTS = LOGGED_EVENTS.filter(function(s){ return s.t !== t; });
@@ -12274,13 +12256,11 @@ function commitPadImport() {
     // Store waitMins on the bolus event so the event editor can correctly
     // find and reposition the linked carb event when wait time is edited.
     SESSION.push({t:t, c:0, u:u, waitMins:waitMins, source:'pad'});
-    BOLUS_EVENTS.push({t:t, c:0, u:u, waitMins:waitMins, source:'pad'});
     LOGGED_EVENTS.push({t:t, c:0, u:u, waitMins:waitMins, note:'bolus', source:'pad', logged_by:_thisPersonId||'unknown', local:true});
     topUpIOB(u);
   }
   if (totalCarbs > 0) {
     SESSION.push({t:carbT, c:totalCarbs, u:0, gi:avgGI, items:foodItems, source:'pad'});
-    BOLUS_EVENTS.push({t:carbT, c:totalCarbs, u:0, gi:avgGI, items:foodItems, source:'pad'});
     LOGGED_EVENTS.push({t:carbT, c:totalCarbs, u:0, gi:avgGI, items:foodItems, note:'carbs', source:'pad',
       logged_by:_thisPersonId||'unknown', local:true});
     topUpCOB(totalCarbs);
