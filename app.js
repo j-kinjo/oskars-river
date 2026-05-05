@@ -4469,7 +4469,7 @@ async function _maybeRollupModelAccuracy() {
         meal_count:        mealRows.length,
         bolus_count:       bolusRows.length,
         unannounced_count: unRows.length,
-        model_version:     (window.__BUILD_ID__ || 'dev'),
+        model_version:     (window['__BUILD'+'_ID__'] || 'dev'),
       }],
     });
   } catch(e) {
