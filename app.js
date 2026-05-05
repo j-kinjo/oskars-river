@@ -174,9 +174,12 @@ async function syncPushReadings(readings) {
 
 // ── PULL: Supabase readings → local ───────────────────────────────────
 async function syncPullReadings(sinceT) {
-  var since = sinceT || (Date.now() - 7 * 86400000);
+  // On first sync (sinceT=0), pull full history — Supabase is the longitudinal record.
+  // Subsequent syncs use _lastSyncT to only fetch new readings.
+  var since = sinceT || 0;
+  var limit = sinceT ? 500 : 5000; // larger batch on first full pull
   var rows  = await _sbFetch(
-    'readings?t=gte.' + since + '&order=t.asc&limit=2000',
+    'readings?t=gte.' + since + '&order=t.asc&limit=' + limit,
     { method: 'GET' }
   );
   if (!rows || rows.length === 0) return 0;
@@ -271,6 +274,8 @@ async function syncNow(silent) {
     var newEvents = await syncPullEvents(sinceT);
     await syncPullPricks();
     await syncFoodLibraryFromSupabase();
+    await syncMealHistoryFromSupabase();
+    await loadObservedISF(); // refresh adaptive ISF from bolus_outcomes
 
     _lastSyncT  = Date.now();
     _syncState  = 'ok';
@@ -1382,7 +1387,7 @@ function _drawIOBReservoir() {
 function buildSmartForecast() {
   var d0    = dataAt(viewTime);
   var bg    = d0.bg;
-  var ISF   = (new Date(viewTime).getHours()>=9 && new Date(viewTime).getHours()<15) ? 7.0 : 6.5;
+  var ISF   = getISF(viewTime);
   var prev5 = dataAt(viewTime - 5*60000);
   var roc   = d0.bg - prev5.bg;
   var meals  = _getActiveMealEvents();
@@ -1721,7 +1726,7 @@ function drawUnknownForce(pal) {
     // Simple forward forecast from 5min prior
     var tPrev   = t - 5 * 60000;
     var dPrev   = dataAt(tPrev);
-    var ISF     = (new Date(t).getHours() >= 9 && new Date(t).getHours() < 15) ? 7.0 : 6.5;
+    var ISF     = getISF(t);
 
     // What IOB+COB alone would predict over 5 mins
     var cobDelta = dPrev.cob > 0 ? dPrev.cob * (1 - cobF(5)) * 0.055 : 0;
@@ -3615,6 +3620,7 @@ function frame(ts) {
   drawHypoPulse(pal);
   updateHUD(d, pal);
   updateNudgeChipVisibility();
+  _maybeDetectUnannouncedMeal(); // throttled to 15min intervals internally
 
   requestAnimationFrame(frame);
   } catch(e) {
@@ -3941,9 +3947,9 @@ function onInp(){
     // Time-aware I:C and ISF (updated 26 Mar 2026)
     const _now = new Date(getEntryTime());
     const _h   = _now.getHours() + _now.getMinutes()/60;
-    const _ic  = (_h>=6&&_h<10) ? 8.5 : (_h>=10&&_h<14) ? 12 : (_h>=14&&_h<18) ? 15 : 10;
-    const _isf = (_h>=9&&_h<15) ? 7.0 : 6.0;
-    const _target = 6.0;
+    const _ic  = getIC(_now.getTime());
+    const _isf = getISF(_now.getTime());
+    const _target = getTarget(_now.getTime());
     const _carbDose = c > 0 ? c / _ic : 0;
     const _corrDose = bg > 7.0 ? Math.max(0, (bg - _target) / _isf) : 0;
     const dose = _carbDose + _corrDose;
@@ -4068,7 +4074,636 @@ var MEAL_HISTORY = (function() {
 })();
 
 function saveMealHistory() {
-  try { localStorage.setItem('river_meal_hist', JSON.stringify(MEAL_HISTORY.slice(0, 30))); } catch(e) {}
+  // No longer capped at 30 — store everything locally, Supabase is the longitudinal record
+  try { localStorage.setItem('river_meal_hist', JSON.stringify(MEAL_HISTORY)); } catch(e) {}
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+//  OUTCOME TRACKING — predicted vs actual, insulin curves, ghost meals
+//
+//  Three subsystems:
+//  1. Meal outcomes  — snapshot forecast at log time, check at +2h
+//  2. Bolus outcomes — snapshot IOB curve at bolus, check at +4h
+//  3. Unannounced meal detection — watch for ghost COB signatures
+//
+//  All store to Supabase. Daily rollup into model_accuracy table.
+//  "It takes N weeks to see results" comes from model_accuracy.
+// ═══════════════════════════════════════════════════════════════════════
+
+var _outcomeTimers = {}; // t → timer handle, so we don't double-schedule
+
+// ── 1. MEAL OUTCOME TRACKING ──────────────────────────────────────────
+
+function scheduleMealOutcome(meal, predictedCurve) {
+  // predictedCurve: [{mins, bg}] from buildSmartForecast at log time
+  // Check at +2h. If session has ended (app reopened), recover on next launch.
+  var checkAt = meal.t + 2 * 3600000; // +2h from meal time
+  var delay   = Math.max(0, checkAt - Date.now());
+
+  if (_outcomeTimers['meal_' + meal.t]) return; // already scheduled
+
+  _outcomeTimers['meal_' + meal.t] = setTimeout(async function() {
+    await _collectMealOutcome(meal, predictedCurve);
+    delete _outcomeTimers['meal_' + meal.t];
+  }, delay);
+}
+
+async function _collectMealOutcome(meal, predictedCurve) {
+  if (!SUPABASE_READY) return;
+  try {
+    var mealT   = meal.t;
+    var window  = 120; // 2h in minutes
+    var step    = 5;
+    var actualCurve = [];
+    var errors  = [];
+
+    for (var mins = step; mins <= window; mins += step) {
+      var t = mealT + mins * 60000;
+      var d = dataAt(t);
+      if (!d || d.bg <= 0) continue;
+      actualCurve.push({ mins: mins, bg: +d.bg.toFixed(2) });
+
+      // Compare to predicted if we have it
+      if (predictedCurve) {
+        var pred = predictedCurve.find(function(p){ return p.mins === mins; });
+        if (pred) errors.push(Math.abs(pred.bg - d.bg));
+      }
+    }
+
+    // Find actual peak
+    var preBG  = actualCurve[0] ? actualCurve[0].bg : meal.pre_bg;
+    var peak   = actualCurve.reduce(function(best, p){ return p.bg > best.bg ? p : best; }, actualCurve[0] || {bg:0, mins:0});
+    var peakBG = peak.bg;
+    var peakMins = peak.mins;
+
+    // Find return-to-baseline (within 0.8 of pre-meal BG)
+    var returnMins = null;
+    for (var i = 0; i < actualCurve.length; i++) {
+      if (actualCurve[i].mins > peakMins && Math.abs(actualCurve[i].bg - (preBG||peakBG)) < 0.8) {
+        returnMins = actualCurve[i].mins;
+        break;
+      }
+    }
+
+    // Accuracy metrics
+    var rmse = errors.length > 0
+      ? +Math.sqrt(errors.reduce(function(s,e){return s+e*e;},0) / errors.length).toFixed(3)
+      : null;
+    var mae = errors.length > 0
+      ? +(errors.reduce(function(s,e){return s+e;},0) / errors.length).toFixed(3)
+      : null;
+
+    // Predicted peak vs actual peak
+    var predPeak = predictedCurve
+      ? predictedCurve.reduce(function(best, p){ return p.bg > best.bg ? p : best; }, predictedCurve[0] || {bg:0, mins:0})
+      : null;
+    var peakError   = predPeak ? +(predPeak.bg - peakBG).toFixed(2) : null;
+    var timingError = predPeak ? (predPeak.mins - peakMins) : null;
+
+    // PATCH meal_history with outcomes
+    await _sbFetch('meal_history?t=eq.' + mealT, {
+      method: 'PATCH',
+      prefer: 'return=minimal',
+      body: {
+        actual_curve:      actualCurve,
+        peak_bg:           +peakBG.toFixed(2),
+        peak_t:            mealT + peakMins * 60000,
+        return_t:          returnMins ? mealT + returnMins * 60000 : null,
+        rmse:              rmse,
+        mae:               mae,
+        peak_error:        peakError,
+        timing_error_mins: timingError,
+      },
+    });
+
+    _maybeRollupModelAccuracy();
+  } catch(e) {
+    console.warn('[mealOutcome]', e.message);
+  }
+}
+
+// ── 2. BOLUS OUTCOME TRACKING ─────────────────────────────────────────
+
+function scheduleBolusOutcome(bolusEvent, predictedCurve) {
+  var checkAt = bolusEvent.t + 4 * 3600000; // +4h (full IOB tail)
+  var delay   = Math.max(0, checkAt - Date.now());
+
+  if (_outcomeTimers['bolus_' + bolusEvent.t]) return;
+
+  _outcomeTimers['bolus_' + bolusEvent.t] = setTimeout(async function() {
+    await _collectBolusOutcome(bolusEvent, predictedCurve);
+    delete _outcomeTimers['bolus_' + bolusEvent.t];
+  }, delay);
+}
+
+async function _collectBolusOutcome(ev, predictedCurve) {
+  if (!SUPABASE_READY || !ev || !ev.u) return;
+  try {
+    var bolusT   = ev.t;
+    var preBG    = _preBG(bolusT) || 0;
+    var actualCurve = [];
+    var errors   = [];
+
+    for (var mins = 5; mins <= 240; mins += 5) {
+      var t = bolusT + mins * 60000;
+      var d = dataAt(t);
+      if (!d || d.bg <= 0) continue;
+      actualCurve.push({ mins: mins, bg: +d.bg.toFixed(2) });
+      if (predictedCurve) {
+        var pred = predictedCurve.find(function(p){ return p.mins === mins; });
+        if (pred) errors.push(Math.abs(pred.bg - d.bg));
+      }
+    }
+
+    if (actualCurve.length < 6) return; // not enough data
+
+    // Nadir (lowest point)
+    var nadir = actualCurve.reduce(function(lo, p){ return p.bg < lo.bg ? p : lo; }, actualCurve[0]);
+    var nadirBG   = nadir.bg;
+    var nadirMins = nadir.mins;
+
+    // Observed ISF: bg drop per unit, normalised to insulin-only effect
+    // Use the nadir vs pre-bolus, but discount any COB that was active
+    var bgDrop = preBG - nadirBG;
+    var observedISF = ev.u > 0 ? +(bgDrop / ev.u).toFixed(2) : null;
+    var expectedISF = _currentTherapySnapshot(bolusT);
+    var isfError    = (observedISF && expectedISF)
+      ? +(expectedISF.isf - observedISF).toFixed(2)
+      : null;
+
+    // Return-to-pre (within 1.0 of pre-bolus BG)
+    var returnMins = null;
+    for (var j = 0; j < actualCurve.length; j++) {
+      if (actualCurve[j].mins > nadirMins && Math.abs(actualCurve[j].bg - preBG) < 1.0) {
+        returnMins = actualCurve[j].mins;
+        break;
+      }
+    }
+
+    var rmse = errors.length > 0
+      ? +Math.sqrt(errors.reduce(function(s,e){return s+e*e;},0)/errors.length).toFixed(3)
+      : null;
+
+    var hour = new Date(bolusT).getHours();
+    var period = hour >= 6 && hour < 10 ? 'Breakfast'
+               : hour >= 10 && hour < 14 ? 'Lunch'
+               : hour >= 14 && hour < 18 ? 'Afternoon'
+               : hour >= 18 && hour < 22 ? 'Evening' : 'Overnight';
+
+    var d0 = dataAt(bolusT);
+    var row = {
+      t:               bolusT,
+      units:           ev.u,
+      pre_bg:          +preBG.toFixed(2),
+      iob_at_bolus:    d0 ? +d0.iob.toFixed(2) : null,
+      cob_at_bolus:    d0 ? +d0.cob.toFixed(2) : null,
+      therapy_snapshot: _currentTherapySnapshot(bolusT),
+      predicted_curve: predictedCurve || null,
+      actual_curve:    actualCurve,
+      observed_isf:    observedISF,
+      isf_error:       isfError,
+      nadir_bg:        +nadirBG.toFixed(2),
+      nadir_t:         bolusT + nadirMins * 60000,
+      nadir_mins:      nadirMins,
+      return_mins:     returnMins,
+      rmse:            rmse,
+      period:          period,
+      logged_by:       ev.logged_by || null,
+      device_id:       _deviceId,
+    };
+
+    await _sbFetch('bolus_outcomes?on_conflict=t', {
+      method: 'POST',
+      prefer: 'resolution=merge-duplicates,return=minimal',
+      body: [row],
+    });
+
+    _maybeRollupModelAccuracy();
+  } catch(e) {
+    console.warn('[bolusOutcome]', e.message);
+  }
+}
+
+// ── 3. UNANNOUNCED MEAL DETECTION ─────────────────────────────────────
+// Runs every 15min. Looks for a sustained positive residual (BG rising
+// faster than IOB/COB model predicts) with a bell-curve shape matching
+// carb absorption. No meal logged in that window = candidate ghost meal.
+
+var _lastUnannouncedCheck = 0;
+var _detectedUnannouncedTs = new Set(); // avoid re-detecting same event
+
+function _maybeDetectUnannouncedMeal() {
+  var now = Date.now();
+  if (now - _lastUnannouncedCheck < 15 * 60000) return; // throttle to 15min
+  _lastUnannouncedCheck = now;
+
+  try {
+    // Look back 2h at residuals. Need 30+ min of sustained positive residual.
+    var WINDOW_MS  = 2 * 3600000;
+    var STEP_MS    = 5 * 60000;
+    var MIN_RISE   = 1.5;   // mmol — minimum rise to flag
+    var MIN_DURATION = 6;   // steps (~30 min)
+
+    var positiveRun = [];
+    var preBG = null;
+
+    for (var i = 0; i <= WINDOW_MS / STEP_MS; i++) {
+      var t      = now - WINDOW_MS + i * STEP_MS;
+      var actual = dataAt(t);
+      if (!actual || actual.bg <= 0) continue;
+
+      var tPrev   = t - STEP_MS;
+      var dPrev   = dataAt(tPrev);
+      if (!dPrev || dPrev.bg <= 0) continue;
+
+      var ISF      = _currentTherapySnapshot(t);
+      var isf      = ISF ? ISF.isf : 6.5;
+      var cobDelta = dPrev.cob > 0 ? dPrev.cob * (1 - cobF(5)) * 0.055 : 0;
+      var iobDelta = dPrev.iob > 0 ? -dPrev.iob * (1 - iobF(5)) * isf  : 0;
+      var predicted = dPrev.bg + cobDelta + iobDelta;
+      var residual  = actual.bg - predicted;
+
+      if (residual > 0.25) {
+        if (positiveRun.length === 0) preBG = dPrev.bg;
+        positiveRun.push({ t: t, residual: residual, actual: actual.bg });
+      } else {
+        if (positiveRun.length >= MIN_DURATION) {
+          _evaluateUnannouncedMeal(positiveRun, preBG);
+        }
+        positiveRun = [];
+        preBG = null;
+      }
+    }
+    // Check open run at end of window
+    if (positiveRun.length >= MIN_DURATION) {
+      _evaluateUnannouncedMeal(positiveRun, preBG);
+    }
+  } catch(e) {}
+}
+
+async function _evaluateUnannouncedMeal(run, preBG) {
+  if (!SUPABASE_READY) return;
+  var startT = run[0].t;
+  var peakPt = run.reduce(function(best, p){ return p.actual > best.actual ? p : best; }, run[0]);
+  var rise   = peakPt.actual - (preBG || run[0].actual);
+
+  if (rise < 1.5) return; // too small to be a meal
+
+  // Check no meal was logged within 30min of startT
+  var nearbyMeal = LOGGED_EVENTS.find(function(e){
+    return e.c > 0 && Math.abs(e.t - startT) < 30 * 60000;
+  });
+  if (nearbyMeal) return; // announced meal — skip
+
+  // Avoid re-detecting same event (within 1h)
+  for (var ts of _detectedUnannouncedTs) {
+    if (Math.abs(ts - startT) < 3600000) return;
+  }
+  _detectedUnannouncedTs.add(startT);
+
+  // Estimate carbs from rise, discounting known IOB effect
+  var d0         = dataAt(startT);
+  var therapy    = _currentTherapySnapshot(startT);
+  var isf        = therapy ? therapy.isf : 6.5;
+  var iobEffect  = d0 && d0.iob > 0 ? d0.iob * isf * 0.4 : 0; // rough: 40% IOB still active
+  var netRise    = Math.max(0, rise - iobEffect);
+  var estCarbs   = +(netRise / 0.055).toFixed(0); // 1g carbs ≈ 0.055 mmol/L at avg ISF
+
+  // Match against food library GI curves
+  var allFoods = (window.FOOD_DB || []).concat(FOOD_LIBRARY || []);
+  var peakMins = (peakPt.t - startT) / 60000;
+  var candidates = allFoods.map(function(f) {
+    var gi = f.gi || 55;
+    var expectedPeak = Math.max(15, 95 - gi); // matches _cobFgi peak formula
+    var timingDelta  = Math.abs(expectedPeak - peakMins);
+    var confidence   = Math.max(0, 1 - timingDelta / 60); // decays over 60min timing error
+    var estGrams     = f.c100 > 0 ? Math.round(estCarbs / (f.c100 / 100)) : null;
+    return { name: f.name, gi: gi, confidence: +confidence.toFixed(2), estimated_g: estGrams };
+  }).filter(function(c){ return c.confidence > 0.3; })
+    .sort(function(a,b){ return b.confidence - a.confidence; })
+    .slice(0, 5);
+
+  var row = {
+    t:               startT,
+    detection_t:     Date.now(),
+    pre_bg:          +(preBG || run[0].actual).toFixed(2),
+    peak_bg:         +peakPt.actual.toFixed(2),
+    peak_t:          peakPt.t,
+    peak_mins:       Math.round(peakMins),
+    total_rise:      +rise.toFixed(2),
+    residual_curve:  run.map(function(p){ return { t: p.t, residual: +p.residual.toFixed(3) }; }),
+    estimated_carbs: estCarbs,
+    candidate_foods: candidates.length > 0 ? candidates : null,
+    iob_at_t:        d0 ? +d0.iob.toFixed(2) : null,
+    therapy_snapshot: therapy,
+    device_id:       _deviceId,
+  };
+
+  try {
+    await _sbFetch('unannounced_meals?on_conflict=t', {
+      method: 'POST',
+      prefer: 'resolution=merge-duplicates,return=minimal',
+      body: [row],
+    });
+    console.log('[ghost meal detected]', estCarbs + 'g estimated, peak at ' + Math.round(peakMins) + 'min',
+      candidates.length > 0 ? '→ ' + candidates[0].name + ' (' + Math.round(candidates[0].confidence*100) + '%)' : '→ no library match');
+  } catch(e) {
+    console.warn('[unannouncedMeal save]', e.message);
+  }
+}
+
+// ── 4. DAILY MODEL ACCURACY ROLLUP ───────────────────────────────────
+// Runs after each outcome is collected. Aggregates today's meal/bolus
+// outcomes into model_accuracy table. "N weeks to see results" queries
+// run against this table.
+
+var _lastAccuracyRollup = 0;
+
+async function _maybeRollupModelAccuracy() {
+  if (Date.now() - _lastAccuracyRollup < 10 * 60000) return; // max once per 10min
+  _lastAccuracyRollup = Date.now();
+  if (!SUPABASE_READY) return;
+
+  try {
+    var today = new Date().toISOString().slice(0, 10); // YYYY-MM-DD
+    var dayStart = new Date(today).getTime();
+    var dayEnd   = dayStart + 86400000;
+
+    // Pull today's outcomes from Supabase
+    var mealRows  = await _sbFetch('meal_history?created_at=gte.' + new Date(dayStart).toISOString() + '&rmse=not.is.null&select=rmse,peak_error', {});
+    var bolusRows = await _sbFetch('bolus_outcomes?created_at=gte.' + new Date(dayStart).toISOString() + '&select=rmse,observed_isf', {});
+    var unRows    = await _sbFetch('unannounced_meals?created_at=gte.' + new Date(dayStart).toISOString() + '&select=id', {});
+
+    if (!Array.isArray(mealRows)) mealRows = [];
+    if (!Array.isArray(bolusRows)) bolusRows = [];
+    if (!Array.isArray(unRows)) unRows = [];
+
+    var mealRMSE = mealRows.length > 0
+      ? mealRows.reduce(function(s,r){return s+(r.rmse||0);},0) / mealRows.length : null;
+    var bolusRMSE = bolusRows.length > 0
+      ? bolusRows.reduce(function(s,r){return s+(r.rmse||0);},0) / bolusRows.length : null;
+    var isfValues = bolusRows.map(function(r){return r.observed_isf;}).filter(Boolean);
+    var isfMean   = isfValues.length > 0 ? isfValues.reduce(function(s,v){return s+v;},0)/isfValues.length : null;
+    var isfSD     = isfValues.length > 1
+      ? Math.sqrt(isfValues.reduce(function(s,v){return s+Math.pow(v-isfMean,2);},0)/isfValues.length)
+      : null;
+
+    // TIR for today from HISTORY_RAW
+    var todayReadings = HISTORY_RAW.filter(function(r){ return r.t >= dayStart && r.t < dayEnd && r.bg > 0; });
+    var tir      = todayReadings.length > 0
+      ? todayReadings.filter(function(r){return r.bg >= 3.9 && r.bg <= 10;}).length / todayReadings.length * 100 : null;
+    var tirTight = todayReadings.length > 0
+      ? todayReadings.filter(function(r){return r.bg >= 4.5 && r.bg <= 8;}).length / todayReadings.length * 100 : null;
+
+    await _sbFetch('model_accuracy?on_conflict=date', {
+      method: 'POST',
+      prefer: 'resolution=merge-duplicates,return=minimal',
+      body: [{
+        date:              today,
+        meal_rmse:         mealRMSE   ? +mealRMSE.toFixed(4)  : null,
+        bolus_rmse:        bolusRMSE  ? +bolusRMSE.toFixed(4) : null,
+        isf_mean:          isfMean    ? +isfMean.toFixed(2)    : null,
+        isf_sd:            isfSD      ? +isfSD.toFixed(2)      : null,
+        tir:               tir        ? +tir.toFixed(1)        : null,
+        tir_tight:         tirTight   ? +tirTight.toFixed(1)   : null,
+        meal_count:        mealRows.length,
+        bolus_count:       bolusRows.length,
+        unannounced_count: unRows.length,
+        model_version:     (window.__BUILD_ID__ || 'dev'),
+      }],
+    });
+  } catch(e) {
+    console.warn('[accuracyRollup]', e.message);
+  }
+}
+
+// ── CONTEXT STAMPING HELPERS ──────────────────────────────────────────
+// Called at moment of logging to capture therapy + glucose context.
+// Stored on events and meal_history for longitudinal pattern analysis.
+
+// ── ADAPTIVE THERAPY RESOLUTION ──────────────────────────────────────
+// Single source of truth for ISF and I:C at any given time.
+// Priority:
+//   1. Observed ISF from bolus_outcomes (if enough data — MIN_OUTCOMES_FOR_ADAPTATION)
+//   2. _TREATMENT ratios (Supabase-synced therapy settings)
+//   3. Hardcoded defaults (Oskar's original values — last resort only)
+//
+// "reading.count < something" logic:
+// MIN_OUTCOMES_FOR_ADAPTATION = 10 bolus outcomes in a period.
+// Below that: use _TREATMENT. Above: blend observed mean (70%) with _TREATMENT (30%).
+// This prevents early noisy data from destabilising the model prematurely.
+
+const MIN_OUTCOMES_FOR_ADAPTATION = 10; // min bolus_outcomes rows per period before trusting observed ISF
+
+// In-memory cache of observed ISF means, populated from bolus_outcomes on sync.
+// Structure: { Breakfast: {mean: 6.8, count: 14}, Lunch: {mean: 7.1, count: 8}, ... }
+var _observedISF = {};
+
+async function loadObservedISF() {
+  if (!SUPABASE_READY) return;
+  try {
+    var rows = await _sbFetch(
+      'bolus_outcomes?select=period,observed_isf&observed_isf=not.is.null&order=t.desc&limit=500',
+      { method: 'GET' }
+    );
+    if (!Array.isArray(rows) || rows.length === 0) return;
+    var byPeriod = {};
+    rows.forEach(function(r) {
+      if (!r.period || !r.observed_isf) return;
+      if (!byPeriod[r.period]) byPeriod[r.period] = [];
+      byPeriod[r.period].push(r.observed_isf);
+    });
+    _observedISF = {};
+    Object.keys(byPeriod).forEach(function(period) {
+      var vals = byPeriod[period];
+      var mean = vals.reduce(function(s,v){return s+v;},0) / vals.length;
+      _observedISF[period] = { mean: +mean.toFixed(2), count: vals.length };
+    });
+    if (Object.keys(_observedISF).length > 0) {
+      console.log('[adaptive ISF] loaded:', JSON.stringify(_observedISF));
+    }
+  } catch(e) {
+    console.warn('[loadObservedISF]', e.message);
+  }
+}
+
+function _periodForHour(h) {
+  if (h >= 6  && h < 10) return 'Breakfast';
+  if (h >= 10 && h < 14) return 'Lunch';
+  if (h >= 14 && h < 18) return 'Afternoon';
+  if (h >= 18 && h < 22) return 'Evening';
+  return 'Overnight';
+}
+
+function getISF(t) {
+  var h      = new Date(t || Date.now()).getHours();
+  var period = _periodForHour(h);
+
+  // Layer 1: _TREATMENT ratios (Supabase-synced, user-editable)
+  var treatmentISF = null;
+  if (typeof _TREATMENT !== 'undefined' && _TREATMENT && _TREATMENT.ratios) {
+    var row = _TREATMENT.ratios.find(function(r){ return r.period === period; });
+    if (row && row.isf) treatmentISF = row.isf;
+  }
+
+  // Layer 2: Observed ISF from bolus_outcomes
+  var obs = _observedISF[period];
+  if (obs && obs.count >= MIN_OUTCOMES_FOR_ADAPTATION) {
+    if (treatmentISF) {
+      // Blend: observed 70%, treatment 30% — anchors to clinical setting but learns
+      var blended = obs.mean * 0.7 + treatmentISF * 0.3;
+      return +blended.toFixed(2);
+    }
+    return obs.mean;
+  }
+
+  // Layer 3: _TREATMENT only (not enough observed data yet)
+  if (treatmentISF) return treatmentISF;
+
+  // Layer 4: Hardcoded fallback (should never reach here once _TREATMENT is loaded)
+  return h >= 9 && h < 15 ? 7.0 : 6.5;
+}
+
+function getIC(t) {
+  var h      = new Date(t || Date.now()).getHours();
+  var period = _periodForHour(h);
+
+  if (typeof _TREATMENT !== 'undefined' && _TREATMENT && _TREATMENT.ratios) {
+    var row = _TREATMENT.ratios.find(function(r){ return r.period === period; });
+    if (row && row.ic) return row.ic;
+  }
+  // Hardcoded fallback
+  return h >= 6 && h < 10 ? 8.5 : h >= 10 && h < 14 ? 12 : h >= 14 && h < 18 ? 15 : 10;
+}
+
+function getTarget(t) {
+  // Future: could vary by time-of-day or activity
+  return (typeof _TREATMENT !== 'undefined' && _TREATMENT && _TREATMENT.targetBG)
+    ? _TREATMENT.targetBG : 6.0;
+}
+
+function _currentTherapySnapshot(t) {
+  if (typeof _TREATMENT === 'undefined' || !_TREATMENT) return null;
+  var hour = new Date(t || Date.now()).getHours();
+  var period = (_TREATMENT.ratios || []).find(function(r) {
+    if (r.period === 'Breakfast')  return hour >= 6  && hour < 10;
+    if (r.period === 'Lunch')      return hour >= 10 && hour < 14;
+    if (r.period === 'Afternoon')  return hour >= 14 && hour < 18;
+    if (r.period === 'Evening')    return hour >= 18 && hour < 22;
+    if (r.period === 'Overnight')  return true;
+    return false;
+  }) || (_TREATMENT.ratios && _TREATMENT.ratios[0]) || null;
+  return period ? {
+    period: period.period, isf: period.isf, ic: period.ic,
+    basal: _TREATMENT.basalDose, basalType: _TREATMENT.basalType,
+  } : null;
+}
+
+function _preBG(t) {
+  if (typeof dataAt !== 'function') return null;
+  var d = dataAt((t || Date.now()) - 2 * 60000);
+  return (d && d.bg > 0) ? +d.bg.toFixed(1) : null;
+}
+
+// ── MEAL HISTORY SUPABASE SYNC ─────────────────────────────────────────
+// Every meal logged also writes to meal_history table for longitudinal pattern analysis.
+// Includes therapy snapshot at time of meal — critical for "porridge on old vs new ratio" queries.
+
+async function syncMealToSupabase(meal) {
+  if (!SUPABASE_READY || !meal || !meal.t) return;
+  try {
+    // Capture therapy snapshot for active period at meal time
+    var therapySnap = null;
+    if (typeof _TREATMENT !== 'undefined' && _TREATMENT) {
+      var mealHour = new Date(meal.t).getHours();
+      var activePeriod = (_TREATMENT.ratios || []).find(function(r) {
+        if (r.period === 'Breakfast')  return mealHour >= 6  && mealHour < 10;
+        if (r.period === 'Lunch')      return mealHour >= 10 && mealHour < 14;
+        if (r.period === 'Afternoon')  return mealHour >= 14 && mealHour < 18;
+        if (r.period === 'Evening')    return mealHour >= 18 && mealHour < 22;
+        if (r.period === 'Overnight')  return true; // fallback
+        return false;
+      }) || (_TREATMENT.ratios && _TREATMENT.ratios[0]) || null;
+      therapySnap = activePeriod ? {
+        period: activePeriod.period,
+        isf: activePeriod.isf,
+        ic: activePeriod.ic,
+        basal: _TREATMENT.basalDose,
+        basalType: _TREATMENT.basalType,
+      } : null;
+    }
+
+    // Capture pre-meal BG (nearest reading before meal time)
+    var preBG = null;
+    if (typeof dataAt === 'function') {
+      var d = dataAt(meal.t - 2 * 60000); // 2 min before
+      if (d && d.bg > 0) preBG = +d.bg.toFixed(1);
+    }
+
+    var row = {
+      t:                meal.t,
+      name:             meal.name || null,
+      total_carbs:      meal.totalCarbs || 0,
+      items:            meal.items || null,
+      bolus_u:          meal.u || null,
+      bolus_t:          meal.boluT || meal.t || null,
+      wait_mins:        meal.waitMins || null,
+      pre_bg:           preBG,
+      therapy_snapshot: therapySnap,
+      source:           meal.source || 'manual',
+      logged_by:        meal.logged_by || _thisPersonId || null,
+      device_id:        _deviceId,
+    };
+
+    await _sbFetch('meal_history?on_conflict=t', {
+      method: 'POST',
+      prefer: 'resolution=merge-duplicates,return=minimal',
+      body: [row],
+    });
+  } catch(e) {
+    console.warn('[syncMeal]', e.message);
+  }
+}
+
+async function syncMealHistoryFromSupabase() {
+  if (!SUPABASE_READY) return;
+  try {
+    // Pull all meal history — this is the longitudinal record, no time window cap
+    var oldest = MEAL_HISTORY.length > 0
+      ? Math.min.apply(null, MEAL_HISTORY.map(function(m){ return m.t; }))
+      : 0;
+    var since = oldest > 0 ? oldest - 24 * 3600000 : 0; // overlap by 1 day to catch edits
+    var rows = await _sbFetch(
+      'meal_history?t=gte.' + since + '&order=t.desc&limit=500',
+      { method: 'GET' }
+    );
+    if (!Array.isArray(rows) || rows.length === 0) return;
+    var localTs = new Set(MEAL_HISTORY.map(function(m){ return m.t; }));
+    var added = 0;
+    rows.forEach(function(row) {
+      if (localTs.has(row.t)) return;
+      var items = row.items;
+      if (typeof items === 'string') { try { items = JSON.parse(items); } catch(e) { items = null; } }
+      MEAL_HISTORY.push({
+        t: row.t,
+        name: row.name,
+        totalCarbs: row.total_carbs,
+        items: items,
+        u: row.bolus_u,
+        pre_bg: row.pre_bg,
+        therapy_snapshot: row.therapy_snapshot,
+        source: row.source,
+        logged_by: row.logged_by,
+      });
+      added++;
+    });
+    if (added > 0) {
+      MEAL_HISTORY.sort(function(a,b){ return b.t - a.t; }); // newest first
+      saveMealHistory();
+    }
+  } catch(e) {
+    console.warn('[syncMealHistory pull]', e.message);
+  }
 }
 
 // ═══════════════════════════════════════════════════════════════════════
@@ -4541,6 +5176,19 @@ function bolusNow() {
   try{localStorage.setItem('river_session',JSON.stringify(SESSION));}catch(e){}
   try{localStorage.setItem('river_logged',JSON.stringify(LOGGED_EVENTS));}catch(e){}
   topUpIOB(u);
+  // Snapshot IOB prediction curve for outcome tracking
+  (function() {
+    var bolusEv = {t:t, u:u, logged_by:_thisPersonId||'unknown'};
+    var iobCurve = [];
+    var d0 = dataAt(t);
+    var ISF = _currentTherapySnapshot(t);
+    var isf = ISF ? ISF.isf : 6.5;
+    for (var m = 5; m <= 240; m += 5) {
+      var predBG = d0 ? Math.max(1.8, d0.bg - u * (1 - _iobFn(m)) * isf) : 0;
+      iobCurve.push({mins: m, bg: +predBG.toFixed(2)});
+    }
+    scheduleBolusOutcome(bolusEv, iobCurve);
+  })();
   syncAfterLog();
   _ptCache = null;
   _plateBolused = true;
@@ -4570,7 +5218,9 @@ function logPlate() {
     SESSION.push({t:carbT, c:total, u:0, gi:avgGI, items:foodItems});
     BOLUS_EVENTS.push({t:carbT, c:total, u:0, gi:avgGI, items:foodItems});
     LOGGED_EVENTS.push({t:carbT, c:total, u:0, gi:avgGI, items:foodItems, note:'plate',
-      logged_by:_thisPersonId||'unknown', local:true});
+      logged_by:_thisPersonId||'unknown', local:true,
+      therapy_snapshot: _currentTherapySnapshot(carbT),
+      pre_bg: _preBG(carbT)});
     topUpCOB(total);
   }
 
@@ -4585,6 +5235,8 @@ function logPlate() {
     logged_by:_thisPersonId||'unknown',
   });
   saveMealHistory();
+    syncMealToSupabase(MEAL_HISTORY[0]);
+    scheduleMealOutcome(MEAL_HISTORY[0], buildSmartForecast());
 
   try{localStorage.setItem('river_session',JSON.stringify(SESSION));}catch(e){}
   try{localStorage.setItem('river_logged',JSON.stringify(LOGGED_EVENTS));}catch(e){}
@@ -4960,9 +5612,9 @@ function buildKitchenWhisper(avgGI, totalCarbs) {
 function calcBolus(totalCarbs, currentBG, entryTime) {
   var d    = dataAt(viewTime);
   var h    = new Date(entryTime).getHours() + new Date(entryTime).getMinutes()/60;
-  var ic   = h>=6&&h<10 ? 8.5 : h>=10&&h<14 ? 12 : h>=14&&h<18 ? 15 : 10;
-  var isf  = h>=9&&h<15 ? 7.0 : 6.0;
-  var tgt  = 6.0;
+  var ic   = getIC(entryTime);
+  var isf  = getISF(entryTime);
+  var tgt  = getTarget(entryTime);
   var bg   = currentBG || d.bg;
 
   // Carb dose
@@ -5016,8 +5668,7 @@ function buildMealForecast(totalCarbs, bolusU, avgGI, eatInMins) {
   var d0   = dataAt(viewTime);
   var bg   = d0.bg;
   var iob  = d0.iob;
-  var ISF  = (new Date(viewTime).getHours() >= 9 &&
-              new Date(viewTime).getHours() < 15) ? 7.0 : 6.0;
+  var ISF  = getISF(viewTime);
   var speed = mealAbsorptionSpeed(avgGI || 60);
   var pts   = [];
 
@@ -6533,7 +7184,9 @@ function logMealEntry(carbsOnly) {
   if (totalCarbs > 0) {
     SESSION.push({t: carbT, c: totalCarbs, u: 0, gi: avgGI, items: foodItems});
     BOLUS_EVENTS.push({t: carbT, c: totalCarbs, u: 0, gi: avgGI, items: foodItems});
-    LOGGED_EVENTS.push({t: carbT, c: totalCarbs, u: 0, gi: avgGI, items: foodItems, note: 'carbs', logged_by: _thisPersonId||'unknown', local: true});
+    LOGGED_EVENTS.push({t: carbT, c: totalCarbs, u: 0, gi: avgGI, items: foodItems, note: 'carbs', logged_by: _thisPersonId||'unknown', local: true,
+      therapy_snapshot: _currentTherapySnapshot(carbT),
+      pre_bg: _preBG(carbT)});
   }
 
   try{localStorage.setItem('river_logged',JSON.stringify(LOGGED_EVENTS));}catch(err){}
@@ -6564,6 +7217,8 @@ function logMealEntry(carbsOnly) {
       u:          u,
     });
     saveMealHistory();
+    syncMealToSupabase(MEAL_HISTORY[0]);
+    scheduleMealOutcome(MEAL_HISTORY[0], buildSmartForecast());
   }
 
   // Eat reminder if bolus given
@@ -6605,6 +7260,8 @@ function confirmBolus(units) {
       t:          t,
     });
     saveMealHistory();
+    syncMealToSupabase(MEAL_HISTORY[0]);
+    scheduleMealOutcome(MEAL_HISTORY[0], buildSmartForecast());
   }
 
   // Set eat reminder
@@ -7934,8 +8591,8 @@ function commitBasalLog() {
 
 function openCorrectionLog(){
   var d=dataAt(viewTime);
-  var ISF=(new Date(viewTime).getHours()>=9&&new Date(viewTime).getHours()<15)?7.0:6.0;
-  var sug=Math.max(0,Math.round(((d.bg-6.0)/ISF)*2)/2);
+  var ISF=getISF(viewTime);
+  var sug=Math.max(0,Math.round(((d.bg-getTarget(viewTime))/ISF)*2)/2);
   var ex=document.getElementById('corr-overlay');if(ex){ex.remove();return;}
   var el=document.createElement('div');el.id='corr-overlay';
   el.style.cssText='position:fixed;inset:0;z-index:60;background:rgba(3,5,20,0.9);backdrop-filter:blur(14px);display:flex;flex-direction:column;align-items:center;justify-content:center;padding:24px;transition:opacity .25s;opacity:0';
@@ -8089,7 +8746,7 @@ function stopLivePolling() {
 }
 
 const PERSIST_KEY = 'river_cgm_history';
-const PERSIST_MAX_DAYS = 7; // keep 7 days of readings
+const PERSIST_MAX_DAYS = 90; // keep 90 days of readings as local cache — Supabase is source of truth
 
 function persistReadings() {
   try {
@@ -9201,7 +9858,7 @@ async function sendWhisper() {
     'Trend: last 5min Δ ' + (dataAt ? (d.bg - dataAt(viewTime-5*60000).bg).toFixed(1) : '?') + ' mmol',
     'Patient: Oskar, age 9, T1D, MDI, Degludec 9U basal, Novorapid bolus',
     'Overnight carb sensitivity at 3:30am: ~0.55 mmol/g (from historical data)',
-    'ISF: ~1:6.5 mmol/U overnight, 1:7.0 daytime',
+    'ISF: breakfast ' + getISF(new Date().setHours(8,0,0,0)) + ' mmol/U · daytime ' + getISF(new Date().setHours(12,0,0,0)) + ' · evening ' + getISF(new Date().setHours(19,0,0,0)) + ' · overnight ' + getISF(new Date().setHours(2,0,0,0)) + (_observedISF && Object.keys(_observedISF).length >= 2 ? ' (observed)' : ' (therapy settings)'),
     'Recent history: ' + (HISTORY_RAW.slice(-6).map(h=>(h.bg).toFixed(1)).join('→') || 'none'),
   ].join('\n');
 
@@ -10533,10 +11190,26 @@ async function _saveTreatmentSettings(data) {
   try { localStorage.setItem('river_treatment', JSON.stringify(data)); } catch(e) {}
   if (!SUPABASE_READY) return;
   try {
+    // Also keep settings table current for backward compat (other devices loading latest)
     await _sbFetch('settings?on_conflict=key', {
       method: 'POST',
       prefer: 'resolution=merge-duplicates,return=minimal',
       body: [{ key: 'treatment', value: data, updated_at: new Date().toISOString() }],
+    });
+    // Append to therapy_history — append-only audit log, never overwritten
+    // This is what makes "porridge on old ratio vs new ratio" queries possible
+    await _sbFetch('therapy_history', {
+      method: 'POST',
+      prefer: 'return=minimal',
+      body: [{
+        t:              Date.now(),
+        basal_dose:     data.basalDose,
+        basal_type:     data.basalType,
+        hypo_threshold: data.hypoThreshold,
+        hypo_carbs:     data.hypoCarbs,
+        ratios:         data.ratios,
+        changed_by:     _deviceId,
+      }],
     });
   } catch(e) { console.warn('[treatment] Supabase save failed:', e.message); }
 }
@@ -11583,6 +12256,8 @@ function commitPadImport() {
       source: 'pad'
     });
     saveMealHistory();
+    syncMealToSupabase(MEAL_HISTORY[0]);
+    scheduleMealOutcome(MEAL_HISTORY[0], buildSmartForecast());
   }
 
   // Set eat reminder — same as logMealEntry
