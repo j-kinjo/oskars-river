@@ -70,6 +70,13 @@ if (fs.existsSync(tmplPath)) {
     bodyContent = bodyMatch[1]
       .replace(/<script[^>]*>[\s\S]*?<\/script>/g, '')
       .trim();
+    // Replace BUILD_ID placeholder in body HTML (same token as app.js)
+    bodyContent = bodyContent.replace(/__BUILD_ID__/g, `build ${buildId}`);
+    // Fix splash screen build text opacity — 0.2 is near-invisible
+    bodyContent = bodyContent.replace(
+      /color:rgba\(40,55,50,0\.2\)/g,
+      'color:rgba(180,210,200,0.55)'
+    );
   }
 }
 
