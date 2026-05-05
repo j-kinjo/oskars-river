@@ -30,14 +30,28 @@ const buildNum  = process.env.BUILD_NUMBER || process.env.GITHUB_RUN_NUMBER || '
 const buildDate = new Date().toISOString().slice(0,10).replace(/-/g,'');
 const buildId   = `${buildDate}-${buildNum}`;
 
+// ── Pre-build: run sync tests ─────────────────────────────────────────────
+const testPath = path.join(ROOT, 'river-sync.test.js');
+if (fs.existsSync(testPath)) {
+  const { execSync } = require('child_process');
+  try {
+    execSync(`node ${testPath}`, { stdio: 'inherit' });
+    console.log('  sync tests: ✓ passed');
+  } catch (_e) {
+    console.error('ERROR: river-sync.test.js failed — aborting build');
+    process.exit(1);
+  }
+} else {
+  console.warn('  sync tests: river-sync.test.js not found — skipping');
+}
+
 let js = appJs;
 // app.js uses __BUILD_ID__ as a placeholder token
 // Replace __BUILD_ID__ tokens AND any residual literal stamps
 js = js.replace(/__BUILD_ID__/g, `build ${buildId}`);
 js = js.replace(/build 2026\d{4}-\d+/g, `build ${buildId}`);
 js = js.replace(/fillText\('build [^']+'/g, `fillText('build ${buildId}'`);
-// Always declare BOLUS_EVENTS before LOGGED_EVENTS uses it
-js = js.replace('var LOGGED_EVENTS = [];', 'var BOLUS_EVENTS = [];\nvar LOGGED_EVENTS = [];');
+// Note: BOLUS_EVENTS is now a live alias for LOGGED_EVENTS in app.js — no re-injection needed.
 js = `window.__RIVER_HISTORY__ = ${history};\nwindow.__RIVER_FOODS__ = ${foods};\n\n` + js;
 
 // Read favicon from index.template.html if it exists, otherwise use default
