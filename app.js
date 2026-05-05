@@ -68,6 +68,17 @@ const SUPABASE_READY   = !!(SUPABASE_URL && SUPABASE_ANON_KEY);
 // -- Index for time-range queries
 // create index if not exists readings_t_idx on readings (t desc);
 // create index if not exists events_t_idx   on events   (t desc);
+//
+// ── P1 REQUIRED: UNIQUE constraint on events.t (run once in Supabase SQL Editor) ──
+// Without this, upsert on_conflict=t silently falls back to plain INSERT causing duplicates.
+// Safe to run even if table has existing data (will fail if dupes exist — clean them first).
+//
+// -- Step 1: remove any duplicate t rows (keep newest id)
+// DELETE FROM events WHERE id NOT IN (
+//   SELECT DISTINCT ON (t) id FROM events ORDER BY t, id DESC
+// );
+// -- Step 2: add the constraint
+// ALTER TABLE events ADD CONSTRAINT events_t_unique UNIQUE (t);
 
 // ── DEVICE ID — identifies this install ───────────────────────────────
 const _deviceId = (function() {
@@ -186,26 +197,40 @@ async function syncPullReadings(sinceT) {
 
 // ── PULL: Supabase events → local ─────────────────────────────────────
 async function syncPullEvents(sinceT) {
-  // Only pull events from the last 6h — older events are irrelevant to the visual window.
-  var _pullCutoff = Date.now() - 6 * 3600000;
+  // Pull events from the last 24h — matches local retention window so scroll-back is consistent.
+  var _pullCutoff = Date.now() - 24 * 3600000;
   var since = Math.max(sinceT || 0, _pullCutoff);
   var rows  = await _sbFetch(
     'events?t=gte.' + since + '&order=t.asc&limit=500',
     { method: 'GET' }
   );
   if (!rows || rows.length === 0) return 0;
+  // Deduplicate rows from Supabase by t (last-write-wins on same t)
+  var rowsByT = {};
+  rows.forEach(function(row){ rowsByT[row.t] = row; });
+  var deduped = Object.values(rowsByT);
+
   var added = 0;
-  rows.forEach(function(row) {
+  deduped.forEach(function(row) {
+    // Skip food library sentinel row
+    if (row.note === 'food_library') return;
     // Skip events the user has explicitly deleted on this device
     if (typeof _deletedEventTs !== 'undefined' && _deletedEventTs.has(row.t)) return;
-    // Merge into LOGGED_EVENTS
-    var existsL = LOGGED_EVENTS.findIndex(function(e){ return e.t === row.t && Math.abs((e.c||0) - (row.c||0)) < 0.5; });
-    if (existsL < 0) {
-      var rowItems = row.items;
-      if (typeof rowItems === 'string') { try { rowItems = JSON.parse(rowItems); } catch(_e) { rowItems = null; } }
+    var rowItems = row.items;
+    if (typeof rowItems === 'string') { try { rowItems = JSON.parse(rowItems); } catch(_e) { rowItems = null; } }
+    // Merge into LOGGED_EVENTS — update if exists (catches remote edits), insert if new
+    var existsL = LOGGED_EVENTS.findIndex(function(e){ return e.t === row.t; });
+    if (existsL >= 0) {
+      // Remote edit: update carbs/units in case they changed on another device
+      LOGGED_EVENTS[existsL].c = row.c||0;
+      LOGGED_EVENTS[existsL].u = row.u||0;
+      if (rowItems) LOGGED_EVENTS[existsL].items = rowItems;
+    } else {
       var ev = { t: row.t, c: row.c||0, u: row.u||0, gi: row.gi, note: row.note, items: rowItems, local: false };
       LOGGED_EVENTS.push(ev);
-      BOLUS_EVENTS.push(ev);
+      // Also sync into BOLUS_EVENTS if not already there
+      var existsB = BOLUS_EVENTS.findIndex(function(e){ return e.t === row.t; });
+      if (existsB < 0) BOLUS_EVENTS.push(ev);
       // Do NOT push into SESSION — historical Supabase events must not drive dataAt().
       added++;
     }
@@ -245,6 +270,7 @@ async function syncNow(silent) {
     var newRead   = await syncPullReadings(sinceT);
     var newEvents = await syncPullEvents(sinceT);
     await syncPullPricks();
+    await syncFoodLibraryFromSupabase();
 
     _lastSyncT  = Date.now();
     _syncState  = 'ok';
@@ -266,6 +292,24 @@ function startSyncPolling() {
   if (!SUPABASE_READY) return;
   syncNow(true); // immediate on startup
   _syncTimer = setInterval(function(){ syncNow(true); }, 5 * 60000);
+  // Check for duplicate events in Supabase (symptom of missing UNIQUE constraint on events.t)
+  setTimeout(_checkForDuplicateEvents, 8000);
+}
+
+async function _checkForDuplicateEvents() {
+  if (!SUPABASE_READY) return;
+  try {
+    var since = Date.now() - 7 * 86400000;
+    var rows = await _sbFetch('events?t=gte.' + since + '&select=t&order=t.asc&limit=1000', {});
+    if (!Array.isArray(rows)) return;
+    var seen = {}, dupes = 0;
+    rows.forEach(function(r){ if (seen[r.t]) dupes++; else seen[r.t] = true; });
+    if (dupes > 0) {
+      console.warn('[river] ⚠️ ' + dupes + ' duplicate event rows detected in Supabase. ' +
+        'Run the P1 SQL in app.js comments to add UNIQUE constraint and clean duplicates. ' +
+        'Edits may not sync correctly across devices until this is done.');
+    }
+  } catch(e) {}
 }
 
 function stopSyncPolling() {
@@ -350,8 +394,8 @@ function buildSupabaseSettingsHTML() {
 var BOLUS_EVENTS = [];
 var LOGGED_EVENTS = [];
 try { LOGGED_EVENTS = JSON.parse(localStorage.getItem('river_logged')||'[]');
-  // Keep only last 6h — older events are not displayed and cause ghost bells on reload.
-  var _sixHoursAgo = Date.now() - 6 * 3600000;
+  // Keep only last 24h — viewable window when scrolling back. 6h was too short.
+  var _sixHoursAgo = Date.now() - 24 * 3600000;
   LOGGED_EVENTS = LOGGED_EVENTS.filter(function(e){ return e.t >= _sixHoursAgo; });
   LOGGED_EVENTS.forEach(function(e){ BOLUS_EVENTS.push(e); });
   // Write trimmed list back so it doesn't grow indefinitely
@@ -748,7 +792,7 @@ const boatYfromBG = bgToY;
 // ── BG HISTORY TRACE — the life-line ──────────────────────────────────
 function drawBGTrail(pal) {
   if (HISTORY_RAW.length === 0) return; // no data yet
-  const leftT = Math.max(CGM_START, xT(0));
+  const leftT = xT(0);
   const n     = Math.min(500, Math.max(120, Math.floor(W/1.2)));
   const pts   = [];
 
@@ -942,7 +986,7 @@ function _drawSmoothLine(pts) {
 
 function buildForcePts(valueKey, direction, lookAhead) {
   const nowT  = viewTime;
-  const leftT = Math.max(CGM_START, xT(0));
+  const leftT = xT(0);
   const n     = Math.min(400, Math.max(80, Math.floor(W/1.5)));
   const pts   = [];
 
@@ -3595,7 +3639,8 @@ function _onDragMoveActive(e) {
   if(e.target.closest&&e.target.closest('#sheet,#flow-dock,.dock-btn,#whisper-overlay,#food-mgr-overlay,#hypo-overlay,#corr-overlay,#food-add-overlay,[id$=-overlay],button,input,textarea,select')) return;
   if(e.touches.length===1 && drag.on) {
     e.preventDefault();
-    viewTime=Math.max(CGM_START,Math.min(CGM_END,drag.t0-(e.touches[0].clientX-drag.x0)*(viewSpan/W))); _isAtNow=false;
+    viewTime=Math.max(CGM_END - 30*86400000, Math.min(CGM_END, drag.t0-(e.touches[0].clientX-drag.x0)*(viewSpan/W))); _isAtNow=false;
+    _maybeLoadOlderHistory();
   } else if(pinch.on&&e.touches.length===2) {
     e.preventDefault();
     const dx=e.touches[0].clientX-e.touches[1].clientX;
@@ -3639,8 +3684,107 @@ CV.addEventListener('touchend',()=>{
 },{passive:true});
 let md={on:false,x0:0,t0:0};
 CV.addEventListener('mousedown',e=>{if(!e.target.closest('#sheet,#flow-dock,.dock-btn,#whisper-overlay,#food-mgr-overlay,#hypo-overlay,#corr-overlay,#food-add-overlay,[id$=-overlay],button,input,textarea,select'))md={on:true,x0:e.clientX,t0:viewTime}});
-CV.addEventListener('mousemove',e=>{if(md.on)viewTime=Math.max(CGM_START,Math.min(CGM_END,md.t0-(e.clientX-md.x0)*(viewSpan/W)))});
+CV.addEventListener('mousemove',e=>{if(md.on){viewTime=Math.max(CGM_END - 30*86400000, Math.min(CGM_END,md.t0-(e.clientX-md.x0)*(viewSpan/W))); _maybeLoadOlderHistory();}});
 CV.addEventListener('mouseup',()=>md.on=false);
+
+// ── INFINITE SCROLL — lazy-load older history ─────────────────────────
+// When the user scrubs back past what we have, fetch the next chunk.
+// Readings: from Supabase (7-day retention) — falls back gracefully if not available.
+// Events: same — pulls a wider window from Supabase.
+// All fetches throttled: one in flight at a time, 30s minimum between fetches.
+
+var _olderHistoryFetching = false;
+var _olderHistoryFetchedTo = CGM_START; // furthest-back timestamp already fetched
+var _olderHistoryLastFetch = 0;
+var _olderHistoryToast = null;
+
+function _maybeLoadOlderHistory() {
+  if (!SUPABASE_READY) return;
+  if (_olderHistoryFetching) return;
+  // Trigger when viewport left edge is within 1 viewSpan of our oldest data
+  var leftEdgeT = viewTime - viewSpan * NOW_X;
+  var triggerT  = CGM_START + viewSpan; // 1 span of breathing room
+  if (leftEdgeT >= triggerT) return;
+  // Don't re-fetch if we already fetched to this point (or further back)
+  if (_olderHistoryFetchedTo <= leftEdgeT - viewSpan) return;
+  // Throttle: min 30s between fetches
+  if (Date.now() - _olderHistoryLastFetch < 30000) return;
+
+  _loadOlderHistory();
+}
+
+async function _loadOlderHistory() {
+  if (_olderHistoryFetching) return;
+  _olderHistoryFetching = true;
+  _olderHistoryLastFetch = Date.now();
+
+  // Show a subtle loading nudge on the canvas (not a blocking toast)
+  var _histLoadEl = document.createElement('div');
+  _histLoadEl.id = 'hist-load-indicator';
+  _histLoadEl.style.cssText = 'position:fixed;top:12px;left:50%;transform:translateX(-50%);' +
+    'font-family:"DM Mono",monospace;font-size:10px;color:rgba(160,190,210,0.5);' +
+    'pointer-events:none;z-index:999;letter-spacing:0.05em;transition:opacity .4s';
+  _histLoadEl.textContent = 'loading history…';
+  document.body.appendChild(_histLoadEl);
+
+  try {
+    // Fetch 24h before current oldest reading
+    var fetchFrom = CGM_START - 24 * 3600000;
+    var fetchTo   = CGM_START;
+
+    // ── Readings from Supabase ──
+    var readRows = await _sbFetch(
+      'readings?t=gte.' + fetchFrom + '&t=lt.' + fetchTo + '&order=t.asc&limit=500',
+      { method: 'GET' }
+    );
+    if (Array.isArray(readRows) && readRows.length > 0) {
+      readRows.forEach(function(row) {
+        var exists = HISTORY_RAW.findIndex(function(h){ return Math.abs(h.t - row.t) < 90000; });
+        if (exists < 0) HISTORY_RAW.push({ t: row.t, bg: row.bg, iob: 0, cob: 0, pen: 1 });
+      });
+      HISTORY_RAW.sort(function(a,b){ return a.t - b.t; });
+      updateCGMBounds();
+      persistReadings();
+    }
+
+    // ── Events from Supabase ──
+    var evRows = await _sbFetch(
+      'events?t=gte.' + fetchFrom + '&t=lt.' + fetchTo + '&order=t.asc&limit=200&note=neq.food_library',
+      { method: 'GET' }
+    );
+    if (Array.isArray(evRows) && evRows.length > 0) {
+      var addedEvs = 0;
+      evRows.forEach(function(row) {
+        if (typeof _deletedEventTs !== 'undefined' && _deletedEventTs.has(row.t)) return;
+        if (row.note === 'food_library') return;
+        var existsL = LOGGED_EVENTS.findIndex(function(e){ return e.t === row.t; });
+        if (existsL < 0) {
+          var rowItems = row.items;
+          if (typeof rowItems === 'string') { try { rowItems = JSON.parse(rowItems); } catch(_e) { rowItems = null; } }
+          var ev = { t: row.t, c: row.c||0, u: row.u||0, gi: row.gi, note: row.note, items: rowItems, local: false };
+          LOGGED_EVENTS.push(ev);
+          BOLUS_EVENTS.push(ev);
+          addedEvs++;
+        }
+      });
+      if (addedEvs > 0) {
+        try { localStorage.setItem('river_logged', JSON.stringify(LOGGED_EVENTS)); } catch(e) {}
+      }
+    }
+
+    _olderHistoryFetchedTo = fetchFrom;
+
+  } catch(e) {
+    console.warn('[history scroll]', e.message);
+  }
+
+  _olderHistoryFetching = false;
+  // Fade out the indicator
+  if (_histLoadEl && _histLoadEl.parentNode) {
+    _histLoadEl.style.opacity = '0';
+    setTimeout(function(){ if (_histLoadEl.parentNode) _histLoadEl.remove(); }, 500);
+  }
+}
 CV.addEventListener('click', function(e) {
   var rect = CV.getBoundingClientRect();
   var mx = e.clientX - rect.left;
@@ -3867,6 +4011,55 @@ var FOOD_LIBRARY = (function() {
 
 function saveFoodLibrary() {
   try { localStorage.setItem('river_food_lib', JSON.stringify(FOOD_LIBRARY)); } catch(e) {}
+  // Push to Supabase so library is shared across devices
+  syncFoodLibraryToSupabase();
+}
+
+// ── FOOD LIBRARY SUPABASE SYNC ─────────────────────────────────────────
+// Stored as a single row in events with note='food_library', t=-1.
+// items field holds the full FOOD_LIBRARY JSON array.
+const _FOOD_LIB_SENTINEL_T = -1;
+
+async function syncFoodLibraryToSupabase() {
+  if (!SUPABASE_READY) return;
+  try {
+    await _sbFetch('events?note=eq.food_library&t=eq.' + _FOOD_LIB_SENTINEL_T,
+      { method: 'DELETE', prefer: 'return=minimal' });
+    if (FOOD_LIBRARY.length === 0) return;
+    await _sbFetch('events', {
+      method: 'POST',
+      prefer: 'return=minimal',
+      body: [{ t: _FOOD_LIB_SENTINEL_T, c: 0, u: 0, note: 'food_library',
+               items: FOOD_LIBRARY, device_id: _deviceId,
+               updated_at: new Date().toISOString() }],
+    });
+  } catch(e) { console.warn('[syncFoodLib push]', e.message); }
+}
+
+async function syncFoodLibraryFromSupabase() {
+  if (!SUPABASE_READY) return;
+  try {
+    var rows = await _sbFetch('events?note=eq.food_library&t=eq.' + _FOOD_LIB_SENTINEL_T, {});
+    if (!rows || rows.length === 0) return;
+    var remoteLib = rows[0].items;
+    if (typeof remoteLib === 'string') { try { remoteLib = JSON.parse(remoteLib); } catch(e) { return; } }
+    if (!Array.isArray(remoteLib) || remoteLib.length === 0) return;
+    // Merge: remote items win unless same name already exists locally with more recent data
+    var localNames = new Set(FOOD_LIBRARY.map(function(f){ return (f.name||'').toLowerCase(); }));
+    var merged = FOOD_LIBRARY.slice();
+    remoteLib.forEach(function(rf) {
+      if (!localNames.has((rf.name||'').toLowerCase())) {
+        merged.push(rf);
+        localNames.add((rf.name||'').toLowerCase());
+      }
+    });
+    if (merged.length !== FOOD_LIBRARY.length) {
+      FOOD_LIBRARY.length = 0;
+      merged.forEach(function(f){ FOOD_LIBRARY.push(f); });
+      try { localStorage.setItem('river_food_lib', JSON.stringify(FOOD_LIBRARY)); } catch(e) {}
+      console.log('[syncFoodLib] merged ' + (merged.length - FOOD_LIBRARY.length + merged.length) + ' items from remote');
+    }
+  } catch(e) { console.warn('[syncFoodLib pull]', e.message); }
 }
 
 // ── MEAL HISTORY ──────────────────────────────────────────────────────
@@ -5784,7 +5977,7 @@ function addUrlFoodItem(item) {
   if (!existing) {
     var newFood = { name: item.name, c100: item.c100, gi: item.gi || 55, g_serv: item.g_serv || 100 };
     FOOD_LIBRARY.push(newFood);
-    try { localStorage.setItem('river_food_lib', JSON.stringify(FOOD_LIBRARY)); } catch(e) {}
+    saveFoodLibrary();
   }
   // Add to meal
   addFoodItemGrams(item.name, item.g_serv || 100);
@@ -8337,7 +8530,12 @@ function importData(file) {
       if (data.session) localStorage.setItem('river_session', JSON.stringify(data.session));
       if (data.logged)  localStorage.setItem('river_logged',  JSON.stringify(data.logged));
       if (data.meals)   localStorage.setItem('river_meal_hist', JSON.stringify(data.meals));
-      if (data.foods)   localStorage.setItem('river_food_lib',  JSON.stringify(data.foods));
+      if (data.foods) {
+        localStorage.setItem('river_food_lib', JSON.stringify(data.foods));
+        // Also push imported library to Supabase so other devices get it
+        try { FOOD_LIBRARY.length = 0; data.foods.forEach(function(f){ FOOD_LIBRARY.push(f); }); } catch(_e) {}
+        syncFoodLibraryToSupabase();
+      }
       if (data.cgm_cfg) localStorage.setItem('river_cgm_cfg',   JSON.stringify(data.cgm_cfg));
       showToast('data imported\nreloading...');
       setTimeout(function(){ location.reload(); }, 1200);
@@ -9591,7 +9789,7 @@ function saveEventEdit(idx) {
       }
     } else {
       // Time unchanged: PATCH existing row
-      var patch = { c: c, u: u, updated_at: new Date().toISOString() };
+      var patch = { c: c, u: u, waitMins: waitMins, updated_at: new Date().toISOString() };
       _sbFetch('events?t=eq.' + updatedT, {
         method: 'PATCH',
         prefer: 'return=minimal',
