@@ -200,11 +200,11 @@ async function syncPullReadings(sinceT) {
 
 // ── PULL: Supabase events → local ─────────────────────────────────────
 async function syncPullEvents(sinceT) {
-  // Pull events from the last 24h — matches local retention window so scroll-back is consistent.
+  // Always pull full 24h window by event time — ignore _lastSyncT lower bound.
+  // This ensures backdated events and remote edits/deletes are always reflected.
   var _pullCutoff = Date.now() - 24 * 3600000;
-  var since = Math.max(sinceT || 0, _pullCutoff);
   var rows  = await _sbFetch(
-    'events?t=gte.' + since + '&order=t.asc&limit=500',
+    'events?t=gte.' + _pullCutoff + '&order=t.asc&limit=500',
     { method: 'GET' }
   );
   if (!rows || rows.length === 0) return 0;
@@ -212,6 +212,26 @@ async function syncPullEvents(sinceT) {
   var rowsByT = {};
   rows.forEach(function(row){ rowsByT[row.t] = row; });
   var deduped = Object.values(rowsByT);
+  var remoteTs = new Set(deduped.map(function(r){ return r.t; }));
+
+  // ── Remove local non-local events no longer in Supabase ──────────
+  // Catches: remote deletes, remote time-edits (e.g. 14:42 → 14:32 on another device).
+  // Only acts within the 24h pull window. Never removes local:true (not yet synced).
+  var removedTs = new Set();
+  LOGGED_EVENTS = LOGGED_EVENTS.filter(function(e) {
+    if (e.local) return true;           // not yet pushed — keep
+    if (e.t < _pullCutoff) return true; // outside pull window — keep
+    if (remoteTs.has(e.t)) return true; // still in Supabase — keep
+    removedTs.add(e.t);
+    return false;                       // gone from Supabase — drop
+  });
+  if (removedTs.size > 0) {
+    BOLUS_EVENTS = BOLUS_EVENTS.filter(function(e){ return !removedTs.has(e.t); });
+    console.log('[sync] removed ' + removedTs.size + ' stale local event(s): ' +
+      Array.from(removedTs).map(function(t){
+        return new Date(t).toLocaleTimeString('en-GB',{hour:'2-digit',minute:'2-digit'});
+      }).join(', '));
+  }
 
   var added = 0;
   deduped.forEach(function(row) {
@@ -238,10 +258,8 @@ async function syncPullEvents(sinceT) {
       added++;
     }
   });
-  if (added > 0) {
-    try { localStorage.setItem('river_logged', JSON.stringify(LOGGED_EVENTS)); } catch(e){}
-    try { localStorage.setItem('river_session', JSON.stringify(SESSION)); } catch(e){}
-  }
+  // Always write back — removal may have changed the list even if added=0
+  try { localStorage.setItem('river_logged', JSON.stringify(LOGGED_EVENTS)); } catch(e){}
   return added;
 }
 
@@ -402,8 +420,15 @@ try { LOGGED_EVENTS = JSON.parse(localStorage.getItem('river_logged')||'[]');
   // Keep only last 24h — viewable window when scrolling back. 6h was too short.
   var _sixHoursAgo = Date.now() - 24 * 3600000;
   LOGGED_EVENTS = LOGGED_EVENTS.filter(function(e){ return e.t >= _sixHoursAgo; });
+  // Dedup by t on startup — cleans any duplicates that slipped in via edit flow
+  var _loadSeenT = {};
+  LOGGED_EVENTS = LOGGED_EVENTS.filter(function(e) {
+    if (_loadSeenT[e.t]) return false;
+    _loadSeenT[e.t] = true;
+    return true;
+  });
   LOGGED_EVENTS.forEach(function(e){ BOLUS_EVENTS.push(e); });
-  // Write trimmed list back so it doesn't grow indefinitely
+  // Write trimmed+deduped list back so it doesn't grow indefinitely
   try { localStorage.setItem('river_logged', JSON.stringify(LOGGED_EVENTS)); } catch(_le){}
 } catch(err) {}
 
@@ -4405,8 +4430,17 @@ async function _evaluateUnannouncedMeal(run, preBG) {
       prefer: 'resolution=merge-duplicates,return=minimal',
       body: [row],
     });
-    console.log('[ghost meal detected]', estCarbs + 'g estimated, peak at ' + Math.round(peakMins) + 'min',
-      candidates.length > 0 ? '→ ' + candidates[0].name + ' (' + Math.round(candidates[0].confidence*100) + '%)' : '→ no library match');
+    var _gmTime = new Date(startT).toLocaleTimeString('en-GB',{hour:'2-digit',minute:'2-digit'});
+    var _gmDate = new Date(startT).toLocaleDateString('en-GB',{day:'2-digit',month:'short'});
+    var _gmSeries = run.map(function(p){
+      return new Date(p.t).toLocaleTimeString('en-GB',{hour:'2-digit',minute:'2-digit'}) +
+        ' ' + p.actual.toFixed(1) + 'mmol (+' + p.residual.toFixed(2) + ')';
+    }).join(' | ');
+    console.log('[ghost meal] ' + _gmDate + ' ' + _gmTime +
+      ' — ' + estCarbs + 'g est · pre ' + (preBG||run[0].actual).toFixed(1) +
+      ' → peak ' + peakPt.actual.toFixed(1) + 'mmol at +' + Math.round(peakMins) + 'min' +
+      (candidates.length > 0 ? ' · best match: ' + candidates[0].name + ' (' + Math.round(candidates[0].confidence*100) + '%)' : ' · no library match'));
+    console.log('[ghost meal series] ' + _gmSeries);
   } catch(e) {
     console.warn('[unannouncedMeal save]', e.message);
   }
