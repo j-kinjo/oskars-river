@@ -4372,6 +4372,184 @@ function _maybeDetectUnannouncedMeal() {
   } catch(e) {}
 }
 
+// ── Normalise a curve array to 0→1 range (removes amplitude, preserves shape) ──
+function _normaliseCurve(pts) {
+  var vals = pts.map(function(p){ return p.residual !== undefined ? p.residual : (p.bg || 0); });
+  var mn = Math.min.apply(null, vals);
+  var mx = Math.max.apply(null, vals);
+  var range = mx - mn;
+  if (range < 0.01) return vals.map(function(){ return 0.5; });
+  return vals.map(function(v){ return (v - mn) / range; });
+}
+
+// ── Pearson correlation coefficient between two equal-length arrays ──
+function _pearsonR(a, b) {
+  var n = Math.min(a.length, b.length);
+  if (n < 2) return 0;
+  var ma = a.slice(0,n).reduce(function(s,v){return s+v;},0)/n;
+  var mb = b.slice(0,n).reduce(function(s,v){return s+v;},0)/n;
+  var num=0, da=0, db=0;
+  for (var i=0;i<n;i++){
+    var aa=a[i]-ma, bb=b[i]-mb;
+    num+=aa*bb; da+=aa*aa; db+=bb*bb;
+  }
+  var denom = Math.sqrt(da*db);
+  return denom < 1e-9 ? 0 : Math.max(-1, Math.min(1, num/denom));
+}
+
+// ── Resample array to fixed N points via linear interpolation ──
+function _resample(arr, n) {
+  if (arr.length === 0) return [];
+  if (arr.length === 1) return Array(n).fill(arr[0]);
+  var out = [];
+  for (var i=0;i<n;i++){
+    var pos = i*(arr.length-1)/(n-1);
+    var lo  = Math.floor(pos);
+    var hi  = Math.min(lo+1, arr.length-1);
+    out.push(arr[lo] + (arr[hi]-arr[lo])*(pos-lo));
+  }
+  return out;
+}
+
+// ── Time-of-day label ──
+function _mealPeriod(t) {
+  var h = new Date(t).getHours();
+  if (h < 10) return 'breakfast';
+  if (h < 14) return 'lunch';
+  if (h < 18) return 'afternoon';
+  return 'evening';
+}
+
+// ── Match ghost residual curve against meal_history composite curves ──
+// Returns top 3 candidates sorted by composite confidence.
+async function _matchGhostToMealHistory(residualRun, peakMins, estCarbs, startT, iob) {
+  // Fetch meal_history rows that have actual_curve populated, excluding used_suggested
+  var rows;
+  try {
+    rows = await _sbFetch(
+      'meal_history?actual_curve=not.is.null&rmse=not.is.null&source=neq.used_suggested&order=t.desc&limit=300',
+      { method: 'GET' }
+    );
+  } catch(e) { rows = []; }
+  if (!Array.isArray(rows) || rows.length === 0) return [];
+
+  // Normalise ghost residual
+  var ghostNorm = _normaliseCurve(residualRun);
+  ghostNorm = _resample(ghostNorm, 24); // resample to 24 points (≈5min intervals over 2h)
+
+  var ghostPeriod = _mealPeriod(startT);
+  var ghostIob    = iob || 0;
+
+  // Score each meal_history row
+  var scored = [];
+  rows.forEach(function(row) {
+    var curve = row.actual_curve;
+    if (!Array.isArray(curve) || curve.length < 4) return;
+    if (!row.name) return;
+
+    // Normalise actual_curve (bg values over time since meal)
+    var histNorm = _normaliseCurve(curve);
+    histNorm = _resample(histNorm, 24);
+
+    // 1. Curve shape — Pearson R → 0..1
+    var shapeR    = _pearsonR(ghostNorm, histNorm);
+    var shapeScore = (shapeR + 1) / 2; // map -1..1 → 0..1
+
+    // 2. Peak timing match
+    var histPeakIdx = 0;
+    curve.forEach(function(p, idx){ if((p.bg||0) > (curve[histPeakIdx].bg||0)) histPeakIdx=idx; });
+    var histPeakMins = curve[histPeakIdx] ? (curve[histPeakIdx].mins || histPeakIdx * 5) : 60;
+    var timingDelta  = Math.abs(histPeakMins - peakMins);
+    var timingScore  = Math.max(0, 1 - timingDelta / 60);
+
+    // 3. Carb estimate match
+    var histCarbs   = row.total_carbs || 0;
+    var carbScore   = 0;
+    var carbVariance = 0;
+    if (histCarbs > 0 && estCarbs > 0) {
+      carbVariance = Math.abs(histCarbs - estCarbs) / Math.max(histCarbs, estCarbs);
+      carbScore    = Math.max(0, 1 - carbVariance * 1.5);
+    } else { carbScore = 0.5; }
+    var gramWarning = carbVariance > 0.3;
+
+    // 4. Time-of-day match
+    var histPeriod   = _mealPeriod(row.t);
+    var timeScore    = histPeriod === ghostPeriod ? 1.0 : 0.3;
+
+    // 5. IOB context match
+    var histIob      = (row.therapy_snapshot && row.therapy_snapshot.iob_at_meal) || 0;
+    var iobDelta     = Math.abs(histIob - ghostIob);
+    var iobScore     = Math.max(0, 1 - iobDelta / 3);
+
+    // Composite confidence (weighted)
+    var confidence = (
+      shapeScore   * 0.35 +
+      timingScore  * 0.25 +
+      timeScore    * 0.20 +
+      carbScore    * 0.12 +
+      iobScore     * 0.08
+    );
+
+    scored.push({
+      meal_t:        row.t,
+      name:          row.name,
+      total_carbs:   row.total_carbs,
+      items:         row.items || null,
+      confidence:    +confidence.toFixed(3),
+      shape_match:   +shapeScore.toFixed(3),
+      peak_timing_match: +timingScore.toFixed(3),
+      carb_match:    +carbScore.toFixed(3),
+      time_match:    +timeScore.toFixed(3),
+      iob_match:     +iobScore.toFixed(3),
+      gram_warning:  gramWarning,
+    });
+  });
+
+  if (scored.length === 0) return [];
+
+  // Aggregate by meal name — average scores across observations
+  var byName = {};
+  scored.forEach(function(s) {
+    var k = s.name;
+    if (!byName[k]) byName[k] = { samples: [], name: k };
+    byName[k].samples.push(s);
+  });
+
+  var aggregated = Object.keys(byName).map(function(k) {
+    var samps = byName[k].samples;
+    var n     = samps.length;
+    var avg   = function(fn){ return samps.reduce(function(s,x){return s+fn(x);},0)/n; };
+    var obs   = n;
+    var dq    = obs >= 10 ? 'solid' : obs >= 4 ? 'moderate' : 'preliminary';
+    return {
+      meal_t:        samps[0].meal_t,
+      name:          k,
+      total_carbs:   +avg(function(s){return s.total_carbs||0;}).toFixed(1),
+      items:         samps[0].items,
+      observations:  obs,
+      confidence:    +avg(function(s){return s.confidence;}).toFixed(3),
+      shape_match:   +avg(function(s){return s.shape_match;}).toFixed(3),
+      peak_timing_match: +avg(function(s){return s.peak_timing_match;}).toFixed(3),
+      carb_match:    +avg(function(s){return s.carb_match;}).toFixed(3),
+      time_match:    +avg(function(s){return s.time_match;}).toFixed(3),
+      iob_match:     +avg(function(s){return s.iob_match;}).toFixed(3),
+      data_quality:  dq,
+      gram_warning:  samps.some(function(s){return s.gram_warning;}),
+    };
+  });
+
+  aggregated.sort(function(a,b){return b.confidence - a.confidence;});
+
+  // Flag ambiguous: top-2 within 10% of each other
+  if (aggregated.length >= 2 &&
+      Math.abs(aggregated[0].confidence - aggregated[1].confidence) < 0.10) {
+    aggregated[0].ambiguous = true;
+    aggregated[1].ambiguous = true;
+  }
+
+  return aggregated.slice(0, 3);
+}
+
 async function _evaluateUnannouncedMeal(run, preBG) {
   if (!SUPABASE_READY) return;
   var startT = run[0].t;
@@ -4396,18 +4574,22 @@ async function _evaluateUnannouncedMeal(run, preBG) {
   var d0         = dataAt(startT);
   var therapy    = _currentTherapySnapshot(startT);
   var isf        = therapy ? therapy.isf : 6.5;
-  var iobEffect  = d0 && d0.iob > 0 ? d0.iob * isf * 0.4 : 0; // rough: 40% IOB still active
+  var iob        = d0 ? +d0.iob.toFixed(2) : 0;
+  var iobEffect  = iob > 0 ? iob * isf * 0.4 : 0;
   var netRise    = Math.max(0, rise - iobEffect);
-  var estCarbs   = +(netRise / 0.055).toFixed(0); // 1g carbs ≈ 0.055 mmol/L at avg ISF
+  var estCarbs   = +(netRise / 0.055).toFixed(0);
+  var peakMins   = (peakPt.t - startT) / 60000;
 
-  // Match against food library GI curves
-  var allFoods = (window.FOOD_DB || []).concat(FOOD_LIBRARY || []);
-  var peakMins = (peakPt.t - startT) / 60000;
-  var candidates = allFoods.map(function(f) {
+  // ── Primary: match against meal_history composite curves ──────────────
+  var candidateMeals = await _matchGhostToMealHistory(run, peakMins, estCarbs, startT, iob);
+
+  // ── Fallback: food library GI curves (when meal_history has <3 viable rows) ──
+  var allFoods    = (window.FOOD_DB || []).concat(FOOD_LIBRARY || []);
+  var candidateFoods = allFoods.map(function(f) {
     var gi = f.gi || 55;
-    var expectedPeak = Math.max(15, 95 - gi); // matches _cobFgi peak formula
+    var expectedPeak = Math.max(15, 95 - gi);
     var timingDelta  = Math.abs(expectedPeak - peakMins);
-    var confidence   = Math.max(0, 1 - timingDelta / 60); // decays over 60min timing error
+    var confidence   = Math.max(0, 1 - timingDelta / 60);
     var estGrams     = f.c100 > 0 ? Math.round(estCarbs / (f.c100 / 100)) : null;
     return { name: f.name, gi: gi, confidence: +confidence.toFixed(2), estimated_g: estGrams };
   }).filter(function(c){ return c.confidence > 0.3; })
@@ -4424,10 +4606,12 @@ async function _evaluateUnannouncedMeal(run, preBG) {
     total_rise:      +rise.toFixed(2),
     residual_curve:  run.map(function(p){ return { t: p.t, residual: +p.residual.toFixed(3) }; }),
     estimated_carbs: estCarbs,
-    candidate_foods: candidates.length > 0 ? candidates : null,
-    iob_at_t:        d0 ? +d0.iob.toFixed(2) : null,
+    candidate_foods: candidateFoods.length > 0 ? candidateFoods : null,
+    candidate_meals: candidateMeals.length > 0 ? candidateMeals : null,
+    iob_at_t:        iob,
     therapy_snapshot: therapy,
     device_id:       _deviceId,
+    confirmed:       false,
   };
 
   try {
@@ -4436,17 +4620,13 @@ async function _evaluateUnannouncedMeal(run, preBG) {
       prefer: 'resolution=merge-duplicates,return=minimal',
       body: [row],
     });
-    var _gmTime = new Date(startT).toLocaleTimeString('en-GB',{hour:'2-digit',minute:'2-digit'});
-    var _gmDate = new Date(startT).toLocaleDateString('en-GB',{day:'2-digit',month:'short'});
-    var _gmSeries = run.map(function(p){
-      return new Date(p.t).toLocaleTimeString('en-GB',{hour:'2-digit',minute:'2-digit'}) +
-        ' ' + p.actual.toFixed(1) + 'mmol (+' + p.residual.toFixed(2) + ')';
-    }).join(' | ');
-    console.log('[ghost meal] ' + _gmDate + ' ' + _gmTime +
+    var best = candidateMeals[0] || candidateFoods[0];
+    var bestLabel = best ? best.name + ' (' + Math.round((best.confidence||0)*100) + '%)' : 'no match';
+    console.log('[ghost meal] ' + new Date(startT).toLocaleDateString('en-GB',{day:'2-digit',month:'short'}) +
+      ' ' + new Date(startT).toLocaleTimeString('en-GB',{hour:'2-digit',minute:'2-digit'}) +
       ' — ' + estCarbs + 'g est · pre ' + (preBG||run[0].actual).toFixed(1) +
       ' → peak ' + peakPt.actual.toFixed(1) + 'mmol at +' + Math.round(peakMins) + 'min' +
-      (candidates.length > 0 ? ' · best match: ' + candidates[0].name + ' (' + Math.round(candidates[0].confidence*100) + '%)' : ' · no library match'));
-    console.log('[ghost meal series] ' + _gmSeries);
+      ' · best: ' + bestLabel);
   } catch(e) {
     console.warn('[unannouncedMeal save]', e.message);
   }
@@ -9702,6 +9882,7 @@ function openOrbRadialMenu(pressX) {
     { label: 'hypo',       icon: '⬡', fn: 'openHypoLog()',        col: 'rgba(255,210,40,0.9)'  },
     { label: 'prick',      icon: '◆', fn: 'openBloodPrickLog()',  col: 'rgba(220,60,80,0.9)'   },
     { label: 'basal',      icon: '▬', fn: 'openBasalLog()',       col: 'rgba(40,200,160,0.9)'  },
+    { label: 'patterns',   icon: '◑', fn: 'openPatternExplorer()', col: 'rgba(160,120,240,0.9)' },
     { label: 'whisper',    icon: '◌', fn: 'openWhisper()',        col: 'rgba(140,200,180,0.9)' },
   ];
   if (_activeDemoId) {
@@ -11689,6 +11870,667 @@ function openInsightsPanel() {
       cx.fillText(v, PAD.l - 4, yOf(v) + 3);
     });
   });
+}
+
+// ═══════════════════════════════════════════════════════════════════
+//  PATTERN EXPLORER — unknown forces review screen
+//  Entry: radial menu → "patterns"
+//  Three tabs: Ghost Meals · Other Forces · Resolved
+// ═══════════════════════════════════════════════════════════════════
+
+var _patternExplorerOpen = false;
+
+async function openPatternExplorer() {
+  if (_patternExplorerOpen) return;
+  _patternExplorerOpen = true;
+
+  var ex = document.getElementById('pattern-explorer-overlay');
+  if (ex) ex.remove();
+
+  // Build shell immediately, load data async
+  var el = document.createElement('div');
+  el.id  = 'pattern-explorer-overlay';
+  el.style.cssText = [
+    'position:fixed', 'inset:0', 'z-index:70',
+    'background:rgba(3,8,20,0.97)',
+    'backdrop-filter:blur(20px)',
+    'display:flex', 'flex-direction:column',
+    'overflow:hidden',
+    'pointer-events:auto',
+    'touch-action:pan-y',
+    'font-family:\'DM Mono\',monospace',
+  ].join(';');
+  el.addEventListener('touchstart', function(e){ e.stopPropagation(); }, {passive:true});
+
+  // ── Header ──
+  var header = document.createElement('div');
+  header.style.cssText = 'display:flex;align-items:center;justify-content:space-between;padding:52px 20px 12px;flex-shrink:0;border-bottom:1px solid rgba(160,120,240,0.15)';
+  header.innerHTML =
+    '<div style="display:flex;flex-direction:column;gap:2px">' +
+      '<span style="font-size:11px;letter-spacing:2px;text-transform:uppercase;color:rgba(160,120,240,0.9)">◑ Patterns</span>' +
+      '<span style="font-size:9px;letter-spacing:1px;text-transform:uppercase;color:rgba(180,200,220,0.35)">Unknown forces review</span>' +
+    '</div>' +
+    '<button id="pe-close" style="width:36px;height:36px;border-radius:50%;border:1px solid rgba(180,200,220,0.15);background:rgba(10,15,35,0.6);color:rgba(180,200,220,0.6);font-size:16px;cursor:pointer;display:flex;align-items:center;justify-content:center">✕</button>';
+  el.appendChild(header);
+
+  // ── Tabs ──
+  var tabBar = document.createElement('div');
+  tabBar.style.cssText = 'display:flex;gap:0;flex-shrink:0;border-bottom:1px solid rgba(160,120,240,0.12)';
+  var TAB_DEFS = [
+    { id:'ghosts',  label:'Ghost Meals' },
+    { id:'forces',  label:'Other Forces' },
+    { id:'resolved',label:'Resolved' },
+  ];
+  var _activeTab = 'ghosts';
+  TAB_DEFS.forEach(function(td) {
+    var tb = document.createElement('button');
+    tb.id  = 'pe-tab-' + td.id;
+    tb.setAttribute('data-tab', td.id);
+    tb.style.cssText = [
+      'flex:1', 'padding:10px 4px', 'border:none',
+      'background:transparent', 'cursor:pointer',
+      'font-family:\'DM Mono\',monospace',
+      'font-size:9px', 'letter-spacing:0.8px',
+      'text-transform:uppercase',
+      'color:' + (td.id === 'ghosts' ? 'rgba(160,120,240,0.9)' : 'rgba(180,200,220,0.35)'),
+      'border-bottom:2px solid ' + (td.id === 'ghosts' ? 'rgba(160,120,240,0.7)' : 'transparent'),
+      'transition:color .2s,border-color .2s',
+    ].join(';');
+    tb.textContent = td.label;
+    tb.addEventListener('click', function() {
+      _activeTab = td.id;
+      TAB_DEFS.forEach(function(t2) {
+        var btn2 = document.getElementById('pe-tab-' + t2.id);
+        var active2 = t2.id === td.id;
+        if (btn2) {
+          btn2.style.color = active2 ? 'rgba(160,120,240,0.9)' : 'rgba(180,200,220,0.35)';
+          btn2.style.borderBottom = active2 ? '2px solid rgba(160,120,240,0.7)' : '2px solid transparent';
+        }
+        var pane = document.getElementById('pe-pane-' + t2.id);
+        if (pane) pane.style.display = t2.id === td.id ? 'block' : 'none';
+      });
+    });
+    tabBar.appendChild(tb);
+  });
+  el.appendChild(tabBar);
+
+  // ── Content area ──
+  var content = document.createElement('div');
+  content.style.cssText = 'flex:1;overflow-y:auto;-webkit-overflow-scrolling:touch;overscroll-behavior:contain';
+
+  // Panes
+  TAB_DEFS.forEach(function(td) {
+    var pane = document.createElement('div');
+    pane.id  = 'pe-pane-' + td.id;
+    pane.style.cssText = 'padding:16px 16px 40px;' + (td.id === 'ghosts' ? '' : 'display:none');
+    if (td.id === 'ghosts') {
+      pane.innerHTML = '<div style="text-align:center;padding:32px 0;color:rgba(180,200,220,0.3);font-size:10px;letter-spacing:1px">Loading ghost meals…</div>';
+    } else if (td.id === 'forces') {
+      pane.innerHTML = '<div style="text-align:center;padding:32px 0;color:rgba(180,200,220,0.3);font-size:10px;letter-spacing:1px">Loading unexplained drops…</div>';
+    } else {
+      pane.innerHTML = '<div style="text-align:center;padding:32px 0;color:rgba(180,200,220,0.3);font-size:10px;letter-spacing:1px">Loading resolved items…</div>';
+    }
+    content.appendChild(pane);
+  });
+
+  el.appendChild(content);
+  document.body.appendChild(el);
+
+  // ── Toast helper ──
+  function _peToast(msg) {
+    var t = document.createElement('div');
+    t.style.cssText = 'position:fixed;bottom:40px;left:50%;transform:translateX(-50%);background:rgba(160,120,240,0.9);color:#fff;padding:10px 20px;border-radius:20px;font-family:\'DM Mono\',monospace;font-size:10px;letter-spacing:1px;z-index:99;pointer-events:none;white-space:nowrap';
+    t.textContent = msg;
+    document.body.appendChild(t);
+    setTimeout(function(){ t.style.transition='opacity .4s'; t.style.opacity='0'; setTimeout(function(){if(t.parentNode)t.remove();},400); }, 2200);
+  }
+
+  // ── Rerun evaluation on all unconfirmed ghosts ──
+  async function _rerunAllGhosts() {
+    _peToast('↻ Re-running pattern matching…');
+    try {
+      var rows = await _sbFetch('unannounced_meals?confirmed=eq.false&order=t.desc&limit=50', { method: 'GET' });
+      if (!Array.isArray(rows) || rows.length === 0) { _peToast('No unconfirmed ghosts to rerun'); return; }
+      for (var row of rows) {
+        if (!row.residual_curve || !Array.isArray(row.residual_curve)) continue;
+        var resampled = row.residual_curve; // already in run format {t, residual}
+        var candidates = await _matchGhostToMealHistory(
+          resampled, row.peak_mins || 60, row.estimated_carbs || 0, row.t, row.iob_at_t || 0
+        );
+        if (candidates.length > 0) {
+          await _sbFetch('unannounced_meals?t=eq.' + row.t, {
+            method: 'PATCH',
+            prefer: 'return=minimal',
+            body: { candidate_meals: candidates },
+          });
+        }
+      }
+      _peToast('✓ Matching complete');
+      _loadAllPanes();
+    } catch(e) {
+      console.warn('[rerun ghosts]', e);
+      _peToast('Rerun failed — see console');
+    }
+  }
+
+  // ── Confirm a ghost meal — save to meal_history with used_suggested ──
+  async function _confirmGhostMeal(ghost, candidate, editedItems) {
+    try {
+      var items  = editedItems || candidate.items || null;
+      var carbs  = items ? items.reduce(function(s,i){return s+(i.carbs||0);},0) : candidate.total_carbs;
+      var mealRow = {
+        t:           ghost.t,
+        name:        candidate.name,
+        total_carbs: +carbs.toFixed(1),
+        items:       items,
+        bolus_u:     null,
+        pre_bg:      ghost.pre_bg,
+        therapy_snapshot: ghost.therapy_snapshot,
+        source:      'used_suggested',
+        device_id:   _deviceId,
+        logged_by:   _thisPersonId || null,
+      };
+      await _sbFetch('meal_history?on_conflict=t', {
+        method: 'POST',
+        prefer: 'resolution=merge-duplicates,return=minimal',
+        body: [mealRow],
+      });
+      // Mark ghost confirmed
+      await _sbFetch('unannounced_meals?t=eq.' + ghost.t, {
+        method: 'PATCH',
+        prefer: 'return=minimal',
+        body: { confirmed: true, dismissed: false },
+      });
+      _peToast('Saved · re-running matching…');
+      // Async rerun of remaining unconfirmed ghosts
+      setTimeout(function(){ _rerunAllGhosts(); }, 500);
+    } catch(e) {
+      console.warn('[confirmGhost]', e);
+      _peToast('Save failed — see console');
+    }
+  }
+
+  // ── Dismiss a ghost — mark confirmed+dismissed, don't write meal_history ──
+  async function _dismissGhost(t) {
+    try {
+      await _sbFetch('unannounced_meals?t=eq.' + t, {
+        method: 'PATCH',
+        prefer: 'return=minimal',
+        body: { confirmed: true, dismissed: true },
+      });
+    } catch(e) { console.warn('[dismissGhost]', e); }
+  }
+
+  // ── Draw mini sparkline SVG for a residual curve ──
+  function _sparklineSVG(curve, w, h) {
+    if (!curve || curve.length < 2) return '';
+    var vals = curve.map(function(p){ return p.residual || 0; });
+    var mn = Math.min.apply(null, vals);
+    var mx = Math.max.apply(null, vals);
+    var range = mx - mn || 1;
+    var pts = vals.map(function(v, i) {
+      var x = (i / (vals.length - 1)) * w;
+      var y = h - ((v - mn) / range) * h;
+      return x.toFixed(1) + ',' + y.toFixed(1);
+    });
+    return '<svg width="' + w + '" height="' + h + '" viewBox="0 0 ' + w + ' ' + h + '" preserveAspectRatio="none">' +
+      '<polyline points="' + pts.join(' ') + '" fill="none" stroke="rgba(80,220,200,0.7)" stroke-width="1.5" stroke-linejoin="round"/>' +
+      '</svg>';
+  }
+
+  // ── Confidence bar HTML ──
+  function _confBar(val, amber) {
+    var pct = Math.round((val || 0) * 100);
+    var col = amber ? 'rgba(255,200,80,0.7)' : 'rgba(160,120,240,0.7)';
+    return '<div style="display:flex;align-items:center;gap:6px">' +
+      '<div style="flex:1;height:4px;background:rgba(255,255,255,0.08);border-radius:2px">' +
+        '<div style="width:' + pct + '%;height:4px;background:' + col + ';border-radius:2px"></div>' +
+      '</div>' +
+      '<span style="font-size:9px;color:rgba(200,220,240,0.5);min-width:26px;text-align:right">' + pct + '%</span>' +
+    '</div>';
+  }
+
+  // ── Detail view for a ghost meal (Review tap) ──
+  function _openGhostDetail(ghost, candidate, allCandidates, onSaved) {
+    var det = document.createElement('div');
+    det.id  = 'pe-detail-overlay';
+    det.style.cssText = 'position:fixed;inset:0;z-index:80;background:rgba(3,8,20,0.98);backdrop-filter:blur(20px);overflow-y:auto;-webkit-overflow-scrolling:touch;font-family:\'DM Mono\',monospace;padding:0;pointer-events:auto;touch-action:pan-y';
+    det.addEventListener('touchstart',function(e){e.stopPropagation();},{passive:true});
+
+    var ghostTime = new Date(ghost.t).toLocaleTimeString('en-GB',{hour:'2-digit',minute:'2-digit'});
+    var ghostDate = new Date(ghost.t).toLocaleDateString('en-GB',{day:'2-digit',month:'short'});
+    var period    = _mealPeriod(ghost.t);
+    var items     = (candidate && candidate.items) ? JSON.parse(JSON.stringify(candidate.items)) : [];
+    var dq        = candidate ? candidate.data_quality : 'preliminary';
+    var dqLabel   = dq === 'solid' ? '● Solid match' : dq === 'moderate' ? '◑ Moderate match' : '○ Preliminary — few observations';
+    var dqCol     = dq === 'solid' ? 'rgba(80,220,160,0.8)' : dq === 'moderate' ? 'rgba(255,200,80,0.8)' : 'rgba(180,200,220,0.4)';
+
+    // Build items editor HTML
+    function _itemsEditorHTML() {
+      if (!items || items.length === 0) return '<div style="color:rgba(180,200,220,0.3);font-size:9px;padding:8px 0">No item breakdown available</div>';
+      return items.map(function(it, idx) {
+        return '<div style="display:flex;align-items:center;gap:8px;padding:6px 0;border-bottom:1px solid rgba(255,255,255,0.05)">' +
+          '<span style="flex:1;font-size:10px;color:rgba(180,200,220,0.7)">' + (it.name||'Item') + '</span>' +
+          '<input type="number" step="1" value="' + Math.round(it.grams||0) + '" data-idx="' + idx + '" data-field="grams"' +
+            ' style="width:50px;background:rgba(255,255,255,0.06);border:1px solid rgba(255,255,255,0.12);border-radius:4px;color:rgba(200,220,240,0.8);font-family:\'DM Mono\',monospace;font-size:10px;padding:4px 6px;text-align:right"> g' +
+          '<span style="font-size:10px;color:rgba(180,200,220,0.4)">' + (it.carbs !== undefined ? (it.carbs||0).toFixed(1) + 'g carbs' : '') + '</span>' +
+        '</div>';
+      }).join('');
+    }
+
+    var ambiguousWarning = (candidate && candidate.ambiguous) ?
+      '<div style="background:rgba(255,200,80,0.08);border:1px solid rgba(255,200,80,0.25);border-radius:8px;padding:10px 12px;margin-bottom:12px">' +
+        '<span style="font-size:9px;letter-spacing:0.8px;text-transform:uppercase;color:rgba(255,200,80,0.8)">⚠ Ambiguous — multiple similar matches. Review all dimensions before confirming.</span>' +
+      '</div>' : '';
+
+    det.innerHTML =
+      '<div style="padding:52px 20px 60px">' +
+        // Header
+        '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:20px">' +
+          '<div>' +
+            '<div style="font-size:11px;letter-spacing:1.5px;text-transform:uppercase;color:rgba(160,120,240,0.9)">Ghost meal — ' + period + '</div>' +
+            '<div style="font-size:9px;color:rgba(180,200,220,0.4);margin-top:2px">' + ghostDate + ' · ' + ghostTime + '</div>' +
+          '</div>' +
+          '<button id="pe-det-close" style="width:36px;height:36px;border-radius:50%;border:1px solid rgba(180,200,220,0.15);background:rgba(10,15,35,0.6);color:rgba(180,200,220,0.6);font-size:16px;cursor:pointer;display:flex;align-items:center;justify-content:center">✕</button>' +
+        '</div>' +
+
+        // Candidate name + data quality
+        (candidate ?
+          '<div style="background:rgba(160,120,240,0.08);border:1px solid rgba(160,120,240,0.2);border-radius:10px;padding:12px 14px;margin-bottom:12px">' +
+            '<div style="font-size:13px;color:rgba(200,220,240,0.9);margin-bottom:4px">' + candidate.name + '</div>' +
+            '<div style="font-size:9px;letter-spacing:0.8px;color:' + dqCol + '">' + dqLabel + ' · ' + (candidate.observations||1) + ' observation' + ((candidate.observations||1)!==1?'s':'') + '</div>' +
+          '</div>'
+        : '<div style="color:rgba(180,200,220,0.4);font-size:10px;padding:12px 0">No candidate match found</div>') +
+
+        ambiguousWarning +
+
+        // Sparkline
+        '<div style="margin-bottom:14px">' +
+          '<div style="font-size:8px;letter-spacing:1px;text-transform:uppercase;color:rgba(180,200,220,0.3);margin-bottom:6px">Residual curve</div>' +
+          '<div style="background:rgba(255,255,255,0.03);border-radius:8px;padding:10px;overflow:hidden">' +
+            _sparklineSVG(ghost.residual_curve || [], 280, 50) +
+          '</div>' +
+        '</div>' +
+
+        // Match breakdown
+        (candidate ?
+          '<div style="margin-bottom:16px">' +
+            '<div style="font-size:8px;letter-spacing:1px;text-transform:uppercase;color:rgba(180,200,220,0.3);margin-bottom:8px">Match breakdown</div>' +
+            '<div style="display:flex;flex-direction:column;gap:6px">' +
+              '<div><div style="font-size:9px;color:rgba(180,200,220,0.5);margin-bottom:3px">Curve shape</div>' + _confBar(candidate.shape_match, false) + '</div>' +
+              '<div><div style="font-size:9px;color:rgba(180,200,220,0.5);margin-bottom:3px">Peak timing</div>' + _confBar(candidate.peak_timing_match, false) + '</div>' +
+              '<div><div style="font-size:9px;color:rgba(255,200,80,0.7);margin-bottom:3px">Carb estimate' + (candidate.gram_warning ? ' ⚠' : '') + '</div>' + _confBar(candidate.carb_match, candidate.gram_warning) + '</div>' +
+              '<div><div style="font-size:9px;color:rgba(180,200,220,0.5);margin-bottom:3px">Time of day</div>' + _confBar(candidate.time_match, false) + '</div>' +
+              '<div><div style="font-size:9px;color:rgba(255,200,80,0.7);margin-bottom:3px">IOB context ⚠</div>' + _confBar(candidate.iob_match, true) + '</div>' +
+            '</div>' +
+          '</div>'
+        : '') +
+
+        // Items editor
+        '<div style="margin-bottom:16px">' +
+          '<div style="font-size:8px;letter-spacing:1px;text-transform:uppercase;color:rgba(180,200,220,0.3);margin-bottom:6px">Meal items</div>' +
+          '<div style="background:rgba(255,255,255,0.03);border-radius:8px;padding:10px 12px" id="pe-det-items">' +
+            _itemsEditorHTML() +
+          '</div>' +
+          '<div style="font-size:8px;color:rgba(180,200,220,0.25);margin-top:6px;line-height:1.5">Gram estimates derived from carb back-calculation. Adjust if known.</div>' +
+        '</div>' +
+
+        // Source pill
+        '<div style="display:inline-block;padding:4px 10px;background:rgba(160,120,240,0.12);border:1px solid rgba(160,120,240,0.25);border-radius:20px;font-size:8px;letter-spacing:0.8px;color:rgba(160,120,240,0.7);margin-bottom:20px">used-suggestion</div>' +
+
+        // Actions
+        '<div style="display:flex;gap:10px">' +
+          '<button id="pe-det-confirm" style="flex:1;padding:13px;border-radius:10px;border:1px solid rgba(80,220,160,0.3);background:rgba(80,220,160,0.1);color:rgba(80,220,160,0.9);font-family:\'DM Mono\',monospace;font-size:10px;letter-spacing:1px;cursor:pointer">Confirm + save</button>' +
+          '<button id="pe-det-cancel" style="padding:13px 18px;border-radius:10px;border:1px solid rgba(180,200,220,0.15);background:transparent;color:rgba(180,200,220,0.5);font-family:\'DM Mono\',monospace;font-size:10px;letter-spacing:1px;cursor:pointer">Cancel</button>' +
+        '</div>' +
+      '</div>';
+
+    document.body.appendChild(det);
+
+    // Wire gram input changes into items array
+    det.querySelectorAll('input[type=number]').forEach(function(inp) {
+      inp.addEventListener('change', function() {
+        var idx = +inp.getAttribute('data-idx');
+        var g   = parseFloat(inp.value) || 0;
+        if (items[idx]) {
+          items[idx].grams = g;
+          if (items[idx].c100 !== undefined) items[idx].carbs = +(g * items[idx].c100 / 100).toFixed(1);
+        }
+      });
+    });
+
+    det.querySelector('#pe-det-close').addEventListener('click', function(){ if(det.parentNode) det.remove(); });
+    det.querySelector('#pe-det-cancel').addEventListener('click', function(){ if(det.parentNode) det.remove(); });
+    det.querySelector('#pe-det-confirm').addEventListener('click', async function() {
+      if (!candidate) { if(det.parentNode) det.remove(); return; }
+      det.querySelector('#pe-det-confirm').disabled = true;
+      det.querySelector('#pe-det-confirm').textContent = 'Saving…';
+      await _confirmGhostMeal(ghost, candidate, items.length ? items : null);
+      if(det.parentNode) det.remove();
+      if(onSaved) onSaved();
+    });
+  }
+
+  // ── Render ghost meals pane ──
+  async function _loadGhostPane(rows) {
+    var pane = document.getElementById('pe-pane-ghosts');
+    if (!pane) return;
+
+    if (!rows || rows.length === 0) {
+      pane.innerHTML = '<div style="text-align:center;padding:48px 20px">' +
+        '<div style="font-size:28px;margin-bottom:12px;opacity:0.3">◑</div>' +
+        '<div style="font-size:10px;letter-spacing:1px;text-transform:uppercase;color:rgba(180,200,220,0.3)">No ghost meals detected</div>' +
+        '<div style="font-size:9px;color:rgba(180,200,220,0.2);margin-top:6px">Unannounced rises will appear here</div>' +
+      '</div>';
+      return;
+    }
+
+    pane.innerHTML = '';
+    rows.forEach(function(ghost) {
+      var cands  = ghost.candidate_meals || [];
+      var top    = cands[0] || null;
+      var period = _mealPeriod(ghost.t);
+      var timeStr = new Date(ghost.t).toLocaleTimeString('en-GB',{hour:'2-digit',minute:'2-digit'});
+      var dateStr = new Date(ghost.t).toLocaleDateString('en-GB',{day:'2-digit',month:'short'});
+      var dq      = top ? top.data_quality : null;
+      var ambiguous = cands.length >= 2 && cands[0] && cands[1] &&
+        Math.abs((cands[0].confidence||0) - (cands[1].confidence||0)) < 0.10;
+      var showAcceptTop = top && dq !== 'preliminary' && !ambiguous;
+
+      var card = document.createElement('div');
+      card.style.cssText = 'background:rgba(255,255,255,0.03);border:1px solid rgba(160,120,240,0.12);border-radius:12px;padding:14px;margin-bottom:12px;position:relative';
+
+      // Card header
+      var cardHTML =
+        '<div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:10px">' +
+          '<div>' +
+            '<div style="font-size:11px;letter-spacing:1px;text-transform:uppercase;color:rgba(200,220,240,0.8)">Unannounced — ' + period + '</div>' +
+            '<div style="font-size:9px;color:rgba(180,200,220,0.35);margin-top:2px">' + dateStr + ' · ' + timeStr + '</div>' +
+          '</div>' +
+          '<div style="text-align:right">' +
+            '<div style="font-size:12px;color:rgba(80,220,200,0.8)">+' + (ghost.total_rise||0).toFixed(1) + '</div>' +
+            '<div style="font-size:8px;color:rgba(180,200,220,0.3)">mmol rise</div>' +
+          '</div>' +
+        '</div>' +
+
+        // Stats row
+        '<div style="display:flex;gap:16px;margin-bottom:10px">' +
+          '<div><div style="font-size:8px;color:rgba(180,200,220,0.3);text-transform:uppercase;letter-spacing:0.5px">Est. carbs</div><div style="font-size:11px;color:rgba(200,220,240,0.7)">' + (ghost.estimated_carbs||0) + 'g</div></div>' +
+          '<div><div style="font-size:8px;color:rgba(180,200,220,0.3);text-transform:uppercase;letter-spacing:0.5px">Peak at</div><div style="font-size:11px;color:rgba(200,220,240,0.7)">+' + (ghost.peak_mins||0) + 'min</div></div>' +
+          '<div><div style="font-size:8px;color:rgba(180,200,220,0.3);text-transform:uppercase;letter-spacing:0.5px">IOB</div><div style="font-size:11px;color:rgba(200,220,240,0.7)">' + (ghost.iob_at_t||0).toFixed(1) + 'U</div></div>' +
+        '</div>' +
+
+        // Sparkline
+        '<div style="margin-bottom:10px">' + _sparklineSVG(ghost.residual_curve || [], 260, 36) + '</div>';
+
+      // Candidate list
+      if (cands.length > 0) {
+        cardHTML += '<div style="margin-bottom:10px">';
+        cands.forEach(function(c, ci) {
+          var pct = Math.round((c.confidence||0)*100);
+          var isTop = ci === 0;
+          cardHTML +=
+            '<div style="display:flex;align-items:center;gap:8px;padding:5px 0;border-bottom:1px solid rgba(255,255,255,0.04)">' +
+              '<span style="font-size:9px;color:' + (isTop ? 'rgba(200,220,240,0.8)' : 'rgba(180,200,220,0.4)') + ';flex:1">' + c.name + '</span>' +
+              '<span style="font-size:8px;color:rgba(180,200,220,0.3)">' + (c.observations||1) + '×</span>' +
+              '<div style="width:50px;height:4px;background:rgba(255,255,255,0.08);border-radius:2px">' +
+                '<div style="width:' + pct + '%;height:4px;background:' + (isTop ? 'rgba(160,120,240,0.7)' : 'rgba(100,80,160,0.4)') + ';border-radius:2px"></div>' +
+              '</div>' +
+              '<span style="font-size:9px;color:rgba(180,200,220,0.4);min-width:28px;text-align:right">' + pct + '%</span>' +
+            '</div>';
+        });
+        cardHTML += '</div>';
+      } else {
+        cardHTML += '<div style="font-size:9px;color:rgba(180,200,220,0.25);padding:4px 0 8px">No match found yet — rerun matching after logging more meals</div>';
+      }
+
+      // Ambiguous warning
+      if (ambiguous) {
+        cardHTML += '<div style="background:rgba(255,200,80,0.07);border:1px solid rgba(255,200,80,0.2);border-radius:6px;padding:8px 10px;margin-bottom:10px;font-size:8px;letter-spacing:0.5px;color:rgba(255,200,80,0.7)">⚠ Multiple similar matches — review required before accepting</div>';
+      }
+
+      // Preliminary warning
+      if (dq === 'preliminary') {
+        cardHTML += '<div style="font-size:8px;color:rgba(255,200,80,0.6);margin-bottom:8px">○ Preliminary data — fewer than 4 observations. Accept top disabled.</div>';
+      }
+
+      // Action row
+      cardHTML +=
+        '<div style="display:flex;gap:8px;margin-top:2px">' +
+          (showAcceptTop ?
+            '<button class="pe-accept-top" style="flex:1;padding:10px 6px;border-radius:8px;border:1px solid rgba(80,220,160,0.3);background:rgba(80,220,160,0.08);color:rgba(80,220,160,0.9);font-family:\'DM Mono\',monospace;font-size:9px;letter-spacing:0.8px;cursor:pointer">Accept top</button>'
+          : '') +
+          '<button class="pe-review" style="flex:1;padding:10px 6px;border-radius:8px;border:1px solid rgba(160,120,240,0.25);background:transparent;color:rgba(160,120,240,0.8);font-family:\'DM Mono\',monospace;font-size:9px;letter-spacing:0.8px;cursor:pointer">Review</button>' +
+          '<button class="pe-dismiss" style="padding:10px 12px;border-radius:8px;border:1px solid rgba(180,200,220,0.1);background:transparent;color:rgba(180,200,220,0.3);font-family:\'DM Mono\',monospace;font-size:9px;letter-spacing:0.8px;cursor:pointer">Dismiss</button>' +
+        '</div>';
+
+      card.innerHTML = cardHTML;
+
+      // Wire buttons
+      var acceptBtn = card.querySelector('.pe-accept-top');
+      if (acceptBtn) {
+        acceptBtn.addEventListener('click', async function() {
+          acceptBtn.disabled = true; acceptBtn.textContent = 'Saving…';
+          await _confirmGhostMeal(ghost, top, null);
+          card.style.opacity = '0.3';
+          card.style.pointerEvents = 'none';
+          _peToast('Accepted: ' + top.name);
+          setTimeout(function(){ _loadAllPanes(); }, 600);
+        });
+      }
+      var reviewBtn = card.querySelector('.pe-review');
+      reviewBtn.addEventListener('click', function() {
+        _openGhostDetail(ghost, top, cands, function(){ _loadAllPanes(); });
+      });
+      var dismissBtn = card.querySelector('.pe-dismiss');
+      dismissBtn.addEventListener('click', async function() {
+        await _dismissGhost(ghost.t);
+        card.style.transition = 'opacity .3s';
+        card.style.opacity    = '0';
+        setTimeout(function(){ if(card.parentNode) card.remove(); }, 300);
+      });
+
+      pane.appendChild(card);
+    });
+  }
+
+  // ── Other Forces pane ──
+  async function _loadForcesPane(rows) {
+    var pane = document.getElementById('pe-pane-forces');
+    if (!pane) return;
+
+    if (!rows || rows.length === 0) {
+      pane.innerHTML = '<div style="text-align:center;padding:48px 20px">' +
+        '<div style="font-size:28px;margin-bottom:12px;opacity:0.3">↓</div>' +
+        '<div style="font-size:10px;letter-spacing:1px;text-transform:uppercase;color:rgba(180,200,220,0.3)">No unexplained drops</div>' +
+        '<div style="font-size:9px;color:rgba(180,200,220,0.2);margin-top:6px">Unexplained BG drops will appear here</div>' +
+      '</div>';
+      return;
+    }
+
+    var FORCE_TAGS = [
+      { id:'swimming',   label:'Swimming'          },
+      { id:'exercise',   label:'Exercise'           },
+      { id:'stress',     label:'Stress · adrenaline'},
+      { id:'illness',    label:'Illness · fever'    },
+      { id:'growth',     label:'Growth phase'       },
+      { id:'newsite',    label:'New insulin site'   },
+    ];
+
+    pane.innerHTML = '';
+    rows.forEach(function(drop) {
+      var timeStr = new Date(drop.t).toLocaleTimeString('en-GB',{hour:'2-digit',minute:'2-digit'});
+      var dateStr = new Date(drop.t).toLocaleDateString('en-GB',{day:'2-digit',month:'short'});
+      var selectedTags = {};
+
+      var card = document.createElement('div');
+      card.style.cssText = 'background:rgba(255,255,255,0.03);border:1px solid rgba(80,160,220,0.15);border-radius:12px;padding:14px;margin-bottom:12px';
+
+      var cardHTML =
+        '<div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:10px">' +
+          '<div>' +
+            '<div style="font-size:11px;letter-spacing:1px;text-transform:uppercase;color:rgba(200,220,240,0.8)">Unexplained drop</div>' +
+            '<div style="font-size:9px;color:rgba(180,200,220,0.35);margin-top:2px">' + dateStr + ' · ' + timeStr + '</div>' +
+          '</div>' +
+          '<div style="text-align:right">' +
+            '<div style="font-size:12px;color:rgba(80,160,220,0.8)">' + (drop.total_rise||0).toFixed(1) + '</div>' +
+            '<div style="font-size:8px;color:rgba(180,200,220,0.3)">mmol drop</div>' +
+          '</div>' +
+        '</div>' +
+
+        '<div style="display:flex;gap:16px;margin-bottom:12px">' +
+          '<div><div style="font-size:8px;color:rgba(180,200,220,0.3);text-transform:uppercase">Duration</div><div style="font-size:11px;color:rgba(200,220,240,0.7)">+' + (drop.peak_mins||60) + 'min</div></div>' +
+          '<div><div style="font-size:8px;color:rgba(180,200,220,0.3);text-transform:uppercase">IOB</div><div style="font-size:11px;color:rgba(200,220,240,0.7)">' + (drop.iob_at_t||0).toFixed(1) + 'U</div></div>' +
+        '</div>' +
+
+        '<div style="font-size:8px;letter-spacing:0.8px;text-transform:uppercase;color:rgba(180,200,220,0.3);margin-bottom:8px">What caused this drop?</div>' +
+        '<div id="pe-tags-' + drop.t + '" style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:12px">' +
+          FORCE_TAGS.map(function(ft) {
+            return '<button class="pe-force-tag" data-tag="' + ft.id + '" style="padding:5px 10px;border-radius:14px;border:1px solid rgba(80,160,220,0.2);background:transparent;color:rgba(180,200,220,0.5);font-family:\'DM Mono\',monospace;font-size:8px;letter-spacing:0.5px;cursor:pointer">' + ft.label + '</button>';
+          }).join('') +
+        '</div>' +
+        '<div style="display:flex;gap:8px">' +
+          '<button class="pe-save-force" style="flex:1;padding:10px;border-radius:8px;border:1px solid rgba(80,160,220,0.3);background:rgba(80,160,220,0.08);color:rgba(80,160,220,0.9);font-family:\'DM Mono\',monospace;font-size:9px;letter-spacing:0.8px;cursor:pointer">Save tag</button>' +
+          '<button class="pe-dismiss-force" style="padding:10px 14px;border-radius:8px;border:1px solid rgba(180,200,220,0.1);background:transparent;color:rgba(180,200,220,0.3);font-family:\'DM Mono\',monospace;font-size:9px;letter-spacing:0.8px;cursor:pointer">Dismiss</button>' +
+        '</div>';
+
+      card.innerHTML = cardHTML;
+
+      // Tag toggle
+      card.querySelectorAll('.pe-force-tag').forEach(function(tb) {
+        tb.addEventListener('click', function() {
+          var tag = tb.getAttribute('data-tag');
+          selectedTags[tag] = !selectedTags[tag];
+          tb.style.background = selectedTags[tag] ? 'rgba(80,160,220,0.2)' : 'transparent';
+          tb.style.color       = selectedTags[tag] ? 'rgba(80,160,220,0.9)' : 'rgba(180,200,220,0.5)';
+          tb.style.borderColor = selectedTags[tag] ? 'rgba(80,160,220,0.5)' : 'rgba(80,160,220,0.2)';
+        });
+      });
+
+      // Save force tag
+      card.querySelector('.pe-save-force').addEventListener('click', async function() {
+        var tags = Object.keys(selectedTags).filter(function(k){return selectedTags[k];});
+        if (tags.length === 0) { _peToast('Select at least one tag'); return; }
+        try {
+          await _sbFetch('unannounced_meals?t=eq.' + drop.t, {
+            method: 'PATCH',
+            prefer: 'return=minimal',
+            body: { confirmed: true, force_tags: tags, dismissed: false },
+          });
+          card.style.transition='opacity .3s'; card.style.opacity='0';
+          setTimeout(function(){if(card.parentNode)card.remove();},300);
+          _peToast('Tagged: ' + tags.join(', '));
+        } catch(e) { _peToast('Save failed'); }
+      });
+
+      card.querySelector('.pe-dismiss-force').addEventListener('click', async function() {
+        await _dismissGhost(drop.t);
+        card.style.transition='opacity .3s'; card.style.opacity='0';
+        setTimeout(function(){if(card.parentNode)card.remove();},300);
+      });
+
+      pane.appendChild(card);
+    });
+  }
+
+  // ── Resolved pane ──
+  async function _loadResolvedPane(rows) {
+    var pane = document.getElementById('pe-pane-resolved');
+    if (!pane) return;
+    pane.innerHTML = '';
+
+    // Rerun button
+    var rerunBtn = document.createElement('button');
+    rerunBtn.style.cssText = 'width:100%;padding:11px;border-radius:10px;border:1px solid rgba(160,120,240,0.25);background:rgba(160,120,240,0.07);color:rgba(160,120,240,0.8);font-family:\'DM Mono\',monospace;font-size:9px;letter-spacing:1px;cursor:pointer;margin-bottom:16px;text-transform:uppercase';
+    rerunBtn.textContent = '↻ Re-run pattern matching with updated history';
+    rerunBtn.addEventListener('click', function() {
+      rerunBtn.disabled = true; rerunBtn.textContent = 'Running…';
+      _rerunAllGhosts().then(function(){ rerunBtn.disabled=false; rerunBtn.textContent='↻ Re-run pattern matching with updated history'; });
+    });
+    pane.appendChild(rerunBtn);
+
+    if (!rows || rows.length === 0) {
+      var empty = document.createElement('div');
+      empty.style.cssText = 'text-align:center;padding:32px 20px';
+      empty.innerHTML = '<div style="font-size:10px;letter-spacing:1px;text-transform:uppercase;color:rgba(180,200,220,0.3)">No resolved items yet</div>';
+      pane.appendChild(empty);
+      return;
+    }
+
+    rows.forEach(function(item) {
+      var timeStr = new Date(item.t).toLocaleTimeString('en-GB',{hour:'2-digit',minute:'2-digit'});
+      var dateStr = new Date(item.t).toLocaleDateString('en-GB',{day:'2-digit',month:'short'});
+      var top     = (item.candidate_meals||[])[0];
+      var tags    = item.force_tags || [];
+      var label   = item.dismissed ? 'Dismissed' : top ? top.name : (tags.length ? tags.join(', ') : 'Resolved');
+      var source  = item.dismissed ? 'dismissed' : (item.source || (tags.length ? 'manually tagged' : 'accepted suggestion'));
+
+      var card = document.createElement('div');
+      card.style.cssText = 'background:rgba(255,255,255,0.02);border:1px solid rgba(255,255,255,0.06);border-radius:10px;padding:12px 14px;margin-bottom:10px;opacity:0.7';
+      card.innerHTML =
+        '<div style="display:flex;justify-content:space-between;align-items:center">' +
+          '<div>' +
+            '<div style="font-size:10px;color:rgba(200,220,240,0.7)">' + label + '</div>' +
+            '<div style="font-size:8px;color:rgba(180,200,220,0.3);margin-top:2px">' + dateStr + ' · ' + timeStr + '</div>' +
+          '</div>' +
+          '<div style="text-align:right">' +
+            '<div style="font-size:8px;padding:3px 8px;background:rgba(255,255,255,0.05);border-radius:10px;color:rgba(180,200,220,0.4)">' + source + '</div>' +
+            (top && top.confidence ? '<div style="font-size:8px;color:rgba(160,120,240,0.5);margin-top:3px">' + Math.round(top.confidence*100) + '% match</div>' : '') +
+          '</div>' +
+        '</div>';
+      pane.appendChild(card);
+    });
+  }
+
+  // ── Load all panes from Supabase ──
+  async function _loadAllPanes() {
+    try {
+      // Ghost meals: positive rises, unconfirmed
+      var ghostRows = await _sbFetch(
+        'unannounced_meals?confirmed=eq.false&total_rise=gte.0&order=t.desc&limit=30',
+        { method: 'GET' }
+      );
+      // Other forces: negative rises (drops), unconfirmed
+      var forceRows = await _sbFetch(
+        'unannounced_meals?confirmed=eq.false&total_rise=lt.0&order=t.desc&limit=30',
+        { method: 'GET' }
+      );
+      // Resolved: confirmed items
+      var resolvedRows = await _sbFetch(
+        'unannounced_meals?confirmed=eq.true&order=t.desc&limit=50',
+        { method: 'GET' }
+      );
+      ghostRows   = Array.isArray(ghostRows)   ? ghostRows   : [];
+      forceRows   = Array.isArray(forceRows)   ? forceRows   : [];
+      resolvedRows= Array.isArray(resolvedRows) ? resolvedRows : [];
+
+      _loadGhostPane(ghostRows);
+      _loadForcesPane(forceRows);
+      _loadResolvedPane(resolvedRows);
+
+      // Update tab labels with counts
+      var ghostTab = document.getElementById('pe-tab-ghosts');
+      if (ghostTab && ghostRows.length > 0) ghostTab.textContent = 'Ghost Meals (' + ghostRows.length + ')';
+      var forcesTab = document.getElementById('pe-tab-forces');
+      if (forcesTab && forceRows.length > 0) forcesTab.textContent = 'Other Forces (' + forceRows.length + ')';
+
+    } catch(e) {
+      console.warn('[patternExplorer load]', e);
+      ['ghosts','forces','resolved'].forEach(function(id){
+        var p = document.getElementById('pe-pane-' + id);
+        if(p) p.innerHTML = '<div style="text-align:center;padding:32px;color:rgba(220,80,80,0.7);font-size:9px">Failed to load — check connection</div>';
+      });
+    }
+  }
+
+  // Wire close
+  document.getElementById('pe-close').addEventListener('click', function() {
+    _patternExplorerOpen = false;
+    if(el.parentNode) el.remove();
+  });
+
+  // Load data
+  _loadAllPanes();
 }
 
 function insightsExport() {
