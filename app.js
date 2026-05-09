@@ -27,6 +27,99 @@ const SUPABASE_URL     = 'https://oafnrfxypmllyvdewztm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_MFxi8_3Nsj4O-8_oSG8a7Q_OwpnjKWy';
 const SUPABASE_READY   = !!(SUPABASE_URL && SUPABASE_ANON_KEY);
 
+// Thin PostgREST shim so backfill.js (which uses _supabase.from())
+// can run alongside app.js (which uses _sbFetch directly).
+// Supports: .from(table).select(cols) / .insert(rows) / .update(data)
+//           .upsert(rows) / .delete() / .eq(col,val) / .in(col,vals)
+//           .order(col,{ascending}) / .limit(n) / .count (via head:true)
+var _supabase = (function() {
+  function _chain(table, filters, opts) {
+    var _filters = filters || [];
+    var _opts    = opts    || {};
+
+    function _buildQS() {
+      var qs = _filters.map(function(f) { return f; }).join('&');
+      if (_opts.order) {
+        qs += (qs ? '&' : '') + 'order=' + _opts.order.col +
+              '.' + (_opts.order.ascending === false ? 'desc' : 'asc');
+      }
+      if (_opts.limit) qs += (qs ? '&' : '') + 'limit=' + _opts.limit;
+      if (_opts.select && _opts.select !== '*') {
+        qs += (qs ? '&' : '') + 'select=' + encodeURIComponent(_opts.select);
+      }
+      return qs ? '?' + qs : '';
+    }
+
+    var api = {
+      select: function(cols, selectOpts) {
+        _opts.select = cols || '*';
+        if (selectOpts && selectOpts.head) _opts.head = true;
+        // execute immediately — returns thenable
+        return _exec('GET');
+      },
+      insert: function(rows) {
+        return _exec('POST', Array.isArray(rows) ? rows : [rows]);
+      },
+      upsert: function(rows, upsertOpts) {
+        _opts.upsert = upsertOpts || {};
+        return _exec('POST', Array.isArray(rows) ? rows : [rows], true);
+      },
+      update: function(data) {
+        return _exec('PATCH', data);
+      },
+      delete: function() {
+        return _exec('DELETE');
+      },
+      eq: function(col, val) {
+        _filters.push(col + '=eq.' + encodeURIComponent(val));
+        return api;
+      },
+      in: function(col, vals) {
+        _filters.push(col + '=in.(' + vals.map(encodeURIComponent).join(',') + ')');
+        return api;
+      },
+      not: function(col, op, val) {
+        _filters.push(col + '=not.' + op + '.' + encodeURIComponent(val));
+        return api;
+      },
+      order: function(col, orderOpts) {
+        _opts.order = { col: col, ascending: !(orderOpts && orderOpts.ascending === false) };
+        return api;
+      },
+      limit: function(n) {
+        _opts.limit = n;
+        return api;
+      },
+      // count support — .select('*', {count:'exact', head:false})
+      // returns {data, count, error}
+    };
+
+    function _exec(method, body, isUpsert) {
+      var path = table + _buildQS();
+      var prefer = 'return=minimal';
+      if (isUpsert && _opts.upsert && _opts.upsert.onConflict) {
+        path = table + '?on_conflict=' + _opts.upsert.onConflict + (_buildQS() ? _buildQS().replace('?','&') : '');
+        prefer = 'resolution=merge-duplicates,return=minimal';
+      }
+      var fetchOpts = { method: method, prefer: prefer };
+      if (body !== undefined) fetchOpts.body = body;
+
+      return _sbFetch(path, fetchOpts).then(function(data) {
+        return { data: data, error: null, count: Array.isArray(data) ? data.length : null };
+      }).catch(function(err) {
+        return { data: null, error: { message: err.message }, count: null };
+      });
+    }
+
+    return api;
+  }
+
+  return {
+    from: function(table) { return _chain(table, [], {}); }
+  };
+})();
+
+
 // ── SCHEMA (run this SQL in Supabase → SQL Editor) ─────────────────────
 // Paste and run once to create tables + policies:
 //
@@ -11074,6 +11167,7 @@ function openSettingsTray() {
     { label: 'treatment',    icon: '◈', fn: function(){ closeSettingsTray(); openTreatmentPanel(); },   col: 'rgba(180,100,220,0.8)' },
     { label: 'insights',     icon: '◧', fn: function(){ closeSettingsTray(); openInsightsPanel(); },     col: 'rgba(255,180,80,0.8)'  },
     { label: 'visuals',      icon: '◐', fn: function(){ openVisualSettings(); },                         col: 'rgba(180,140,240,0.8)' },
+    { label: 'meal history',  icon: '▤', fn: function(){ closeSettingsTray(); openBackfillReview(); }, col: 'rgba(74,143,212,0.8)'  },
   ];
 
   // Build items in reverse so they stack upward
@@ -11584,6 +11678,9 @@ window.addEventListener('load',()=>{
 
   // Start Supabase sync
   startSyncPolling();
+  // Backfill review module
+    if (typeof initBackfill === 'function') initBackfill();
+  
   // People in the flow — prompt if first run
   promptPersonIfNeeded();
 
