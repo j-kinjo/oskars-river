@@ -115,6 +115,8 @@ ${js}
 </html>`;
 
 fs.writeFileSync(path.join(DIST, 'index.html'), html);
+fs.copyFileSync(path.join(ROOT, 'backfill.js'), path.join(DIST, 'backfill.js'));
+console.log('✓ backfill.js copied to dist/');
 const kb = (html.length/1024).toFixed(0);
 console.log(`✓ dist/index.html: ${kb}KB  [build ${buildId}]`);
 console.log(`  history: ${JSON.parse(history).length} entries`);
