@@ -109,8 +109,8 @@ ${css}
 ${bodyContent}
 <script>
 ${js}
-<script src="backfill.js"></script>
 </script>
+<script src="backfill.js"></script>
 </body>
 </html>`;
 
