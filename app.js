@@ -11167,8 +11167,8 @@ function openSettingsTray() {
     { label: 'treatment',    icon: '◈', fn: function(){ closeSettingsTray(); openTreatmentPanel(); },   col: 'rgba(180,100,220,0.8)' },
     { label: 'insights',     icon: '◧', fn: function(){ closeSettingsTray(); openInsightsPanel(); },     col: 'rgba(255,180,80,0.8)'  },
     { label: 'visuals',      icon: '◐', fn: function(){ openVisualSettings(); },                         col: 'rgba(180,140,240,0.8)' },
-    { label: 'meal history',  icon: '▤', fn: function(){ closeSettingsTray(); openBackfillReview(); }, col: 'rgba(74,143,212,0.8)'  },
-  ];
+    { label: 'meal history',  icon: '▤', fn: function(){ closeSettingsTray(); window.openBackfillReview && window.openBackfillReview(); }, col: 'rgba(74,143,212,0.8)'  },
+      ];
 
   // Build items in reverse so they stack upward
   items.slice().reverse().forEach(function(item, ri) {
