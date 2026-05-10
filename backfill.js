@@ -33,12 +33,12 @@ async function initBackfill() {
     );
     _bfPendingCount = Array.isArray(rows) ? rows.length : 0;
     if (_bfPendingCount > 0) {
-      __debugLog('backfill: ' + _bfPendingCount + ' events awaiting review');
+      if (typeof __debugLog === 'function') __debugLog('backfill: ' + _bfPendingCount + ' events awaiting review');
       // Update settings tray label if it's currently open
       _bfUpdateTrayBadge();
     }
   } catch(e) {
-    __debugLog('backfill init error: ' + e.message);
+    if (typeof __debugLog === 'function') __debugLog('backfill init error: ' + e.message);
   }
 }
 
