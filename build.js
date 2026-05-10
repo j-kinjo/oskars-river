@@ -109,6 +109,7 @@ ${css}
 ${bodyContent}
 <script>
 ${js}
+<script src="backfill.js"></script>
 </script>
 </body>
 </html>`;
