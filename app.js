@@ -7793,9 +7793,35 @@ function updateAddFoodPreview() {
     if (c100El) c100El.value = c100 > 0 ? c100.toFixed(1) : '';
   }
 
-  // Determine GI — read from input (user may have edited; category change updates it)
-  var giInpEl = document.getElementById('new-food-gi');
-  var gi = parseInt((giInpEl||{}).value) || 0;
+  // ── GI: re-estimate from category + c100 unless user has confirmed manually ──
+  var giInpEl  = document.getElementById('new-food-gi');
+  var badge    = document.getElementById('new-food-gi-badge');
+  var isLocked = badge && badge.textContent === 'confirmed';
+  var gi;
+
+  if (!isLocked && giInpEl) {
+    // Re-derive from current category selection
+    var catEl  = document.getElementById('new-food-cat');
+    var cat    = catEl ? catEl.value : 'custom';
+    var overlay = document.getElementById('food-add-overlay');
+    var nameSub = overlay ? (overlay.querySelector('.food-name-sub')||{}).textContent||'' : '';
+    var est    = _giFromCategory(cat, nameSub.toLowerCase());
+
+    // Nudge GI by c100 density: very low carb (<5) → protein/fat, very high (>75) → likely refined
+    var adjustedGI = est.gi;
+    var basis      = est.basis;
+    if (c100 > 0 && c100 < 5)  { adjustedGI = Math.min(adjustedGI, 20); basis = 'very low carb — minimal impact'; }
+    if (c100 >= 75)             { adjustedGI = Math.max(adjustedGI, 65); basis = 'high carb density — likely refined'; }
+
+    giInpEl.value = adjustedGI;
+    gi = adjustedGI;
+    if (badge) {
+      badge.textContent = '~' + adjustedGI + ' est. — ' + basis;
+      badge.style.color = 'rgba(200,160,60,0.65)';
+    }
+  } else {
+    gi = parseInt((giInpEl||{}).value) || 0;
+  }
 
   // GI narrative
   var noteEl = document.getElementById('new-food-gi-note');
