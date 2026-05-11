@@ -310,14 +310,16 @@ async function syncPullEvents(sinceT) {
   // ── Remove local non-local events no longer in Supabase ──────────
   // Catches: remote deletes, remote time-edits (e.g. 14:42 → 14:32 on another device).
   // Only acts within the 24h pull window. Never removes local:true (not yet synced).
+  // IMPORTANT: mutate in-place (splice) to preserve BOLUS_EVENTS alias reference.
   var removedTs = new Set();
-  LOGGED_EVENTS = LOGGED_EVENTS.filter(function(e) {
-    if (e.local) return true;           // not yet pushed — keep
-    if (e.t < _pullCutoff) return true; // outside pull window — keep
-    if (remoteTs.has(e.t)) return true; // still in Supabase — keep
-    removedTs.add(e.t);
-    return false;                       // gone from Supabase — drop
-  });
+  for (var _i = LOGGED_EVENTS.length - 1; _i >= 0; _i--) {
+    var _e = LOGGED_EVENTS[_i];
+    if (_e.local) continue;           // not yet pushed — keep
+    if (_e.t < _pullCutoff) continue; // outside pull window — keep
+    if (remoteTs.has(_e.t)) continue; // still in Supabase — keep
+    removedTs.add(_e.t);
+    LOGGED_EVENTS.splice(_i, 1);      // gone from Supabase — drop (in-place)
+  }
   if (removedTs.size > 0) {
     // BOLUS_EVENTS is a live alias for LOGGED_EVENTS — already filtered above.
     console.log('[sync] removed ' + removedTs.size + ' stale local event(s): ' +
