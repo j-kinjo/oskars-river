@@ -172,6 +172,17 @@ var _supabase = (function() {
 // );
 // -- Step 2: add the constraint
 // ALTER TABLE events ADD CONSTRAINT events_t_unique UNIQUE (t);
+//
+// ── library table (key-value config store — food library, future: recipes, aliases) ──
+// create table if not exists library (
+//   key        text primary key,
+//   value      jsonb not null,
+//   updated_at timestamptz default now()
+// );
+// alter table library enable row level security;
+// create policy "anyone can read library"  on library for select using (true);
+// create policy "anyone can insert library" on library for insert with check (true);
+// create policy "anyone can update library" on library for update using (true);
 
 // ── DEVICE ID — identifies this install ───────────────────────────────
 const _deviceId = (function() {
@@ -4148,35 +4159,42 @@ function saveFoodLibrary() {
 }
 
 // ── FOOD LIBRARY SUPABASE SYNC ─────────────────────────────────────────
-// Stored as a single row in events with note='food_library', t=-1.
-// items field holds the full FOOD_LIBRARY JSON array.
-const _FOOD_LIB_SENTINEL_T = -1;
+// Uses the `library` table (key/value store): key='food_library', value=jsonb array.
+// Upsert on key so it's always a single row, no sentinel tricks.
 
 async function syncFoodLibraryToSupabase() {
   if (!SUPABASE_READY) return;
   try {
-    await _sbFetch('events?note=eq.food_library&t=eq.' + _FOOD_LIB_SENTINEL_T,
-      { method: 'DELETE', prefer: 'return=minimal' });
-    if (FOOD_LIBRARY.length === 0) return;
-    await _sbFetch('events', {
+    await _sbFetch('library?on_conflict=key', {
       method: 'POST',
-      prefer: 'return=minimal',
-      body: [{ t: _FOOD_LIB_SENTINEL_T, c: 0, u: 0, note: 'food_library',
-               items: FOOD_LIBRARY, device_id: _deviceId,
-               updated_at: new Date().toISOString() }],
+      prefer: 'resolution=merge-duplicates,return=minimal',
+      body: [{
+        key:        'food_library',
+        value:      FOOD_LIBRARY,
+        updated_at: new Date().toISOString(),
+      }],
     });
+    console.log('[syncFoodLib] pushed ' + FOOD_LIBRARY.length + ' items to Supabase library');
   } catch(e) { console.warn('[syncFoodLib push]', e.message); }
 }
 
 async function syncFoodLibraryFromSupabase() {
   if (!SUPABASE_READY) return;
   try {
-    var rows = await _sbFetch('events?note=eq.food_library&t=eq.' + _FOOD_LIB_SENTINEL_T, {});
-    if (!rows || rows.length === 0) return;
-    var remoteLib = rows[0].items;
+    var rows = await _sbFetch('library?key=eq.food_library', {});
+    if (!rows || rows.length === 0) {
+      // Remote is empty — seed it from local if we have items
+      if (FOOD_LIBRARY.length > 0) {
+        console.log('[syncFoodLib] remote empty, seeding from local (' + FOOD_LIBRARY.length + ' items)');
+        await syncFoodLibraryToSupabase();
+      }
+      return;
+    }
+    var remoteLib = rows[0].value;
     if (typeof remoteLib === 'string') { try { remoteLib = JSON.parse(remoteLib); } catch(e) { return; } }
     if (!Array.isArray(remoteLib) || remoteLib.length === 0) return;
-    // Merge: remote items win unless same name already exists locally with more recent data
+
+    // Merge: keep all unique names, remote wins on conflict
     var localNames = new Set(FOOD_LIBRARY.map(function(f){ return (f.name||'').toLowerCase(); }));
     var merged = FOOD_LIBRARY.slice();
     remoteLib.forEach(function(rf) {
@@ -4189,7 +4207,9 @@ async function syncFoodLibraryFromSupabase() {
       FOOD_LIBRARY.length = 0;
       merged.forEach(function(f){ FOOD_LIBRARY.push(f); });
       try { localStorage.setItem('river_food_lib', JSON.stringify(FOOD_LIBRARY)); } catch(e) {}
-      console.log('[syncFoodLib] merged ' + (merged.length - FOOD_LIBRARY.length + merged.length) + ' items from remote');
+      console.log('[syncFoodLib] merged to ' + FOOD_LIBRARY.length + ' items (remote had ' + remoteLib.length + ')');
+      // Push merged result back so all devices stay in sync
+      await syncFoodLibraryToSupabase();
     }
   } catch(e) { console.warn('[syncFoodLib pull]', e.message); }
 }
