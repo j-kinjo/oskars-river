@@ -4192,24 +4192,36 @@ async function syncFoodLibraryFromSupabase() {
     }
     var remoteLib = rows[0].value;
     if (typeof remoteLib === 'string') { try { remoteLib = JSON.parse(remoteLib); } catch(e) { return; } }
-    if (!Array.isArray(remoteLib) || remoteLib.length === 0) return;
+    if (!Array.isArray(remoteLib)) return;
 
-    // Merge: keep all unique names, remote wins on conflict
-    var localNames = new Set(FOOD_LIBRARY.map(function(f){ return (f.name||'').toLowerCase(); }));
-    var merged = FOOD_LIBRARY.slice();
-    remoteLib.forEach(function(rf) {
-      if (!localNames.has((rf.name||'').toLowerCase())) {
-        merged.push(rf);
-        localNames.add((rf.name||'').toLowerCase());
-      }
-    });
-    if (merged.length !== FOOD_LIBRARY.length) {
+    // Remote wins — replace local entirely with remote state.
+    // This is correct: every write (add/delete/edit) pushes the full library to Supabase,
+    // so remote is always the authoritative source. Additive merge was causing deleted items
+    // to be resurrected on next pull.
+    var remoteNames = new Set(remoteLib.map(function(f){ return (f.name||'').toLowerCase(); }));
+    var localHasNew = FOOD_LIBRARY.some(function(f){ return !remoteNames.has((f.name||'').toLowerCase()); });
+
+    if (localHasNew) {
+      // Local has items remote doesn't — push local items that are missing from remote, then sync
+      var merged = remoteLib.slice();
+      var mergedNames = new Set(remoteNames);
+      FOOD_LIBRARY.forEach(function(f) {
+        if (!mergedNames.has((f.name||'').toLowerCase())) {
+          merged.push(f);
+          mergedNames.add((f.name||'').toLowerCase());
+        }
+      });
       FOOD_LIBRARY.length = 0;
       merged.forEach(function(f){ FOOD_LIBRARY.push(f); });
       try { localStorage.setItem('river_food_lib', JSON.stringify(FOOD_LIBRARY)); } catch(e) {}
-      console.log('[syncFoodLib] merged to ' + FOOD_LIBRARY.length + ' items (remote had ' + remoteLib.length + ')');
-      // Push merged result back so all devices stay in sync
       await syncFoodLibraryToSupabase();
+      console.log('[syncFoodLib] pushed merged (' + FOOD_LIBRARY.length + ' items) — local had new items');
+    } else {
+      // Remote is superset or equal — replace local with remote (respects remote deletes)
+      FOOD_LIBRARY.length = 0;
+      remoteLib.forEach(function(f){ FOOD_LIBRARY.push(f); });
+      try { localStorage.setItem('river_food_lib', JSON.stringify(FOOD_LIBRARY)); } catch(e) {}
+      console.log('[syncFoodLib] replaced local with remote (' + FOOD_LIBRARY.length + ' items)');
     }
   } catch(e) { console.warn('[syncFoodLib pull]', e.message); }
 }
@@ -6484,7 +6496,7 @@ function searchFood(q) {
           '<span style="color:rgba(220,100,60,0.7)">&#8220;' + q + '&#8221;</span> — not in library' +
         '</div>' +
         // Carbs row — with per-100 / per-serving toggle
-        '<div style="display:flex;gap:6px;margin-bottom:6px;align-items:center">' +
+        '<div style="display:flex;gap:6px;margin-bottom:8px;align-items:flex-start">' +
           '<div style="flex:1">' +
             '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:3px">' +
               '<div style="font-family:\'DM Mono\',monospace;font-size:7px;letter-spacing:1px;text-transform:uppercase;color:rgba(100,200,160,0.5)" id="inline-carbs-lbl">carbs per 100g</div>' +
@@ -6497,31 +6509,44 @@ function searchFood(q) {
               ' style="width:100%;padding:8px 10px;border-radius:8px;border:1px solid rgba(62,180,120,0.4);background:rgba(62,180,120,0.07);font-family:monospace;font-size:14px;color:rgba(100,220,160,0.95);text-align:center;outline:none;box-sizing:border-box"' +
               ' oninput="_updateInlinePreview()" onkeydown="return _numericOnly(event)">' +
           '</div>' +
-          '<button onclick="openPhotoFood()" title="scan label" style="width:36px;height:64px;border-radius:8px;border:1px solid rgba(255,255,255,0.1);background:rgba(255,255,255,0.04);font-size:15px;cursor:pointer;flex-shrink:0;color:rgba(180,200,220,0.6)">📷</button>' +
+          '<button onclick="openPhotoFood()" title="scan label" style="width:36px;height:58px;border-radius:8px;border:1px solid rgba(255,255,255,0.1);background:rgba(255,255,255,0.04);font-size:15px;cursor:pointer;flex-shrink:0;color:rgba(180,200,220,0.6);margin-top:18px">📷</button>' +
         '</div>' +
-        // GI + weight row
-        '<div style="display:flex;gap:8px;margin-bottom:8px">' +
+        // GI + GL side by side (small, informational)
+        '<div style="display:flex;gap:8px;margin-bottom:10px">' +
           '<div style="flex:1">' +
-            '<div style="font-family:\'DM Mono\',monospace;font-size:7px;letter-spacing:1px;text-transform:uppercase;color:rgba(200,160,60,0.5);margin-bottom:3px">GI <span style="text-transform:none;opacity:0.6">est. — ' + estGIObj.basis + '</span></div>' +
+            '<div style="font-family:\'DM Mono\',monospace;font-size:7px;text-transform:uppercase;color:rgba(200,160,60,0.5);margin-bottom:3px;cursor:help" title="Glycaemic Index — how fast this food raises blood sugar (0–100). Higher = faster spike.">' +
+              'GI <span style="opacity:0.5;text-transform:none">glycaemic index</span>' +
+            '</div>' +
             '<input id="inline-new-gi" type="number" min="0" max="100" step="1" inputmode="decimal" value="' + estGI + '"' +
-              ' style="width:100%;padding:8px 10px;border-radius:8px;border:1px solid rgba(200,160,60,0.3);background:rgba(200,160,60,0.05);font-family:monospace;font-size:14px;color:rgba(220,180,80,0.9);text-align:center;outline:none;box-sizing:border-box"' +
+              ' style="width:100%;padding:7px 10px;border-radius:8px;border:1px solid rgba(200,160,60,0.3);background:rgba(200,160,60,0.05);font-family:monospace;font-size:13px;color:rgba(220,180,80,0.9);text-align:center;outline:none;box-sizing:border-box"' +
               ' oninput="_updateInlinePreview()" onkeydown="return _numericOnly(event)">' +
+            '<div style="font-family:\'DM Mono\',monospace;font-size:6.5px;color:rgba(200,160,60,0.4);margin-top:2px">est. — ' + estGIObj.basis + '</div>' +
           '</div>' +
           '<div style="flex:1">' +
-            '<div style="font-family:\'DM Mono\',monospace;font-size:7px;letter-spacing:1px;text-transform:uppercase;color:rgba(160,180,200,0.5);margin-bottom:3px">weight to add (g)</div>' +
-            '<input id="inline-new-grams" type="number" min="0" max="2000" step="1" inputmode="decimal" placeholder="g"' +
-              ' style="width:100%;padding:8px 10px;border-radius:8px;border:1px solid rgba(255,255,255,0.15);background:rgba(255,255,255,0.05);font-family:monospace;font-size:14px;color:rgba(220,235,250,0.85);text-align:center;outline:none;box-sizing:border-box"' +
-              ' oninput="_updateInlinePreview()" onkeydown="return _numericOnly(event)">' +
+            '<div style="font-family:\'DM Mono\',monospace;font-size:7px;text-transform:uppercase;color:rgba(200,160,60,0.5);margin-bottom:3px;cursor:help" title="Glycaemic Load — GI × carbs in this portion ÷ 100. Combines speed and quantity. Under 10 = low impact, 10–20 = medium, 20+ = high.">' +
+              'GL <span style="opacity:0.5;text-transform:none">glycaemic load</span>' +
+            '</div>' +
+            '<div id="inline-gl-display" style="width:100%;padding:7px 10px;border-radius:8px;border:1px solid rgba(200,160,60,0.15);background:rgba(200,160,60,0.03);font-family:monospace;font-size:13px;color:rgba(220,180,80,0.6);text-align:center;box-sizing:border-box">—</div>' +
           '</div>' +
         '</div>' +
-        '<div id="inline-new-preview" style="font-family:\'DM Mono\',monospace;font-size:11px;color:rgba(100,200,160,0.8);margin-bottom:8px;min-height:16px;font-weight:500"></div>' +
-        '<div style="display:flex;gap:7px">' +
+        // Weight + CTA — the primary action row
+        '<div style="display:flex;gap:8px;align-items:flex-end;margin-bottom:8px">' +
+          '<div style="flex:1">' +
+            '<div style="font-family:\'DM Mono\',monospace;font-size:7px;letter-spacing:1px;text-transform:uppercase;color:rgba(160,180,200,0.6);margin-bottom:3px">grams to add now</div>' +
+            '<input id="inline-new-grams" type="number" min="0" max="2000" step="1" inputmode="decimal" placeholder="e.g. 80"' +
+              ' style="width:100%;padding:10px;border-radius:8px;border:1.5px solid rgba(62,180,120,0.5);background:rgba(62,180,120,0.06);font-family:monospace;font-size:16px;color:rgba(220,235,250,0.9);text-align:center;outline:none;box-sizing:border-box"' +
+              ' oninput="_updateInlinePreview()" onkeydown="return _numericOnly(event)">' +
+            '<div id="inline-new-preview" style="font-family:\'DM Mono\',monospace;font-size:10px;color:rgba(100,200,160,0.8);margin-top:4px;min-height:14px;font-weight:500"></div>' +
+          '</div>' +
           '<button onclick="_saveInlineNewFood(\'' + q.replace(/'/g,"\\'") + '\')" ' +
-            'style="flex:1;padding:9px;border-radius:9px;border:1px solid rgba(62,180,120,0.4);background:rgba(62,180,120,0.1);font-family:\'Fraunces\',serif;font-style:italic;font-weight:200;font-size:14px;color:rgba(100,220,160,0.9);cursor:pointer;touch-action:manipulation">add to meal + save</button>' +
+            'style="flex-shrink:0;padding:10px 14px;border-radius:9px;border:1px solid rgba(62,180,120,0.4);background:rgba(62,180,120,0.1);font-family:\'Fraunces\',serif;font-style:italic;font-weight:200;font-size:13px;color:rgba(100,220,160,0.9);cursor:pointer;touch-action:manipulation;white-space:nowrap;height:42px">add + save</button>' +
+        '</div>' +
+        // Secondary actions
+        '<div style="display:flex;gap:6px">' +
           '<button onclick="addCustomFood(\'' + q.replace(/'/g,"\\'") + '\')" ' +
-            'style="padding:9px 12px;border-radius:9px;border:1px solid rgba(255,255,255,0.1);background:transparent;font-family:monospace;font-size:9px;color:rgba(160,180,200,0.5);cursor:pointer;touch-action:manipulation">more options</button>' +
+            'style="flex:1;padding:7px;border-radius:8px;border:1px solid rgba(255,255,255,0.08);background:transparent;font-family:monospace;font-size:9px;color:rgba(160,180,200,0.4);cursor:pointer;touch-action:manipulation">more options…</button>' +
           '<button onclick="document.getElementById(\'food-results\').style.display=\'none\';document.getElementById(\'food-search\').value=\'\';" ' +
-            'style="padding:9px 12px;border-radius:9px;border:1px solid rgba(255,255,255,0.08);background:transparent;font-family:monospace;font-size:12px;color:rgba(140,160,180,0.4);cursor:pointer;touch-action:manipulation">✕</button>' +
+            'style="padding:7px 12px;border-radius:8px;border:1px solid rgba(255,255,255,0.06);background:transparent;font-family:monospace;font-size:11px;color:rgba(140,160,180,0.35);cursor:pointer;touch-action:manipulation">✕</button>' +
         '</div>' +
       '</div>';
 
@@ -6580,20 +6605,25 @@ function _updateInlinePreview() {
   var gi      = parseInt((document.getElementById('inline-new-gi')||{}).value)||0;
   var grams   = parseFloat((document.getElementById('inline-new-grams')||{}).value)||0;
   var prev    = document.getElementById('inline-new-preview');
-  if (!prev) return;
+  var glBox   = document.getElementById('inline-gl-display');
 
   var c100 = c100raw;
-  // If in per-serving mode and weight filled, back-calc c100 for preview
   if (_inlineMode === 'perServ' && grams > 0 && c100raw > 0) {
     c100 = c100raw / grams * 100;
   }
 
   if (c100raw > 0 && grams > 0) {
     var carbsThis = _inlineMode === 'perServ' ? c100raw : c100 * grams / 100;
-    var gl = gi * carbsThis / 100;
-    prev.textContent = carbsThis.toFixed(1) + 'g carbs this portion · GL ' + gl.toFixed(1);
+    var gl = gi > 0 ? gi * carbsThis / 100 : null;
+    if (prev) prev.textContent = carbsThis.toFixed(1) + 'g carbs this portion';
+    if (glBox) glBox.textContent = gl !== null ? gl.toFixed(1) : '—';
+  } else if (c100raw > 0 && gi > 0) {
+    // c100 filled, no weight yet — show GL will appear once weight entered
+    if (prev) prev.textContent = '';
+    if (glBox) glBox.textContent = '—';
   } else {
-    prev.textContent = '';
+    if (prev) prev.textContent = '';
+    if (glBox) glBox.textContent = '—';
   }
 }
 
@@ -6971,19 +7001,28 @@ function _showFoodAIStatus(msg) {
     '@keyframes rv-orbit{from{transform:rotate(0deg) translateX(28px) rotate(0deg)}to{transform:rotate(360deg) translateX(28px) rotate(-360deg)}}' +
     '@keyframes rv-orbit2{from{transform:rotate(120deg) translateX(28px) rotate(-120deg)}to{transform:rotate(480deg) translateX(28px) rotate(-480deg)}}' +
     '@keyframes rv-orbit3{from{transform:rotate(240deg) translateX(28px) rotate(-240deg)}to{transform:rotate(600deg) translateX(28px) rotate(-600deg)}}' +
+    '@keyframes rv-orb-pulse{0%,100%{transform:scale(1);opacity:0.9}50%{transform:scale(1.5);opacity:1}}' +
+    '@keyframes rv-orb-pulse2{0%,100%{transform:scale(1);opacity:0.8}50%{transform:scale(1.6);opacity:1}}' +
+    '@keyframes rv-orb-pulse3{0%,100%{transform:scale(0.9);opacity:0.75}50%{transform:scale(1.4);opacity:1}}' +
     '</style>' +
     '<div style="position:relative;width:64px;height:64px;margin-bottom:20px">' +
       '<div style="position:absolute;inset:0;border-radius:50%;background:radial-gradient(circle,rgba(62,180,120,0.15),transparent);display:flex;align-items:center;justify-content:center">' +
         '<div style="width:12px;height:12px;border-radius:50%;background:rgba(62,180,120,0.5);box-shadow:0 0 10px rgba(62,180,120,0.4)"></div>' +
       '</div>' +
       '<div style="position:absolute;inset:0;display:flex;align-items:center;justify-content:center">' +
-        '<div style="width:8px;height:8px;border-radius:50%;background:rgba(100,220,200,0.9);box-shadow:0 0 8px rgba(100,220,200,0.6);animation:rv-orbit 1.1s linear infinite"></div>' +
+        '<div style="width:8px;height:8px;border-radius:50%;background:rgba(100,220,200,0.9);box-shadow:0 0 8px rgba(100,220,200,0.6);animation:rv-orbit 1.1s linear infinite">' +
+          '<div style="width:100%;height:100%;border-radius:50%;animation:rv-orb-pulse 1.1s ease-in-out infinite"></div>' +
+        '</div>' +
       '</div>' +
       '<div style="position:absolute;inset:0;display:flex;align-items:center;justify-content:center">' +
-        '<div style="width:6px;height:6px;border-radius:50%;background:rgba(200,160,60,0.85);box-shadow:0 0 7px rgba(200,160,60,0.5);animation:rv-orbit2 1.1s linear infinite"></div>' +
+        '<div style="width:6px;height:6px;border-radius:50%;background:rgba(200,160,60,0.85);box-shadow:0 0 7px rgba(200,160,60,0.5);animation:rv-orbit2 1.1s linear infinite">' +
+          '<div style="width:100%;height:100%;border-radius:50%;animation:rv-orb-pulse2 1.4s ease-in-out infinite 0.3s"></div>' +
+        '</div>' +
       '</div>' +
       '<div style="position:absolute;inset:0;display:flex;align-items:center;justify-content:center">' +
-        '<div style="width:5px;height:5px;border-radius:50%;background:rgba(130,160,230,0.8);box-shadow:0 0 6px rgba(130,160,230,0.5);animation:rv-orbit3 1.1s linear infinite"></div>' +
+        '<div style="width:5px;height:5px;border-radius:50%;background:rgba(130,160,230,0.8);box-shadow:0 0 6px rgba(130,160,230,0.5);animation:rv-orbit3 1.1s linear infinite">' +
+          '<div style="width:100%;height:100%;border-radius:50%;animation:rv-orb-pulse3 1.2s ease-in-out infinite 0.6s"></div>' +
+        '</div>' +
       '</div>' +
     '</div>' +
     '<div style="font-family:\'DM Mono\',monospace;font-size:13px;color:rgba(180,220,200,0.85);letter-spacing:1px">' + msg + '</div>';
@@ -7080,39 +7119,39 @@ function _showPhotoConfirmCard(info) {
 
   card.innerHTML =
     // Header
-    '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px">' +
-      '<div style="display:flex;align-items:center;gap:8px">' +
-        '<div style="font-family:monospace;font-size:8px;letter-spacing:1.5px;text-transform:uppercase;color:rgba(62,200,140,0.5)">📷 scanned</div>' +
-      '</div>' +
+    '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px">' +
+      '<div style="font-family:monospace;font-size:8px;letter-spacing:1.5px;text-transform:uppercase;color:rgba(62,200,140,0.5)">📷 scanned</div>' +
       '<button onclick="document.getElementById(\'photo-confirm-card\').remove()" style="background:none;border:none;font-size:18px;color:rgba(180,200,220,0.3);cursor:pointer;padding:4px;touch-action:manipulation">✕</button>' +
     '</div>' +
 
-    // Food name
-    '<div style="font-family:\'Fraunces\',serif;font-style:italic;font-weight:200;font-size:20px;color:rgba(220,235,250,0.95);margin-bottom:4px">' + info.name + '</div>' +
+    // Food name — bigger, clearer
+    '<div style="font-family:\'Fraunces\',serif;font-style:italic;font-weight:200;font-size:22px;color:rgba(220,235,250,0.95);margin-bottom:2px">' + info.name + '</div>' +
 
-    // c100 as secondary note
-    '<div style="font-family:\'DM Mono\',monospace;font-size:10px;color:rgba(100,200,160,0.55);margin-bottom:12px">' +
-      info.c100 + 'g carbs per 100g &nbsp;·&nbsp; GI <span style="color:' + giCol + '">' + gi + giEst + '</span>' +
+    // GI + GL side by side, with tooltips — secondary metadata
+    '<div style="display:flex;gap:10px;align-items:center;margin-bottom:10px;flex-wrap:nowrap">' +
+      '<span style="font-family:\'DM Mono\',monospace;font-size:11px;color:rgba(100,200,160,0.6);cursor:help" title="Carbohydrate content per 100g of this food">' + info.c100 + 'g carbs/100g</span>' +
+      '<span style="color:rgba(100,200,160,0.3)">·</span>' +
+      '<span style="font-family:\'DM Mono\',monospace;font-size:11px;color:' + giCol + ';cursor:help" title="Glycaemic Index — how fast this food raises blood sugar (0–100). Higher = faster. ' + gi + (giEst ? ' — estimated from food type' : '') + '">GI ' + gi + giEst + '</span>' +
+      '<span style="color:rgba(100,200,160,0.3)">·</span>' +
+      '<span id="photo-gl-badge" style="font-family:\'DM Mono\',monospace;font-size:11px;color:rgba(200,160,60,0.7);cursor:help" title="Glycaemic Load — GI × carbs in this portion ÷ 100. Tells you the actual blood sugar impact of this serving.">GL —</span>' +
     '</div>' +
 
     weightEstWarning +
 
-    // Weight — the primary editable input
-    '<div style="margin-bottom:10px">' +
-      '<div style="font-family:\'DM Mono\',monospace;font-size:8px;letter-spacing:1px;text-transform:uppercase;color:rgba(160,180,200,0.5);margin-bottom:6px">weight to add (g)</div>' +
-      '<input id="photo-confirm-grams" type="number" inputmode="decimal" min="1" max="2000" step="1" value="' + gServ + '"' +
-        ' style="width:100%;padding:13px;border-radius:10px;border:2px solid rgba(62,180,120,0.35);background:rgba(62,180,120,0.06);font-family:monospace;font-size:22px;color:rgba(100,220,160,0.95);text-align:center;outline:none;box-sizing:border-box"' +
-        ' oninput="_updatePhotoConfirmPreview(' + c100 + ',' + gi + ')" onkeydown="return _numericOnly(event)">' +
+    // Weight — primary input + CTA on same row
+    '<div style="display:flex;gap:8px;align-items:flex-end;margin-bottom:8px">' +
+      '<div style="flex:1">' +
+        '<div style="font-family:\'DM Mono\',monospace;font-size:8px;letter-spacing:1px;text-transform:uppercase;color:rgba(160,180,200,0.55);margin-bottom:5px">grams to add now</div>' +
+        '<input id="photo-confirm-grams" type="number" inputmode="decimal" min="1" max="2000" step="1" value="' + gServ + '"' +
+          ' style="width:100%;padding:12px;border-radius:10px;border:2px solid rgba(62,180,120,0.35);background:rgba(62,180,120,0.06);font-family:monospace;font-size:20px;color:rgba(100,220,160,0.95);text-align:center;outline:none;box-sizing:border-box"' +
+          ' oninput="_updatePhotoConfirmPreview(' + c100 + ',' + gi + ')" onkeydown="return _numericOnly(event)">' +
+        '<div id="photo-confirm-preview" style="font-family:\'DM Mono\',monospace;font-size:11px;color:rgba(100,220,160,0.75);text-align:center;margin-top:4px;min-height:16px;font-weight:500"></div>' +
+      '</div>' +
+      '<button id="photo-confirm-save" style="flex-shrink:0;padding:12px 16px;border-radius:10px;border:1px solid rgba(62,180,120,0.4);background:rgba(62,180,120,0.12);font-family:\'Fraunces\',serif;font-style:italic;font-weight:200;font-size:16px;color:rgba(100,220,160,0.95);cursor:pointer;touch-action:manipulation;white-space:nowrap;height:50px">add to meal</button>' +
     '</div>' +
 
-    // Live carbs + GL — the answer
-    '<div id="photo-confirm-preview" style="font-family:\'DM Mono\',monospace;font-size:16px;color:rgba(100,220,160,0.9);text-align:center;margin-bottom:16px;font-weight:500;min-height:22px"></div>' +
-
-    // Actions
-    '<div style="display:flex;gap:8px">' +
-      '<button id="photo-confirm-save" style="flex:2;padding:13px;border-radius:10px;border:1px solid rgba(62,180,120,0.4);background:rgba(62,180,120,0.12);font-family:\'Fraunces\',serif;font-style:italic;font-weight:200;font-size:17px;color:rgba(100,220,160,0.95);cursor:pointer;touch-action:manipulation">add to meal</button>' +
-      '<button id="photo-confirm-retake" style="padding:13px 16px;border-radius:10px;border:1px solid rgba(255,255,255,0.1);background:transparent;font-family:monospace;font-size:10px;color:rgba(140,160,180,0.45);cursor:pointer;touch-action:manipulation">retake</button>' +
-    '</div>';
+    // Retake — subdued
+    '<button id="photo-confirm-retake" style="width:100%;padding:8px;border-radius:8px;border:1px solid rgba(255,255,255,0.07);background:transparent;font-family:monospace;font-size:9px;color:rgba(140,160,180,0.35);cursor:pointer;touch-action:manipulation">retake photo</button>';
 
   document.body.appendChild(card);
   requestAnimationFrame(function(){ card.style.transform = 'translateY(0)'; });
@@ -7151,14 +7190,16 @@ function _showPhotoConfirmCard(info) {
 function _updatePhotoConfirmPreview(c100, gi) {
   var gramsEl = document.getElementById('photo-confirm-grams');
   var prevEl  = document.getElementById('photo-confirm-preview');
-  if (!prevEl) return;
+  var glBadge = document.getElementById('photo-gl-badge');
   var grams = parseFloat((gramsEl||{}).value) || 0;
   if (grams > 0 && c100 > 0) {
     var carbs = c100 * grams / 100;
     var gl    = gi * carbs / 100;
-    prevEl.textContent = carbs.toFixed(1) + 'g carbs · GL ' + gl.toFixed(1);
+    if (prevEl)  prevEl.textContent  = carbs.toFixed(1) + 'g carbs this portion';
+    if (glBadge) glBadge.textContent = 'GL ' + gl.toFixed(1);
   } else {
-    prevEl.textContent = '';
+    if (prevEl)  prevEl.textContent  = '';
+    if (glBadge) glBadge.textContent = 'GL —';
   }
 }
 
@@ -7544,8 +7585,9 @@ function addCustomFood(name) {
   giHeader.style.cssText = 'display:flex;align-items:center;justify-content:space-between;margin-bottom:6px';
 
   var giLblEl = document.createElement('div');
-  giLblEl.style.cssText = 'font-family:monospace;font-size:9px;letter-spacing:1px;text-transform:uppercase;color:var(--rv-text-secondary)';
+  giLblEl.style.cssText = 'font-family:monospace;font-size:9px;letter-spacing:1px;text-transform:uppercase;color:var(--rv-text-secondary);cursor:help';
   giLblEl.textContent = 'glycaemic index';
+  giLblEl.title = 'Glycaemic Index — how fast this food raises blood sugar relative to pure glucose (100). Low: <55, Medium: 55–70, High: >70.';
   giHeader.appendChild(giLblEl);
 
   var giCalcBadge = document.createElement('div');
@@ -7599,8 +7641,9 @@ function addCustomFood(name) {
   calcC.appendChild(calcCLbl); calcC.appendChild(calcCVal);
   var calcGL = document.createElement('div'); calcGL.style.flex = '1';
   var calcGLLbl = document.createElement('div');
-  calcGLLbl.style.cssText = 'font-family:monospace;font-size:7px;letter-spacing:1px;text-transform:uppercase;color:rgba(200,160,60,0.5);margin-bottom:3px';
+  calcGLLbl.style.cssText = 'font-family:monospace;font-size:7px;letter-spacing:1px;text-transform:uppercase;color:rgba(200,160,60,0.5);margin-bottom:3px;cursor:help';
   calcGLLbl.textContent = 'GL / serving';
+  calcGLLbl.title = 'Glycaemic Load = GI × carbs in this serving ÷ 100. Under 10 = low impact, 10–20 = medium, 20+ = high. More useful than GI alone — accounts for portion size.';
   var calcGLVal = document.createElement('div');
   calcGLVal.id = 'new-food-gl-serv';
   calcGLVal.style.cssText = 'font-family:monospace;font-size:18px;color:rgba(220,180,80,0.9)';
@@ -10607,6 +10650,22 @@ window.addEventListener('load', function() {
   }
   document.addEventListener('touchstart', _unlockAudio, {once:true, passive:true});
   document.addEventListener('click', _unlockAudio, {once:true});
+
+  // Intercept browser back button — River is a SPA, back should close any open overlay
+  // rather than navigating away to a 404.
+  history.pushState({river:true}, '', location.href);
+  window.addEventListener('popstate', function(e) {
+    // Re-push so the back button always has somewhere to go without leaving the app
+    history.pushState({river:true}, '', location.href);
+    // Close whatever is open: overlays, sheets, photo cards
+    var toClose = ['food-add-overlay','photo-confirm-card','food-ai-loader'];
+    toClose.forEach(function(id){ var el = document.getElementById(id); if(el) el.remove(); });
+    // Also close food results panel
+    var res = document.getElementById('food-results');
+    if (res) res.style.display = 'none';
+    var srch = document.getElementById('food-search');
+    if (srch) srch.value = '';
+  });
 });
 
 
