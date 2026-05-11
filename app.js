@@ -7049,14 +7049,33 @@ async function handleFoodPhoto(inputEl) {
   _showFoodAIStatus('reading photo…');
 
   try {
+    // ── Resize before encoding — prevents iOS OOM on full-res camera images ──
+    // Camera photos are often 4–8MB. We cap at 1024px longest side, quality 0.82.
+    // Claude Vision reads labels and whole foods fine at this resolution.
     var base64 = await new Promise(function(res, rej) {
-      var r = new FileReader();
-      r.onload = function() { res(r.result.split(',')[1]); };
-      r.onerror = function() { rej(new Error('Read failed')); };
-      r.readAsDataURL(file);
+      var img = new Image();
+      var objectUrl = URL.createObjectURL(file);
+      img.onload = function() {
+        URL.revokeObjectURL(objectUrl); // free immediately
+        var MAX = 1024;
+        var w = img.naturalWidth, h = img.naturalHeight;
+        if (w > MAX || h > MAX) {
+          var scale = MAX / Math.max(w, h);
+          w = Math.round(w * scale);
+          h = Math.round(h * scale);
+        }
+        var canvas = document.createElement('canvas');
+        canvas.width = w; canvas.height = h;
+        var ctx = canvas.getContext('2d');
+        ctx.drawImage(img, 0, 0, w, h);
+        var dataUrl = canvas.toDataURL('image/jpeg', 0.82);
+        res(dataUrl.split(',')[1]);
+      };
+      img.onerror = function() { URL.revokeObjectURL(objectUrl); rej(new Error('Image load failed')); };
+      img.src = objectUrl;
     });
 
-    var mediaType = file.type || 'image/jpeg';
+    var mediaType = 'image/jpeg'; // always jpeg after canvas re-encode
     var r = await fetch('https://orange-surf-6f98.john-king-uk.workers.dev/claude', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'anthropic-version': '2023-06-01' },
