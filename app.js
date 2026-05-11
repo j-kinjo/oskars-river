@@ -6452,8 +6452,58 @@ function searchFood(q) {
 
   if (matches.length === 0) {
     results.style.display='block';
-    results.innerHTML = '<div style="padding:10px 14px;font-family:\'DM Mono\',monospace;font-size:11px;color:rgba(180,200,220,0.5)">' +
-      'not found — <button onclick="addCustomFood(\'' + q.replace(/'/g,"\\'") + '\')" style="background:none;border:none;cursor:pointer;color:rgba(40,85,200,0.7);font-family:\'DM Mono\',monospace;font-size:11px;text-decoration:underline">add custom</button></div>';
+    // ── 1e: Inline first-use capture — don't break the logging flow ──
+    var lq = q.toLowerCase();
+    var estCat = _categoryFromName(lq);
+    var estGIObj = _giFromCategory(estCat, lq);
+    var estGI = estGIObj.gi;
+    // Pre-fill weight from any gram field already set in the sheet
+    var existingGrams = '';
+    var gramEls = document.querySelectorAll('.item-grams-input');
+    if (gramEls.length > 0) existingGrams = gramEls[gramEls.length-1].value || '';
+
+    results.innerHTML =
+      '<div style="padding:12px 14px;border-bottom:1px solid rgba(255,255,255,0.06)">' +
+        '<div style="font-family:\'DM Mono\',monospace;font-size:10px;color:rgba(180,200,220,0.5);margin-bottom:8px">' +
+          '<span style="color:rgba(220,100,60,0.7)">&#8220;' + q + '&#8221;</span> — not in library. add it?' +
+        '</div>' +
+        '<div style="display:flex;gap:8px;margin-bottom:8px;align-items:center">' +
+          '<div style="flex:1">' +
+            '<div style="font-family:\'DM Mono\',monospace;font-size:7px;letter-spacing:1px;text-transform:uppercase;color:rgba(100,200,160,0.5);margin-bottom:3px">carbs/100g</div>' +
+            '<input id="inline-new-c100" type="number" min="0" max="100" step="0.1" inputmode="decimal" placeholder="e.g. 47"' +
+              'style="width:100%;padding:8px 10px;border-radius:8px;border:1px solid rgba(62,180,120,0.4);background:rgba(62,180,120,0.07);font-family:monospace;font-size:14px;color:rgba(100,220,160,0.95);text-align:center;outline:none;box-sizing:border-box" ' +
+              'oninput="_updateInlinePreview()">' +
+          '</div>' +
+          '<div style="width:36px;text-align:center">' +
+            '<button onclick="openPhotoFood()" title="photo" style="width:36px;height:36px;border-radius:8px;border:1px solid rgba(255,255,255,0.1);background:rgba(255,255,255,0.04);font-size:15px;cursor:pointer;display:flex;align-items:center;justify-content:center;color:rgba(180,200,220,0.6)">📷</button>' +
+          '</div>' +
+        '</div>' +
+        '<div style="display:flex;gap:8px;margin-bottom:8px">' +
+          '<div style="flex:1">' +
+            '<div style="font-family:\'DM Mono\',monospace;font-size:7px;letter-spacing:1px;text-transform:uppercase;color:rgba(200,160,60,0.5);margin-bottom:3px">GI</div>' +
+            '<input id="inline-new-gi" type="number" min="0" max="100" step="1" inputmode="decimal" value="' + estGI + '"' +
+              'style="width:100%;padding:8px 10px;border-radius:8px;border:1px solid rgba(200,160,60,0.3);background:rgba(200,160,60,0.05);font-family:monospace;font-size:14px;color:rgba(220,180,80,0.9);text-align:center;outline:none;box-sizing:border-box" ' +
+              'oninput="_updateInlinePreview()">' +
+            '<div style="font-family:\'DM Mono\',monospace;font-size:7px;color:rgba(200,160,60,0.45);margin-top:2px">est. — ' + estGIObj.basis + '</div>' +
+          '</div>' +
+          '<div style="flex:1">' +
+            '<div style="font-family:\'DM Mono\',monospace;font-size:7px;letter-spacing:1px;text-transform:uppercase;color:rgba(160,180,200,0.5);margin-bottom:3px">weight now (g)</div>' +
+            '<input id="inline-new-grams" type="number" min="0" max="2000" step="1" inputmode="decimal" value="' + (existingGrams||'') + '" placeholder="g"' +
+              'style="width:100%;padding:8px 10px;border-radius:8px;border:1px solid rgba(255,255,255,0.15);background:rgba(255,255,255,0.05);font-family:monospace;font-size:14px;color:rgba(220,235,250,0.85);text-align:center;outline:none;box-sizing:border-box" ' +
+              'oninput="_updateInlinePreview()">' +
+          '</div>' +
+        '</div>' +
+        '<div id="inline-new-preview" style="font-family:\'DM Mono\',monospace;font-size:10px;color:rgba(100,200,160,0.7);margin-bottom:8px;min-height:14px"></div>' +
+        '<div style="display:flex;gap:7px">' +
+          '<button onclick="_saveInlineNewFood(\'' + q.replace(/'/g,"\\'") + '\')" ' +
+            'style="flex:1;padding:9px;border-radius:9px;border:1px solid rgba(62,180,120,0.4);background:rgba(62,180,120,0.1);font-family:\'Fraunces\',serif;font-style:italic;font-weight:200;font-size:14px;color:rgba(100,220,160,0.9);cursor:pointer;touch-action:manipulation">add to meal + save</button>' +
+          '<button onclick="addCustomFood(\'' + q.replace(/'/g,"\\'") + '\')" ' +
+            'style="padding:9px 12px;border-radius:9px;border:1px solid rgba(255,255,255,0.1);background:transparent;font-family:monospace;font-size:9px;color:rgba(160,180,200,0.5);cursor:pointer;touch-action:manipulation">full form</button>' +
+        '</div>' +
+      '</div>';
+
+    // Focus carbs field after render
+    setTimeout(function(){ var c = document.getElementById('inline-new-c100'); if(c) c.focus(); }, 80);
     return;
   }
 
@@ -6471,7 +6521,51 @@ function searchFood(q) {
   }).join('');
 }
 
-// ── VOICE / PHOTO / URL FOOD INPUT ────────────────────────────────────────────
+// ── Inline first-use capture helpers (1e) ─────────────────────────────────
+function _updateInlinePreview() {
+  var c100  = parseFloat((document.getElementById('inline-new-c100')||{}).value)||0;
+  var gi    = parseInt((document.getElementById('inline-new-gi')||{}).value)||0;
+  var grams = parseFloat((document.getElementById('inline-new-grams')||{}).value)||0;
+  var prev  = document.getElementById('inline-new-preview');
+  if (!prev) return;
+  if (c100 > 0 && grams > 0) {
+    var carbs = c100 * grams / 100;
+    var gl    = gi * carbs / 100;
+    prev.textContent = carbs.toFixed(1) + 'g carbs · GL ' + gl.toFixed(1);
+  } else {
+    prev.textContent = '';
+  }
+}
+
+function _saveInlineNewFood(name) {
+  var c100  = parseFloat((document.getElementById('inline-new-c100')||{}).value)||0;
+  var gi    = parseInt((document.getElementById('inline-new-gi')||{}).value)||55;
+  var grams = parseFloat((document.getElementById('inline-new-grams')||{}).value)||0;
+  if (!c100) { showToast('enter carbs per 100g first'); document.getElementById('inline-new-c100').focus(); return; }
+  if (!grams) { showToast('enter weight in grams'); document.getElementById('inline-new-grams').focus(); return; }
+
+  var lname = name.toLowerCase();
+  var cat   = _categoryFromName(lname);
+  var f = {name:name, c100:c100, gi:gi, cat:cat, g_serv:grams, g_each:grams};
+
+  // Save to library as side-effect
+  var all = FOOD_DB.concat(FOOD_LIBRARY);
+  if (!all.find(function(x){ return x.name.toLowerCase() === lname; })) {
+    FOOD_LIBRARY.push(f);
+    saveFoodLibrary();
+  }
+
+  // Add to meal — don't leave logging context
+  var results = document.getElementById('food-results');
+  if (results) results.style.display = 'none';
+  var search = document.getElementById('food-search');
+  if (search) search.value = '';
+
+  addFoodItemGrams(name, grams);
+  showToast('added: ' + name);
+}
+
+
 
 // ── Voice input (Web Speech API, hold-to-speak) ──
 var _voiceRecog = null;
@@ -6823,7 +6917,7 @@ async function handleFoodPhoto(inputEl) {
   if (!file) return;
   inputEl.value = ''; // reset so same file can be picked again
 
-  _showFoodAIStatus('reading label…');
+  _showFoodAIStatus('reading photo…');
 
   try {
     var base64 = await new Promise(function(res, rej) {
@@ -6839,13 +6933,13 @@ async function handleFoodPhoto(inputEl) {
       headers: { 'Content-Type': 'application/json', 'anthropic-version': '2023-06-01' },
       body: JSON.stringify({
         model: 'claude-sonnet-4-5',
-        max_tokens: 400,
-        system: 'You extract nutritional information from food packaging photos and nutrition labels. Return ONLY a JSON object, no markdown, no explanation. Fields: {"name": "product name", "c100": carbs_per_100g_as_number, "gi": estimated_gi_as_number_or_null, "g_serv": serving_size_grams_as_number_or_null, "sugar": sugars_per_100g_as_number_or_null}. Use the "Carbohydrate" or "Total Carbohydrate" row (not "of which sugars" for c100). Estimate GI from the food type if not shown: white bread ~75, wholemeal ~55, pasta ~48, biscuits ~70, oats ~55, fruit ~45. If image is not a food label, return {"error": "not a label"}.',
+        max_tokens: 500,
+        system: 'You extract nutritional information from food photos. Return ONLY a JSON object, no markdown, no explanation.\n\nFor NUTRITION LABEL photos: read the label directly.\nFor WHOLE FOOD photos (fruit, vegetables, bread, plate of food, etc.): estimate from known nutritional values. Use visual cues (hand for scale, plate size, reference objects) to estimate weight. Set weight_estimated:true.\n\nFields: {"name":"product or food name","c100":carbs_per_100g_as_number,"gi":estimated_gi_as_number,"g_serv":serving_size_grams_as_number_or_null,"sugar":sugars_per_100g_as_number_or_null,"weight_estimated":false,"cat":"bread|cereal|pasta|fruit|dairy|protein|snack|hypo|drink|main|custom","note":"brief context e.g. medium apple estimated 140g"}.\n\nUse "Carbohydrate" row for c100 (not sugars). Estimate GI from food type: white bread~75, wholemeal~55, pasta~48, biscuits~70, oats~55, fruit~45, jelly sweets~95, glucose tablets~100, milk~35, potato~78.\n\nIf image is completely unreadable: return {"error":"cannot read"}.',
         messages: [{
           role: 'user',
           content: [
             { type: 'image', source: { type: 'base64', media_type: mediaType, data: base64 } },
-            { type: 'text', text: 'Extract nutritional info from this food label.' }
+            { type: 'text', text: 'Extract nutritional info. If this is a whole food rather than a label, estimate weight from visual cues and use known nutritional values.' }
           ]
         }]
       })
@@ -6860,17 +6954,92 @@ async function handleFoodPhoto(inputEl) {
     var info = JSON.parse(clean.slice(firstBrace, lastBrace+1));
     _hideFoodAIStatus();
 
-    if (info.error) { showToast('No label found — try a clearer photo'); return; }
-    if (!info.name || !info.c100) { showToast('Could not read label — try again'); return; }
+    if (info.error) { showToast('Could not read photo — try again'); return; }
+    if (!info.name || !info.c100) { showToast('Could not identify food — try again'); return; }
 
-    // Pre-populate add food modal with extracted values
-    _photoFoodData = info;
-    addCustomFood(info.name);
+    // Show compact confirm card (1c) — one tap to save, edit details if wrong
+    _showPhotoConfirmCard(info);
   } catch(err) {
     _hideFoodAIStatus();
     console.warn('[photo food] error:', err);
-    showToast('Could not read label — try again');
+    showToast('Could not read photo — try again');
   }
+}
+
+// ── Photo → compact confirm card (1c) ────────────────────────────────────────
+// One tap from photo to saved. Edit details only if something looks wrong.
+function _showPhotoConfirmCard(info) {
+  var ex = document.getElementById('photo-confirm-card');
+  if (ex) ex.remove();
+
+  var gServ   = info.g_serv || 100;
+  var carbsS  = Math.round(info.c100 * gServ / 100 * 10) / 10;
+  var gi      = info.gi || _giFromCategory(info.cat || 'custom', (info.name||'').toLowerCase()).gi;
+  var gl      = Math.round(gi * carbsS / 100 * 10) / 10;
+  var giEst   = info.gi ? '' : ' (est.)';
+  var giCol   = gi >= 70 ? 'rgba(210,80,40,0.85)' : gi >= 55 ? 'rgba(200,140,30,0.85)' : 'rgba(60,160,90,0.85)';
+  var weightNote = info.weight_estimated
+    ? '<div style="font-family:monospace;font-size:9px;color:rgba(200,160,60,0.7);margin-top:4px">⚠ weight estimated from photo — tap edit to adjust</div>'
+    : '';
+  var contextNote = info.note
+    ? '<div style="font-family:monospace;font-size:9px;color:rgba(160,180,200,0.5);margin-top:3px">' + info.note + '</div>'
+    : '';
+
+  var card = document.createElement('div');
+  card.id = 'photo-confirm-card';
+  card.style.cssText = 'position:fixed;bottom:0;left:0;right:0;z-index:90;padding:16px 20px 32px;background:var(--rv-panel-bg);backdrop-filter:blur(16px);border-top:1px solid var(--rv-panel-border);transform:translateY(100%);transition:transform .25s ease';
+
+  card.innerHTML =
+    '<div style="font-family:monospace;font-size:8px;letter-spacing:1.5px;text-transform:uppercase;color:rgba(62,200,140,0.5);margin-bottom:8px">📷 scanned</div>' +
+    '<div style="font-family:\'Fraunces\',serif;font-style:italic;font-weight:200;font-size:20px;color:rgba(220,235,250,0.95);margin-bottom:4px">' + info.name + '</div>' +
+    '<div style="display:flex;gap:10px;align-items:baseline;margin-bottom:4px;flex-wrap:wrap">' +
+      '<span style="font-family:monospace;font-size:12px;color:rgba(100,220,160,0.8)">' + info.c100 + 'g carbs/100g</span>' +
+      '<span style="font-family:monospace;font-size:11px;color:' + giCol + '">GI ' + gi + giEst + '</span>' +
+      '<span style="font-family:monospace;font-size:11px;color:rgba(180,200,220,0.5)">serving: ' + gServ + 'g</span>' +
+    '</div>' +
+    '<div style="display:flex;gap:14px;align-items:baseline;margin-bottom:8px">' +
+      '<span style="font-family:monospace;font-size:14px;color:rgba(100,220,160,0.9)">' + carbsS + 'g carbs/serving</span>' +
+      '<span style="font-family:monospace;font-size:12px;color:rgba(200,160,60,0.8)">GL ' + gl + '</span>' +
+    '</div>' +
+    weightNote + contextNote +
+    '<div style="display:flex;gap:8px;margin-top:14px">' +
+      '<button id="photo-confirm-save" style="flex:2;padding:12px;border-radius:10px;border:1px solid rgba(62,180,120,0.4);background:rgba(62,180,120,0.12);font-family:\'Fraunces\',serif;font-style:italic;font-weight:200;font-size:16px;color:rgba(100,220,160,0.95);cursor:pointer;touch-action:manipulation">confirm & save</button>' +
+      '<button id="photo-confirm-edit" style="flex:1;padding:12px;border-radius:10px;border:1px solid rgba(255,255,255,0.12);background:transparent;font-family:monospace;font-size:10px;color:rgba(180,200,220,0.6);cursor:pointer;touch-action:manipulation">edit details</button>' +
+      '<button id="photo-confirm-retake" style="padding:12px 14px;border-radius:10px;border:1px solid rgba(255,255,255,0.08);background:transparent;font-family:monospace;font-size:10px;color:rgba(140,160,180,0.4);cursor:pointer;touch-action:manipulation">retake</button>' +
+    '</div>';
+
+  document.body.appendChild(card);
+  requestAnimationFrame(function(){ card.style.transform = 'translateY(0)'; });
+
+  // confirm & save — save to library + add to meal
+  document.getElementById('photo-confirm-save').onclick = function() {
+    card.remove();
+    var cat = info.cat || _categoryFromName((info.name||'').toLowerCase());
+    var f = {name:info.name, c100:info.c100, gi:gi, cat:cat};
+    if (gServ !== 100) { f.g_serv = gServ; f.g_each = gServ; }
+    var all = FOOD_DB.concat(FOOD_LIBRARY);
+    var existing = all.find(function(x){ return x.name.toLowerCase() === info.name.toLowerCase(); });
+    if (!existing) { FOOD_LIBRARY.push(f); saveFoodLibrary(); }
+    addFoodItemGrams(info.name, gServ);
+    showToast('added: ' + info.name);
+  };
+
+  // edit details — drop into full form pre-filled
+  document.getElementById('photo-confirm-edit').onclick = function() {
+    card.remove();
+    _photoFoodData = {c100:info.c100, gi:gi, g_serv:gServ, cat:info.cat||_categoryFromName((info.name||'').toLowerCase())};
+    addCustomFood(info.name);
+  };
+
+  // retake — dismiss and re-trigger photo input
+  document.getElementById('photo-confirm-retake').onclick = function() {
+    card.remove();
+    var inp = document.getElementById('food-photo-input');
+    if (inp) inp.click();
+  };
+
+  // Tap outside to dismiss
+  card.addEventListener('click', function(e){ if(e.target===card) card.remove(); });
 }
 
 var _photoFoodData = null; // set by handleFoodPhoto, consumed by addCustomFood
@@ -7060,13 +7229,58 @@ function giNarrative(gi, c100) {
 // Track which input mode is active: 'per100' or 'perServing'
 var _addFoodMode = 'per100';
 
+// ── Category auto-detect from food name ──────────────────────────────────
+function _categoryFromName(nameLower) {
+  if (/bread|toast|wrap|pitta|pita|naan|bagel|baguette|roll|bun|sourdough|rye|seeded/.test(nameLower)) return 'bread';
+  if (/cereal|cornflake|weetabix|muesli|granola|bran|cheerio|shreddies/.test(nameLower)) return 'cereal';
+  if (/pasta|spaghetti|noodle|macaroni|penne|fusilli|lasagne/.test(nameLower)) return 'pasta';
+  if (/rice|risotto|couscous/.test(nameLower)) return 'cereal';
+  if (/potato|chips|fries|parsnip|sweet.potato/.test(nameLower)) return 'main';
+  if (/oat|porridge/.test(nameLower)) return 'cereal';
+  if (/apple|pear|banana|orange|mango|grape|berry|fruit/.test(nameLower)) return 'fruit';
+  if (/milk|yoghurt|yogurt|cheese|dairy|cream/.test(nameLower)) return 'dairy';
+  if (/chicken|beef|pork|fish|egg|meat|bacon|ham|salmon|tuna/.test(nameLower)) return 'protein';
+  if (/biscuit|cookie|cake|chocolate|crisp|quaver|snack|bar/.test(nameLower)) return 'snack';
+  if (/jelly|gummy|glucose|dextrose|dextro|lucozade|jelly.bean|jelly.baby|vitamin/.test(nameLower)) return 'hypo';
+  if (/juice|drink|squash|cola|fizzy|ribena|smoothie/.test(nameLower)) return 'drink';
+  return 'custom';
+}
+
+// GI estimate by category — returns {gi, basis} for the estimate label
+function _giFromCategory(cat, nameLower) {
+  var map = {
+    bread:   {gi: 65, basis: 'starchy bread'},
+    cereal:  {gi: 70, basis: 'refined grain cereal'},
+    pasta:   {gi: 48, basis: 'pasta (slow starch)'},
+    fruit:   {gi: 45, basis: 'typical fruit'},
+    protein: {gi: 15, basis: 'protein — minimal carbs'},
+    dairy:   {gi: 35, basis: 'dairy'},
+    snack:   {gi: 72, basis: 'processed snack'},
+    hypo:    {gi: 95, basis: 'fast sugar — hypo treatment'},
+    drink:   {gi: 65, basis: 'sugary drink'},
+    main:    {gi: 60, basis: 'mixed meal'},
+    custom:  {gi: 55, basis: 'estimate — confirm if known'},
+  };
+  // Override for known specific foods
+  if (/oat|porridge/.test(nameLower))       return {gi: 55, basis: 'oats (slow release)'};
+  if (/jelly.bab|jelly.bean|glucose|dextrose|lucozade/.test(nameLower)) return {gi: 95, basis: 'pure fast sugar'};
+  if (/sweet.potato/.test(nameLower))        return {gi: 44, basis: 'sweet potato (lower GI)'};
+  if (/basmati/.test(nameLower))             return {gi: 58, basis: 'basmati (lower than white rice)'};
+  if (/sourdough|rye/.test(nameLower))       return {gi: 55, basis: 'fermented/wholegrain bread'};
+  if (/white.*bread|baguette|naan/.test(nameLower)) return {gi: 75, basis: 'white bread (refined)'};
+  return map[cat] || map.custom;
+}
+
 function addCustomFood(name) {
   var ex = document.getElementById('food-add-overlay');
   if (ex) ex.remove();
   _addFoodMode = 'per100';
 
   var lname = name.toLowerCase();
-  var suggestGI = calcGIFromCarbs(0, 0, lname); // name-based hint first
+  // Auto-detect category and derive initial GI estimate from it
+  var autoCat   = _categoryFromName(lname);
+  var giEst     = _giFromCategory(autoCat, lname);
+  var initGI    = giEst.gi;
 
   var el = document.createElement('div');
   el.id = 'food-add-overlay';
@@ -7108,6 +7322,7 @@ function addCustomFood(name) {
   wrap.appendChild(title);
 
   var sub = document.createElement('div');
+  sub.className = 'food-name-sub';
   sub.style.cssText = 'font-family:monospace;font-size:12px;color:rgba(100,200,160,0.6);margin-bottom:20px';
   sub.textContent = name;
   wrap.appendChild(sub);
@@ -7140,10 +7355,9 @@ function addCustomFood(name) {
     btn100.style.color       = is100  ? 'rgba(100,220,160,0.95)' : 'rgba(180,200,220,0.45)';
     btnServ.style.background = !is100 ? 'rgba(62,180,120,0.18)' : 'transparent';
     btnServ.style.color      = !is100 ? 'rgba(100,220,160,0.95)' : 'rgba(180,200,220,0.45)';
-    // Show/hide relevant inputs
     var c100Row = document.getElementById('new-food-c100-row');
     var cServRow = document.getElementById('new-food-cserv-row');
-    if (c100Row) c100Row.style.display = is100 ? '' : 'none';
+    if (c100Row)  c100Row.style.display  = is100 ? '' : 'none';
     if (cServRow) cServRow.style.display = !is100 ? '' : 'none';
   }
 
@@ -7165,20 +7379,44 @@ function addCustomFood(name) {
   cServRow.appendChild(cServInp);
   wrap.appendChild(cServRow);
 
-  // Serving sizes row — always visible
+  // ── Typical serving (consolidated — replaces g_serv + g_each) ────
   var servRow = document.createElement('div');
-  servRow.style.cssText = 'display:flex;gap:10px;margin-bottom:14px';
-  var servDiv = document.createElement('div'); servDiv.style.flex = '1';
-  servDiv.appendChild(lbl('serving size (g)'));
-  servDiv.appendChild(inp('new-food-g_serv', 'number', 'e.g. 30', 0, 2000, '1', null, ''));
-  var eachDiv = document.createElement('div'); eachDiv.style.flex = '1';
-  eachDiv.appendChild(lbl('weight each (g)'));
-  eachDiv.appendChild(inp('new-food-g_each', 'number', 'e.g. 2', 0, 1000, '0.1', null, ''));
-  servRow.appendChild(servDiv);
-  servRow.appendChild(eachDiv);
+  servRow.style.cssText = 'margin-bottom:14px';
+  servRow.appendChild(lbl('typical serving', '· weighed portion (g)'));
+  servRow.appendChild(inp('new-food-g_serv', 'number', 'e.g. 75', 0, 2000, '1', null, ''));
   wrap.appendChild(servRow);
+  // Hidden g_each — keep for compatibility, not shown
+  var gEachHidden = document.createElement('input');
+  gEachHidden.type = 'hidden'; gEachHidden.id = 'new-food-g_each'; gEachHidden.value = '';
+  wrap.appendChild(gEachHidden);
 
-  // ── Auto-calc GI section ──────────────────────────────────────────
+  // ── Category dropdown ────────────────────────────────────────────
+  var catRow = document.createElement('div');
+  catRow.style.cssText = 'margin-bottom:16px';
+  catRow.appendChild(lbl('category'));
+  var catCats = ['bread','cereal','pasta','fruit','dairy','protein','snack','hypo','drink','main','custom'];
+  var catSel = document.createElement('select');
+  catSel.id = 'new-food-cat';
+  catSel.style.cssText = 'width:100%;padding:10px 14px;border-radius:9px;border:1px solid rgba(255,255,255,0.2);background:rgba(255,255,255,0.06);font-family:monospace;font-size:13px;color:rgba(200,220,240,0.85);outline:none;box-sizing:border-box';
+  catCats.forEach(function(c) {
+    var o = document.createElement('option');
+    o.value = c; o.textContent = c;
+    if (c === autoCat) o.selected = true;
+    catSel.appendChild(o);
+  });
+  catSel.addEventListener('change', function() {
+    var badge = document.getElementById('new-food-gi-badge');
+    var giEl  = document.getElementById('new-food-gi');
+    if (!badge || badge.textContent === 'edited') return; // user locked it, don't overwrite
+    var newEst = _giFromCategory(catSel.value, lname);
+    if (giEl) giEl.value = newEst.gi;
+    badge.textContent = '~' + newEst.gi + ' est. — ' + newEst.basis;
+    updateAddFoodPreview();
+  });
+  catRow.appendChild(catSel);
+  wrap.appendChild(catRow);
+
+  // ── GI — always visible, auto-estimated, confirmable ────────────
   var giSection = document.createElement('div');
   giSection.style.cssText = 'margin-bottom:6px';
 
@@ -7192,18 +7430,18 @@ function addCustomFood(name) {
 
   var giCalcBadge = document.createElement('div');
   giCalcBadge.id = 'new-food-gi-badge';
-  giCalcBadge.style.cssText = 'font-family:monospace;font-size:8px;color:rgba(200,160,60,0.5);letter-spacing:0.5px';
-  giCalcBadge.textContent = 'calculated';
+  giCalcBadge.style.cssText = 'font-family:monospace;font-size:8px;color:rgba(200,160,60,0.65);letter-spacing:0.3px;max-width:170px;text-align:right;line-height:1.3';
+  giCalcBadge.textContent = '~' + initGI + ' est. — ' + giEst.basis;
   giHeader.appendChild(giCalcBadge);
 
   giSection.appendChild(giHeader);
 
-  var giInp = inp('new-food-gi', 'number', '0–100', 0, 100, '1', suggestGI || 55,
+  var giInp = inp('new-food-gi', 'number', '0–100', 0, 100, '1', initGI,
     'border-color:rgba(200,160,60,0.5);color:rgba(220,180,80,0.95);background:rgba(200,160,60,0.07)');
-  // Mark manually edited
+  // When user edits GI directly — mark as user-confirmed
   giInp.addEventListener('input', function() {
     var badge = document.getElementById('new-food-gi-badge');
-    if (badge) { badge.textContent = 'edited'; badge.style.color = 'rgba(220,180,80,0.7)'; }
+    if (badge) { badge.textContent = 'confirmed'; badge.style.color = 'rgba(62,200,140,0.8)'; }
   });
   giSection.appendChild(giInp);
 
@@ -7217,7 +7455,7 @@ function addCustomFood(name) {
 
   // Curve preview — tiny sparkline showing absorption shape
   var curveWrap = document.createElement('div');
-  curveWrap.style.cssText = 'margin-bottom:16px;border-radius:8px;border:1px solid var(--rv-panel-border);background:rgba(255,255,255,0.02);padding:10px 12px';
+  curveWrap.style.cssText = 'margin-bottom:10px;border-radius:8px;border:1px solid var(--rv-panel-border);background:rgba(255,255,255,0.02);padding:10px 12px';
   var curveCanvas = document.createElement('canvas');
   curveCanvas.id = 'new-food-curve';
   curveCanvas.width = 276;
@@ -7226,11 +7464,30 @@ function addCustomFood(name) {
   curveWrap.appendChild(curveCanvas);
   wrap.appendChild(curveWrap);
 
-  // Preview summary line
-  var preview = document.createElement('div');
-  preview.id = 'new-food-preview';
-  preview.style.cssText = 'font-family:monospace;font-size:10px;color:rgba(100,200,160,0.8);text-align:center;margin-bottom:16px;min-height:16px';
-  wrap.appendChild(preview);
+  // ── Carbs per serving + GL — always visible, live-calculated ────
+  var calcRow = document.createElement('div');
+  calcRow.id = 'new-food-calc-row';
+  calcRow.style.cssText = 'display:flex;gap:10px;margin-bottom:16px;padding:10px 12px;border-radius:8px;border:1px solid rgba(62,180,120,0.15);background:rgba(62,180,120,0.04)';
+  var calcC = document.createElement('div'); calcC.style.flex = '1';
+  var calcCLbl = document.createElement('div');
+  calcCLbl.style.cssText = 'font-family:monospace;font-size:7px;letter-spacing:1px;text-transform:uppercase;color:rgba(100,200,160,0.5);margin-bottom:3px';
+  calcCLbl.textContent = 'carbs / serving';
+  var calcCVal = document.createElement('div');
+  calcCVal.id = 'new-food-carbs-serv';
+  calcCVal.style.cssText = 'font-family:monospace;font-size:18px;color:rgba(100,220,160,0.9)';
+  calcCVal.textContent = '—';
+  calcC.appendChild(calcCLbl); calcC.appendChild(calcCVal);
+  var calcGL = document.createElement('div'); calcGL.style.flex = '1';
+  var calcGLLbl = document.createElement('div');
+  calcGLLbl.style.cssText = 'font-family:monospace;font-size:7px;letter-spacing:1px;text-transform:uppercase;color:rgba(200,160,60,0.5);margin-bottom:3px';
+  calcGLLbl.textContent = 'GL / serving';
+  var calcGLVal = document.createElement('div');
+  calcGLVal.id = 'new-food-gl-serv';
+  calcGLVal.style.cssText = 'font-family:monospace;font-size:18px;color:rgba(220,180,80,0.9)';
+  calcGLVal.textContent = '—';
+  calcGL.appendChild(calcGLLbl); calcGL.appendChild(calcGLVal);
+  calcRow.appendChild(calcC); calcRow.appendChild(calcGL);
+  wrap.appendChild(calcRow);
 
   // Buttons
   var btnRow = document.createElement('div');
@@ -7262,8 +7519,14 @@ function addCustomFood(name) {
     _photoFoodData = null;
     setTimeout(function() {
       if (pfd.c100 !== undefined) { var c100el = document.getElementById('new-food-c100'); if (c100el) c100el.value = pfd.c100; }
-      if (pfd.gi)   { var giel  = document.getElementById('new-food-gi');   if (giel)  { giel.value = pfd.gi; var badge = document.getElementById('new-food-gi-badge'); if (badge) { badge.textContent = 'from label'; badge.style.color = 'rgba(62,200,140,0.7)'; } } }
+      if (pfd.gi) {
+        var giel = document.getElementById('new-food-gi');
+        if (giel) { giel.value = pfd.gi; }
+        var badge = document.getElementById('new-food-gi-badge');
+        if (badge) { badge.textContent = '~' + pfd.gi + ' from label'; badge.style.color = 'rgba(62,200,140,0.8)'; }
+      }
       if (pfd.g_serv) { var gsel = document.getElementById('new-food-g_serv'); if (gsel) gsel.value = pfd.g_serv; }
+      if (pfd.cat)    { var csel = document.getElementById('new-food-cat');   if (csel) csel.value = pfd.cat; }
       // Add photo banner
       var banner = document.createElement('div');
       banner.style.cssText = 'font-family:monospace;font-size:9px;color:rgba(62,200,140,0.7);letter-spacing:.5px;text-align:center;margin-bottom:12px;padding:6px 10px;border-radius:7px;background:rgba(62,180,120,0.08);border:1px solid rgba(62,180,120,0.2)';
@@ -7334,37 +7597,23 @@ function _drawCurvePreview(gi, c100) {
 function updateAddFoodPreview() {
   var mode  = _addFoodMode || 'per100';
   var gServ = parseFloat((document.getElementById('new-food-g_serv')||{}).value)||0;
-  var gEach = parseFloat((document.getElementById('new-food-g_each')||{}).value)||0;
 
   // Resolve c100 from whichever mode is active
   var c100;
   if (mode === 'per100') {
     c100 = parseFloat((document.getElementById('new-food-c100')||{}).value)||0;
-    // If per-serving entered, back-calc c100 and update hidden field
     var cServEl = document.getElementById('new-food-cserv');
     if (cServEl) cServEl.value = (gServ > 0 && c100 > 0) ? (c100 * gServ / 100).toFixed(1) : '';
   } else {
     var cServ = parseFloat((document.getElementById('new-food-cserv')||{}).value)||0;
-    // Back-calc c100 from serving
     c100 = (gServ > 0 && cServ > 0) ? (cServ / gServ * 100) : 0;
     var c100El = document.getElementById('new-food-c100');
     if (c100El) c100El.value = c100 > 0 ? c100.toFixed(1) : '';
   }
 
-  // Determine GI — auto-calc unless user has manually edited
-  var giBadge = document.getElementById('new-food-gi-badge');
+  // Determine GI — read from input (user may have edited; category change updates it)
   var giInpEl = document.getElementById('new-food-gi');
-  var isEdited = giBadge && giBadge.textContent === 'edited';
-  var gi;
-  if (isEdited) {
-    gi = parseInt((giInpEl||{}).value) || 0;
-  } else {
-    // Get food name from the sub div (second child of wrap)
-    var overlay = document.getElementById('food-add-overlay');
-    var foodName = overlay ? (overlay.querySelector('.food-name-sub') || {}).textContent || '' : '';
-    gi = calcGIFromCarbs(c100, gServ, foodName.toLowerCase());
-    if (giInpEl) giInpEl.value = gi;
-  }
+  var gi = parseInt((giInpEl||{}).value) || 0;
 
   // GI narrative
   var noteEl = document.getElementById('new-food-gi-note');
@@ -7377,14 +7626,19 @@ function updateAddFoodPreview() {
   // Curve sparkline
   _drawCurvePreview(gi, c100);
 
-  // Summary line
-  var preEl = document.getElementById('new-food-preview');
-  if (preEl) {
-    var parts = [];
-    if (c100 > 0) parts.push(c100.toFixed(1) + 'g carbs/100g');
-    if (c100 > 0 && gServ > 0) parts.push('serving: ' + (c100*gServ/100).toFixed(1) + 'g');
-    if (c100 > 0 && gEach > 0) parts.push('each: '    + (c100*gEach/100).toFixed(1) + 'g');
-    preEl.textContent = parts.join(' · ');
+  // ── Carbs per serving + GL ─────────────────────────────────────
+  var carbsServEl = document.getElementById('new-food-carbs-serv');
+  var glServEl    = document.getElementById('new-food-gl-serv');
+  if (carbsServEl) {
+    if (c100 > 0 && gServ > 0) {
+      var carbsServ = c100 * gServ / 100;
+      var gl = gi * carbsServ / 100;
+      carbsServEl.textContent = carbsServ.toFixed(1) + 'g';
+      if (glServEl) glServEl.textContent = gl.toFixed(1);
+    } else {
+      carbsServEl.textContent = '—';
+      if (glServEl) glServEl.textContent = '—';
+    }
   }
 }
 
@@ -7394,12 +7648,11 @@ function saveCustomFood(encodedName) {
   var carbs = parseFloat((document.getElementById('new-food-c100')||{}).value) || 0;
   var gi    = parseInt((document.getElementById('new-food-gi')||{}).value) || 0;
   var gServ = parseFloat((document.getElementById('new-food-g_serv')||{}).value) || null;
-  var gEach = parseFloat((document.getElementById('new-food-g_each')||{}).value) || null;
+  var cat   = (document.getElementById('new-food-cat')||{}).value || 'custom';
   var el    = document.getElementById('food-add-overlay');
   if (el) el.remove();
-  var f = {name:name, c100:carbs, gi:gi, cat:'custom'};
-  if (gServ) f.g_serv = gServ;
-  if (gEach) f.g_each = gEach;
+  var f = {name:name, c100:carbs, gi:gi, cat:cat};
+  if (gServ) { f.g_serv = gServ; f.g_each = gServ; } // mirror to g_each for compatibility
   FOOD_LIBRARY.push(f);
   saveFoodLibrary();
   // If called from pad scan, update the pad item instead of adding to plate
@@ -10307,6 +10560,7 @@ function buildFunctionIndex() {
     'renderSheet', 'renderKitchen', 'openSheet', 'closeSheet',
     'logMealEntry', 'logCorrection', 'logHypoTreatment',
     'addFoodItem', 'addCustomFood', 'saveCustomFood', 'searchFood',
+    '_saveInlineNewFood', '_updateInlinePreview', '_showPhotoConfirmCard',
     'drawGasCloud', 'drawBGTrail', 'drawOrb', 'drawEquilibriumZone',
     'buildSmartForecast', 'drawUnknownForce',
     'syncNow', 'syncPushEvents', 'syncPullEvents',
