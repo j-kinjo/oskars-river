@@ -6350,7 +6350,7 @@ function renderSheet() {
       '<div style="position:relative">' +
         '<input id="food-search" type="text" placeholder="search food or paste URL..." autocomplete="off" autocorrect="off" spellcheck="false"' +
           ' style="width:100%;padding:10px 12px;border-radius:10px;border:1px solid rgba(255,255,255,0.15);background:rgba(255,255,255,0.08);font-family:\'DM Mono\',monospace;font-size:13px;color:rgba(220,235,250,0.9);outline:none;box-sizing:border-box"' +
-          ' oninput="searchFood(this.value)" onpaste="setTimeout(function(){checkFoodPaste(document.getElementById(\'food-search\').value)},50)">' +
+          ' oninput="_debouncedSearchFood(this.value)" onpaste="setTimeout(function(){checkFoodPaste(document.getElementById(\'food-search\').value)},50)">' +
         '<div id="food-results" style="display:none;position:absolute;top:100%;left:0;right:0;z-index:50;' +
           'background:rgba(18,24,42,0.99);border:1px solid var(--rv-panel-border);border-radius:10px;' +
           'box-shadow:0 4px 20px rgba(0,0,0,0.08);max-height:180px;overflow-y:auto;margin-top:4px"></div>' +
@@ -6441,6 +6441,26 @@ function buildRecentMealsHTML() {
   '</div>';
 }
 
+// ── Debounced search — prevents inline form stealing focus on every keystroke ──
+var _searchDebounceTimer = null;
+function _debouncedSearchFood(q) {
+  clearTimeout(_searchDebounceTimer);
+  // Show matches immediately (fast feedback); only show no-match inline form after pause
+  var all = FOOD_DB.concat(FOOD_LIBRARY);
+  var ql = q.toLowerCase();
+  var matches = q && q.length >= 1 ? all.filter(function(f){ return f.name.toLowerCase().indexOf(ql) >= 0; }).slice(0,8) : [];
+  if (matches.length > 0) {
+    // Results exist — show immediately, no debounce needed
+    searchFood(q);
+  } else if (!q || q.length < 1) {
+    var results = document.getElementById('food-results');
+    if (results) results.style.display = 'none';
+  } else {
+    // No match — wait for typing to pause before showing inline form
+    _searchDebounceTimer = setTimeout(function(){ searchFood(q); }, 420);
+  }
+}
+
 function searchFood(q) {
   var results = document.getElementById('food-results');
   if (!q || q.length < 1) { results.style.display='none'; return; }
@@ -6452,63 +6472,67 @@ function searchFood(q) {
 
   if (matches.length === 0) {
     results.style.display='block';
-    // ── 1e: Inline first-use capture — don't break the logging flow ──
+    // ── Inline first-use capture — don't break the logging flow ──
     var lq = q.toLowerCase();
     var estCat = _categoryFromName(lq);
     var estGIObj = _giFromCategory(estCat, lq);
     var estGI = estGIObj.gi;
-    // Pre-fill weight from any gram field already set in the sheet
-    var existingGrams = '';
-    var gramEls = document.querySelectorAll('.item-grams-input');
-    if (gramEls.length > 0) existingGrams = gramEls[gramEls.length-1].value || '';
 
     results.innerHTML =
-      '<div style="padding:12px 14px;border-bottom:1px solid rgba(255,255,255,0.06)">' +
-        '<div style="font-family:\'DM Mono\',monospace;font-size:10px;color:rgba(180,200,220,0.5);margin-bottom:8px">' +
-          '<span style="color:rgba(220,100,60,0.7)">&#8220;' + q + '&#8221;</span> — not in library. add it?' +
+      '<div style="padding:12px 14px">' +
+        '<div style="font-family:\'DM Mono\',monospace;font-size:10px;color:rgba(180,200,220,0.5);margin-bottom:10px">' +
+          '<span style="color:rgba(220,100,60,0.7)">&#8220;' + q + '&#8221;</span> — not in library' +
         '</div>' +
-        '<div style="display:flex;gap:8px;margin-bottom:8px;align-items:center">' +
+        // Carbs row — with per-100 / per-serving toggle
+        '<div style="display:flex;gap:6px;margin-bottom:6px;align-items:center">' +
           '<div style="flex:1">' +
-            '<div style="font-family:\'DM Mono\',monospace;font-size:7px;letter-spacing:1px;text-transform:uppercase;color:rgba(100,200,160,0.5);margin-bottom:3px">carbs/100g</div>' +
-            '<input id="inline-new-c100" type="number" min="0" max="100" step="0.1" inputmode="decimal" placeholder="e.g. 47"' +
-              'style="width:100%;padding:8px 10px;border-radius:8px;border:1px solid rgba(62,180,120,0.4);background:rgba(62,180,120,0.07);font-family:monospace;font-size:14px;color:rgba(100,220,160,0.95);text-align:center;outline:none;box-sizing:border-box" ' +
-              'oninput="_updateInlinePreview()">' +
+            '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:3px">' +
+              '<div style="font-family:\'DM Mono\',monospace;font-size:7px;letter-spacing:1px;text-transform:uppercase;color:rgba(100,200,160,0.5)" id="inline-carbs-lbl">carbs per 100g</div>' +
+              '<div style="display:flex;border-radius:5px;overflow:hidden;border:1px solid rgba(62,180,120,0.2)">' +
+                '<button id="inline-mode-100" onclick="_setInlineMode(\'per100\')" style="padding:2px 6px;border:none;cursor:pointer;font-family:monospace;font-size:7px;background:rgba(62,180,120,0.2);color:rgba(100,220,160,0.9)">per 100g</button>' +
+                '<button id="inline-mode-serv" onclick="_setInlineMode(\'perServ\')" style="padding:2px 6px;border:none;cursor:pointer;font-family:monospace;font-size:7px;background:transparent;color:rgba(180,200,220,0.35)">per serving</button>' +
+              '</div>' +
+            '</div>' +
+            '<input id="inline-new-c100" type="number" min="0" max="500" step="0.1" inputmode="decimal" placeholder="e.g. 47"' +
+              ' style="width:100%;padding:8px 10px;border-radius:8px;border:1px solid rgba(62,180,120,0.4);background:rgba(62,180,120,0.07);font-family:monospace;font-size:14px;color:rgba(100,220,160,0.95);text-align:center;outline:none;box-sizing:border-box"' +
+              ' oninput="_updateInlinePreview()" onkeydown="return _numericOnly(event)">' +
           '</div>' +
-          '<div style="width:36px;text-align:center">' +
-            '<button onclick="openPhotoFood()" title="photo" style="width:36px;height:36px;border-radius:8px;border:1px solid rgba(255,255,255,0.1);background:rgba(255,255,255,0.04);font-size:15px;cursor:pointer;display:flex;align-items:center;justify-content:center;color:rgba(180,200,220,0.6)">📷</button>' +
-          '</div>' +
+          '<button onclick="openPhotoFood()" title="scan label" style="width:36px;height:64px;border-radius:8px;border:1px solid rgba(255,255,255,0.1);background:rgba(255,255,255,0.04);font-size:15px;cursor:pointer;flex-shrink:0;color:rgba(180,200,220,0.6)">📷</button>' +
         '</div>' +
+        // GI + weight row
         '<div style="display:flex;gap:8px;margin-bottom:8px">' +
           '<div style="flex:1">' +
-            '<div style="font-family:\'DM Mono\',monospace;font-size:7px;letter-spacing:1px;text-transform:uppercase;color:rgba(200,160,60,0.5);margin-bottom:3px">GI</div>' +
+            '<div style="font-family:\'DM Mono\',monospace;font-size:7px;letter-spacing:1px;text-transform:uppercase;color:rgba(200,160,60,0.5);margin-bottom:3px">GI <span style="text-transform:none;opacity:0.6">est. — ' + estGIObj.basis + '</span></div>' +
             '<input id="inline-new-gi" type="number" min="0" max="100" step="1" inputmode="decimal" value="' + estGI + '"' +
-              'style="width:100%;padding:8px 10px;border-radius:8px;border:1px solid rgba(200,160,60,0.3);background:rgba(200,160,60,0.05);font-family:monospace;font-size:14px;color:rgba(220,180,80,0.9);text-align:center;outline:none;box-sizing:border-box" ' +
-              'oninput="_updateInlinePreview()">' +
-            '<div style="font-family:\'DM Mono\',monospace;font-size:7px;color:rgba(200,160,60,0.45);margin-top:2px">est. — ' + estGIObj.basis + '</div>' +
+              ' style="width:100%;padding:8px 10px;border-radius:8px;border:1px solid rgba(200,160,60,0.3);background:rgba(200,160,60,0.05);font-family:monospace;font-size:14px;color:rgba(220,180,80,0.9);text-align:center;outline:none;box-sizing:border-box"' +
+              ' oninput="_updateInlinePreview()" onkeydown="return _numericOnly(event)">' +
           '</div>' +
           '<div style="flex:1">' +
-            '<div style="font-family:\'DM Mono\',monospace;font-size:7px;letter-spacing:1px;text-transform:uppercase;color:rgba(160,180,200,0.5);margin-bottom:3px">weight now (g)</div>' +
-            '<input id="inline-new-grams" type="number" min="0" max="2000" step="1" inputmode="decimal" value="' + (existingGrams||'') + '" placeholder="g"' +
-              'style="width:100%;padding:8px 10px;border-radius:8px;border:1px solid rgba(255,255,255,0.15);background:rgba(255,255,255,0.05);font-family:monospace;font-size:14px;color:rgba(220,235,250,0.85);text-align:center;outline:none;box-sizing:border-box" ' +
-              'oninput="_updateInlinePreview()">' +
+            '<div style="font-family:\'DM Mono\',monospace;font-size:7px;letter-spacing:1px;text-transform:uppercase;color:rgba(160,180,200,0.5);margin-bottom:3px">weight to add (g)</div>' +
+            '<input id="inline-new-grams" type="number" min="0" max="2000" step="1" inputmode="decimal" placeholder="g"' +
+              ' style="width:100%;padding:8px 10px;border-radius:8px;border:1px solid rgba(255,255,255,0.15);background:rgba(255,255,255,0.05);font-family:monospace;font-size:14px;color:rgba(220,235,250,0.85);text-align:center;outline:none;box-sizing:border-box"' +
+              ' oninput="_updateInlinePreview()" onkeydown="return _numericOnly(event)">' +
           '</div>' +
         '</div>' +
-        '<div id="inline-new-preview" style="font-family:\'DM Mono\',monospace;font-size:10px;color:rgba(100,200,160,0.7);margin-bottom:8px;min-height:14px"></div>' +
+        '<div id="inline-new-preview" style="font-family:\'DM Mono\',monospace;font-size:11px;color:rgba(100,200,160,0.8);margin-bottom:8px;min-height:16px;font-weight:500"></div>' +
         '<div style="display:flex;gap:7px">' +
           '<button onclick="_saveInlineNewFood(\'' + q.replace(/'/g,"\\'") + '\')" ' +
             'style="flex:1;padding:9px;border-radius:9px;border:1px solid rgba(62,180,120,0.4);background:rgba(62,180,120,0.1);font-family:\'Fraunces\',serif;font-style:italic;font-weight:200;font-size:14px;color:rgba(100,220,160,0.9);cursor:pointer;touch-action:manipulation">add to meal + save</button>' +
           '<button onclick="addCustomFood(\'' + q.replace(/'/g,"\\'") + '\')" ' +
-            'style="padding:9px 12px;border-radius:9px;border:1px solid rgba(255,255,255,0.1);background:transparent;font-family:monospace;font-size:9px;color:rgba(160,180,200,0.5);cursor:pointer;touch-action:manipulation">full form</button>' +
+            'style="padding:9px 12px;border-radius:9px;border:1px solid rgba(255,255,255,0.1);background:transparent;font-family:monospace;font-size:9px;color:rgba(160,180,200,0.5);cursor:pointer;touch-action:manipulation">more options</button>' +
+          '<button onclick="document.getElementById(\'food-results\').style.display=\'none\';document.getElementById(\'food-search\').value=\'\';" ' +
+            'style="padding:9px 12px;border-radius:9px;border:1px solid rgba(255,255,255,0.08);background:transparent;font-family:monospace;font-size:12px;color:rgba(140,160,180,0.4);cursor:pointer;touch-action:manipulation">✕</button>' +
         '</div>' +
       '</div>';
 
-    // Focus carbs field after render
-    setTimeout(function(){ var c = document.getElementById('inline-new-c100'); if(c) c.focus(); }, 80);
+    // Don't auto-focus — let user keep typing in the search box if they want
     return;
   }
 
+  // Has matches — show results + "add exactly what I typed" if it's not an exact match
+  var exactMatch = matches.find(function(f){ return f.name.toLowerCase() === ql; });
   results.style.display='block';
-  results.innerHTML = matches.map(function(f) {
+  var matchHtml = matches.map(function(f) {
     var giCol2 = f.gi>=70?'rgba(200,80,40,0.6)':f.gi>=55?'rgba(190,130,30,0.6)':'rgba(50,150,80,0.6)';
     return '<div onclick="addFoodItem(\'' + f.name.replace(/'/g,"\\'") + '\')" style="padding:10px 14px;cursor:pointer;' +
       'border-bottom:1px solid rgba(255,255,255,0.07);display:flex;justify-content:space-between;align-items:center">' +
@@ -6519,30 +6543,70 @@ function searchFood(q) {
       '<div style="font-size:10px;color:' + giCol2 + ';font-family:\'DM Mono\',monospace">GI ' + (f.gi||'—') + '</div>' +
     '</div>';
   }).join('');
+
+  // Offer "add exactly what I typed" at the bottom if not an exact match
+  var addExactRow = !exactMatch
+    ? '<div onclick="addCustomFood(\'' + q.replace(/'/g,"\\'") + '\')" style="padding:9px 14px;cursor:pointer;border-top:1px solid rgba(255,255,255,0.05);font-family:\'DM Mono\',monospace;font-size:10px;color:rgba(130,160,220,0.6)">+ add &#8220;' + q + '&#8221; as new food</div>'
+    : '';
+
+  results.innerHTML = matchHtml + addExactRow;
 }
 
 // ── Inline first-use capture helpers (1e) ─────────────────────────────────
+
+// Prevent non-numeric input on number fields (fixes letter entry on iOS)
+function _numericOnly(e) {
+  var allowed = ['Backspace','Delete','Tab','ArrowLeft','ArrowRight','ArrowUp','ArrowDown','Enter','.'];
+  if (allowed.indexOf(e.key) >= 0) return true;
+  if (e.key >= '0' && e.key <= '9') return true;
+  e.preventDefault(); return false;
+}
+
+// Per-100g / per-serving toggle for inline form
+var _inlineMode = 'per100';
+function _setInlineMode(mode) {
+  _inlineMode = mode;
+  var lbl = document.getElementById('inline-carbs-lbl');
+  var btn100 = document.getElementById('inline-mode-100');
+  var btnServ = document.getElementById('inline-mode-serv');
+  if (lbl) lbl.textContent = mode === 'per100' ? 'carbs per 100g' : 'carbs per serving (g)';
+  if (btn100) { btn100.style.background = mode==='per100'?'rgba(62,180,120,0.2)':'transparent'; btn100.style.color = mode==='per100'?'rgba(100,220,160,0.9)':'rgba(180,200,220,0.35)'; }
+  if (btnServ) { btnServ.style.background = mode==='perServ'?'rgba(62,180,120,0.2)':'transparent'; btnServ.style.color = mode==='perServ'?'rgba(100,220,160,0.9)':'rgba(180,200,220,0.35)'; }
+  _updateInlinePreview();
+}
+
 function _updateInlinePreview() {
-  var c100  = parseFloat((document.getElementById('inline-new-c100')||{}).value)||0;
-  var gi    = parseInt((document.getElementById('inline-new-gi')||{}).value)||0;
-  var grams = parseFloat((document.getElementById('inline-new-grams')||{}).value)||0;
-  var prev  = document.getElementById('inline-new-preview');
+  var c100raw = parseFloat((document.getElementById('inline-new-c100')||{}).value)||0;
+  var gi      = parseInt((document.getElementById('inline-new-gi')||{}).value)||0;
+  var grams   = parseFloat((document.getElementById('inline-new-grams')||{}).value)||0;
+  var prev    = document.getElementById('inline-new-preview');
   if (!prev) return;
-  if (c100 > 0 && grams > 0) {
-    var carbs = c100 * grams / 100;
-    var gl    = gi * carbs / 100;
-    prev.textContent = carbs.toFixed(1) + 'g carbs · GL ' + gl.toFixed(1);
+
+  var c100 = c100raw;
+  // If in per-serving mode and weight filled, back-calc c100 for preview
+  if (_inlineMode === 'perServ' && grams > 0 && c100raw > 0) {
+    c100 = c100raw / grams * 100;
+  }
+
+  if (c100raw > 0 && grams > 0) {
+    var carbsThis = _inlineMode === 'perServ' ? c100raw : c100 * grams / 100;
+    var gl = gi * carbsThis / 100;
+    prev.textContent = carbsThis.toFixed(1) + 'g carbs this portion · GL ' + gl.toFixed(1);
   } else {
     prev.textContent = '';
   }
 }
 
 function _saveInlineNewFood(name) {
-  var c100  = parseFloat((document.getElementById('inline-new-c100')||{}).value)||0;
-  var gi    = parseInt((document.getElementById('inline-new-gi')||{}).value)||55;
-  var grams = parseFloat((document.getElementById('inline-new-grams')||{}).value)||0;
-  if (!c100) { showToast('enter carbs per 100g first'); document.getElementById('inline-new-c100').focus(); return; }
-  if (!grams) { showToast('enter weight in grams'); document.getElementById('inline-new-grams').focus(); return; }
+  var c100raw = parseFloat((document.getElementById('inline-new-c100')||{}).value)||0;
+  var gi      = parseInt((document.getElementById('inline-new-gi')||{}).value)||55;
+  var grams   = parseFloat((document.getElementById('inline-new-grams')||{}).value)||0;
+  if (!c100raw) { showToast('enter carbs first'); document.getElementById('inline-new-c100').focus(); return; }
+  if (!grams)   { showToast('enter weight in grams'); document.getElementById('inline-new-grams').focus(); return; }
+
+  // Resolve c100 from mode
+  var c100 = _inlineMode === 'perServ' ? (c100raw / grams * 100) : c100raw;
+  c100 = Math.round(c100 * 10) / 10;
 
   var lname = name.toLowerCase();
   var cat   = _categoryFromName(lname);
@@ -6560,11 +6624,11 @@ function _saveInlineNewFood(name) {
   if (results) results.style.display = 'none';
   var search = document.getElementById('food-search');
   if (search) search.value = '';
+  _inlineMode = 'per100'; // reset for next use
 
   addFoodItemGrams(name, grams);
   showToast('added: ' + name);
 }
-
 
 
 // ── Voice input (Web Speech API, hold-to-speak) ──
@@ -6894,16 +6958,42 @@ function addFoodItemGrams(name, grams) {
 
 // ── Status indicator for AI food operations ──
 function _showFoodAIStatus(msg) {
-  // Use the fixed voice panel so it's never clipped by sheet overflow
-  _showVoicePanel(
-    '<div style="padding:20px 18px;font-family:\'DM Mono\',monospace;font-size:11px;color:rgba(62,200,140,0.7);letter-spacing:.5px;display:flex;align-items:center;gap:10px">' +
-    '<span style="display:inline-block;animation:spin 1s linear infinite;font-size:16px">◌</span>' +
-    '<span>' + msg + '</span></div>'
-  );
+  var ex = document.getElementById('food-ai-loader');
+  if (ex) ex.remove();
+
+  var el = document.createElement('div');
+  el.id = 'food-ai-loader';
+  el.style.cssText = 'position:fixed;inset:0;z-index:200;display:flex;flex-direction:column;align-items:center;justify-content:center;background:rgba(10,18,28,0.82);backdrop-filter:blur(8px)';
+
+  // Orbiting orbs animation — River-coloured
+  el.innerHTML =
+    '<style>' +
+    '@keyframes rv-orbit{from{transform:rotate(0deg) translateX(28px) rotate(0deg)}to{transform:rotate(360deg) translateX(28px) rotate(-360deg)}}' +
+    '@keyframes rv-orbit2{from{transform:rotate(120deg) translateX(28px) rotate(-120deg)}to{transform:rotate(480deg) translateX(28px) rotate(-480deg)}}' +
+    '@keyframes rv-orbit3{from{transform:rotate(240deg) translateX(28px) rotate(-240deg)}to{transform:rotate(600deg) translateX(28px) rotate(-600deg)}}' +
+    '</style>' +
+    '<div style="position:relative;width:64px;height:64px;margin-bottom:20px">' +
+      '<div style="position:absolute;inset:0;border-radius:50%;background:radial-gradient(circle,rgba(62,180,120,0.15),transparent);display:flex;align-items:center;justify-content:center">' +
+        '<div style="width:12px;height:12px;border-radius:50%;background:rgba(62,180,120,0.5);box-shadow:0 0 10px rgba(62,180,120,0.4)"></div>' +
+      '</div>' +
+      '<div style="position:absolute;inset:0;display:flex;align-items:center;justify-content:center">' +
+        '<div style="width:8px;height:8px;border-radius:50%;background:rgba(100,220,200,0.9);box-shadow:0 0 8px rgba(100,220,200,0.6);animation:rv-orbit 1.1s linear infinite"></div>' +
+      '</div>' +
+      '<div style="position:absolute;inset:0;display:flex;align-items:center;justify-content:center">' +
+        '<div style="width:6px;height:6px;border-radius:50%;background:rgba(200,160,60,0.85);box-shadow:0 0 7px rgba(200,160,60,0.5);animation:rv-orbit2 1.1s linear infinite"></div>' +
+      '</div>' +
+      '<div style="position:absolute;inset:0;display:flex;align-items:center;justify-content:center">' +
+        '<div style="width:5px;height:5px;border-radius:50%;background:rgba(130,160,230,0.8);box-shadow:0 0 6px rgba(130,160,230,0.5);animation:rv-orbit3 1.1s linear infinite"></div>' +
+      '</div>' +
+    '</div>' +
+    '<div style="font-family:\'DM Mono\',monospace;font-size:13px;color:rgba(180,220,200,0.85);letter-spacing:1px">' + msg + '</div>';
+
+  document.body.appendChild(el);
 }
 
 function _hideFoodAIStatus() {
-  _closeVoicePanel();
+  var el = document.getElementById('food-ai-loader');
+  if (el) el.remove();
 }
 
 // ── Photo / nutrition label input ──
@@ -6966,80 +7056,110 @@ async function handleFoodPhoto(inputEl) {
   }
 }
 
-// ── Photo → compact confirm card (1c) ────────────────────────────────────────
-// One tap from photo to saved. Edit details only if something looks wrong.
+// ── Photo → confirm card (integrated editable form) ──────────────────────────
+// Scan results appear as an editable form — weight is the primary decision, c100 secondary.
+// Connected to the logging context — not a detached bottom sheet.
 function _showPhotoConfirmCard(info) {
   var ex = document.getElementById('photo-confirm-card');
   if (ex) ex.remove();
 
   var gServ   = info.g_serv || 100;
-  var carbsS  = Math.round(info.c100 * gServ / 100 * 10) / 10;
+  var c100    = info.c100;
   var gi      = info.gi || _giFromCategory(info.cat || 'custom', (info.name||'').toLowerCase()).gi;
-  var gl      = Math.round(gi * carbsS / 100 * 10) / 10;
-  var giEst   = info.gi ? '' : ' (est.)';
+  var giEst   = info.gi ? '' : ' est.';
   var giCol   = gi >= 70 ? 'rgba(210,80,40,0.85)' : gi >= 55 ? 'rgba(200,140,30,0.85)' : 'rgba(60,160,90,0.85)';
-  var weightNote = info.weight_estimated
-    ? '<div style="font-family:monospace;font-size:9px;color:rgba(200,160,60,0.7);margin-top:4px">⚠ weight estimated from photo — tap edit to adjust</div>'
-    : '';
-  var contextNote = info.note
-    ? '<div style="font-family:monospace;font-size:9px;color:rgba(160,180,200,0.5);margin-top:3px">' + info.note + '</div>'
-    : '';
 
   var card = document.createElement('div');
   card.id = 'photo-confirm-card';
-  card.style.cssText = 'position:fixed;bottom:0;left:0;right:0;z-index:90;padding:16px 20px 32px;background:var(--rv-panel-bg);backdrop-filter:blur(16px);border-top:1px solid var(--rv-panel-border);transform:translateY(100%);transition:transform .25s ease';
+  // Slide up from bottom, attached to the page rather than floating detached
+  card.style.cssText = 'position:fixed;bottom:0;left:0;right:0;z-index:95;background:var(--rv-panel-bg);backdrop-filter:blur(16px);border-top:2px solid rgba(62,180,120,0.25);border-radius:16px 16px 0 0;padding:20px 20px 36px;transform:translateY(100%);transition:transform .28s ease';
+
+  var weightEstWarning = info.weight_estimated
+    ? '<div style="font-family:\'DM Mono\',monospace;font-size:8px;color:rgba(200,160,60,0.7);margin-bottom:10px;letter-spacing:.3px">⚠ weight estimated from photo — adjust below if needed</div>'
+    : '';
 
   card.innerHTML =
-    '<div style="font-family:monospace;font-size:8px;letter-spacing:1.5px;text-transform:uppercase;color:rgba(62,200,140,0.5);margin-bottom:8px">📷 scanned</div>' +
+    // Header
+    '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px">' +
+      '<div style="display:flex;align-items:center;gap:8px">' +
+        '<div style="font-family:monospace;font-size:8px;letter-spacing:1.5px;text-transform:uppercase;color:rgba(62,200,140,0.5)">📷 scanned</div>' +
+      '</div>' +
+      '<button onclick="document.getElementById(\'photo-confirm-card\').remove()" style="background:none;border:none;font-size:18px;color:rgba(180,200,220,0.3);cursor:pointer;padding:4px;touch-action:manipulation">✕</button>' +
+    '</div>' +
+
+    // Food name
     '<div style="font-family:\'Fraunces\',serif;font-style:italic;font-weight:200;font-size:20px;color:rgba(220,235,250,0.95);margin-bottom:4px">' + info.name + '</div>' +
-    '<div style="display:flex;gap:10px;align-items:baseline;margin-bottom:4px;flex-wrap:wrap">' +
-      '<span style="font-family:monospace;font-size:12px;color:rgba(100,220,160,0.8)">' + info.c100 + 'g carbs/100g</span>' +
-      '<span style="font-family:monospace;font-size:11px;color:' + giCol + '">GI ' + gi + giEst + '</span>' +
-      '<span style="font-family:monospace;font-size:11px;color:rgba(180,200,220,0.5)">serving: ' + gServ + 'g</span>' +
+
+    // c100 as secondary note
+    '<div style="font-family:\'DM Mono\',monospace;font-size:10px;color:rgba(100,200,160,0.55);margin-bottom:12px">' +
+      info.c100 + 'g carbs per 100g &nbsp;·&nbsp; GI <span style="color:' + giCol + '">' + gi + giEst + '</span>' +
     '</div>' +
-    '<div style="display:flex;gap:14px;align-items:baseline;margin-bottom:8px">' +
-      '<span style="font-family:monospace;font-size:14px;color:rgba(100,220,160,0.9)">' + carbsS + 'g carbs/serving</span>' +
-      '<span style="font-family:monospace;font-size:12px;color:rgba(200,160,60,0.8)">GL ' + gl + '</span>' +
+
+    weightEstWarning +
+
+    // Weight — the primary editable input
+    '<div style="margin-bottom:10px">' +
+      '<div style="font-family:\'DM Mono\',monospace;font-size:8px;letter-spacing:1px;text-transform:uppercase;color:rgba(160,180,200,0.5);margin-bottom:6px">weight to add (g)</div>' +
+      '<input id="photo-confirm-grams" type="number" inputmode="decimal" min="1" max="2000" step="1" value="' + gServ + '"' +
+        ' style="width:100%;padding:13px;border-radius:10px;border:2px solid rgba(62,180,120,0.35);background:rgba(62,180,120,0.06);font-family:monospace;font-size:22px;color:rgba(100,220,160,0.95);text-align:center;outline:none;box-sizing:border-box"' +
+        ' oninput="_updatePhotoConfirmPreview(' + c100 + ',' + gi + ')" onkeydown="return _numericOnly(event)">' +
     '</div>' +
-    weightNote + contextNote +
-    '<div style="display:flex;gap:8px;margin-top:14px">' +
-      '<button id="photo-confirm-save" style="flex:2;padding:12px;border-radius:10px;border:1px solid rgba(62,180,120,0.4);background:rgba(62,180,120,0.12);font-family:\'Fraunces\',serif;font-style:italic;font-weight:200;font-size:16px;color:rgba(100,220,160,0.95);cursor:pointer;touch-action:manipulation">confirm & save</button>' +
-      '<button id="photo-confirm-edit" style="flex:1;padding:12px;border-radius:10px;border:1px solid rgba(255,255,255,0.12);background:transparent;font-family:monospace;font-size:10px;color:rgba(180,200,220,0.6);cursor:pointer;touch-action:manipulation">edit details</button>' +
-      '<button id="photo-confirm-retake" style="padding:12px 14px;border-radius:10px;border:1px solid rgba(255,255,255,0.08);background:transparent;font-family:monospace;font-size:10px;color:rgba(140,160,180,0.4);cursor:pointer;touch-action:manipulation">retake</button>' +
+
+    // Live carbs + GL — the answer
+    '<div id="photo-confirm-preview" style="font-family:\'DM Mono\',monospace;font-size:16px;color:rgba(100,220,160,0.9);text-align:center;margin-bottom:16px;font-weight:500;min-height:22px"></div>' +
+
+    // Actions
+    '<div style="display:flex;gap:8px">' +
+      '<button id="photo-confirm-save" style="flex:2;padding:13px;border-radius:10px;border:1px solid rgba(62,180,120,0.4);background:rgba(62,180,120,0.12);font-family:\'Fraunces\',serif;font-style:italic;font-weight:200;font-size:17px;color:rgba(100,220,160,0.95);cursor:pointer;touch-action:manipulation">add to meal</button>' +
+      '<button id="photo-confirm-retake" style="padding:13px 16px;border-radius:10px;border:1px solid rgba(255,255,255,0.1);background:transparent;font-family:monospace;font-size:10px;color:rgba(140,160,180,0.45);cursor:pointer;touch-action:manipulation">retake</button>' +
     '</div>';
 
   document.body.appendChild(card);
   requestAnimationFrame(function(){ card.style.transform = 'translateY(0)'; });
 
-  // confirm & save — save to library + add to meal
+  // Run initial preview
+  _updatePhotoConfirmPreview(c100, gi);
+
+  // Focus weight field
+  setTimeout(function(){
+    var g = document.getElementById('photo-confirm-grams');
+    if (g) { g.focus(); g.select(); }
+  }, 300);
+
+  // Add to meal — save library + add at whatever weight user set
   document.getElementById('photo-confirm-save').onclick = function() {
+    var gramsEl = document.getElementById('photo-confirm-grams');
+    var grams = parseFloat((gramsEl||{}).value) || gServ;
     card.remove();
     var cat = info.cat || _categoryFromName((info.name||'').toLowerCase());
-    var f = {name:info.name, c100:info.c100, gi:gi, cat:cat};
-    if (gServ !== 100) { f.g_serv = gServ; f.g_each = gServ; }
+    var f = {name:info.name, c100:c100, gi:gi, cat:cat, g_serv:grams, g_each:grams};
     var all = FOOD_DB.concat(FOOD_LIBRARY);
     var existing = all.find(function(x){ return x.name.toLowerCase() === info.name.toLowerCase(); });
     if (!existing) { FOOD_LIBRARY.push(f); saveFoodLibrary(); }
-    addFoodItemGrams(info.name, gServ);
+    addFoodItemGrams(info.name, grams);
     showToast('added: ' + info.name);
   };
 
-  // edit details — drop into full form pre-filled
-  document.getElementById('photo-confirm-edit').onclick = function() {
-    card.remove();
-    _photoFoodData = {c100:info.c100, gi:gi, g_serv:gServ, cat:info.cat||_categoryFromName((info.name||'').toLowerCase())};
-    addCustomFood(info.name);
-  };
-
-  // retake — dismiss and re-trigger photo input
+  // Retake
   document.getElementById('photo-confirm-retake').onclick = function() {
     card.remove();
     var inp = document.getElementById('food-photo-input');
     if (inp) inp.click();
   };
+}
 
-  // Tap outside to dismiss
-  card.addEventListener('click', function(e){ if(e.target===card) card.remove(); });
+function _updatePhotoConfirmPreview(c100, gi) {
+  var gramsEl = document.getElementById('photo-confirm-grams');
+  var prevEl  = document.getElementById('photo-confirm-preview');
+  if (!prevEl) return;
+  var grams = parseFloat((gramsEl||{}).value) || 0;
+  if (grams > 0 && c100 > 0) {
+    var carbs = c100 * grams / 100;
+    var gl    = gi * carbs / 100;
+    prevEl.textContent = carbs.toFixed(1) + 'g carbs · GL ' + gl.toFixed(1);
+  } else {
+    prevEl.textContent = '';
+  }
 }
 
 var _photoFoodData = null; // set by handleFoodPhoto, consumed by addCustomFood
@@ -7284,7 +7404,7 @@ function addCustomFood(name) {
 
   var el = document.createElement('div');
   el.id = 'food-add-overlay';
-  el.style.cssText = 'position:fixed;inset:0;z-index:80;background:var(--rv-panel-bg);backdrop-filter:blur(14px);display:flex;flex-direction:column;align-items:center;justify-content:center;padding:24px;transition:opacity .2s;opacity:0;overflow-y:auto;-webkit-overflow-scrolling:touch';
+  el.style.cssText = 'position:fixed;inset:0;z-index:80;background:var(--rv-panel-bg);backdrop-filter:blur(14px);display:flex;flex-direction:column;align-items:center;justify-content:flex-start;padding:24px 24px 40px;transition:opacity .2s;opacity:0;overflow-y:auto;-webkit-overflow-scrolling:touch';
 
   function inp(id, type, placeholder, min, max, step, val, extraStyle) {
     var i = document.createElement('input');
@@ -10561,6 +10681,7 @@ function buildFunctionIndex() {
     'logMealEntry', 'logCorrection', 'logHypoTreatment',
     'addFoodItem', 'addCustomFood', 'saveCustomFood', 'searchFood',
     '_saveInlineNewFood', '_updateInlinePreview', '_showPhotoConfirmCard',
+    '_numericOnly', '_setInlineMode', '_updatePhotoConfirmPreview', '_debouncedSearchFood',
     'drawGasCloud', 'drawBGTrail', 'drawOrb', 'drawEquilibriumZone',
     'buildSmartForecast', 'drawUnknownForce',
     'syncNow', 'syncPushEvents', 'syncPullEvents',
