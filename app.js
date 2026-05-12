@@ -4205,31 +4205,12 @@ async function syncFoodLibraryFromSupabase() {
     // This is correct: every write (add/delete/edit) pushes the full library to Supabase,
     // so remote is always the authoritative source. Additive merge was causing deleted items
     // to be resurrected on next pull.
-    var remoteNames = new Set(remoteLib.map(function(f){ return (f.name||'').toLowerCase(); }));
-    var localHasNew = FOOD_LIBRARY.some(function(f){ return !remoteNames.has((f.name||'').toLowerCase()); });
-
-    if (localHasNew) {
-      // Local has items remote doesn't — push local items that are missing from remote, then sync
-      var merged = remoteLib.slice();
-      var mergedNames = new Set(remoteNames);
-      FOOD_LIBRARY.forEach(function(f) {
-        if (!mergedNames.has((f.name||'').toLowerCase())) {
-          merged.push(f);
-          mergedNames.add((f.name||'').toLowerCase());
-        }
-      });
-      FOOD_LIBRARY.length = 0;
-      merged.forEach(function(f){ FOOD_LIBRARY.push(f); });
-      try { localStorage.setItem('river_food_lib', JSON.stringify(FOOD_LIBRARY)); } catch(e) {}
-      await syncFoodLibraryToSupabase();
-      console.log('[syncFoodLib] pushed merged (' + FOOD_LIBRARY.length + ' items) — local had new items');
-    } else {
-      // Remote is superset or equal — replace local with remote (respects remote deletes)
-      FOOD_LIBRARY.length = 0;
-      remoteLib.forEach(function(f){ FOOD_LIBRARY.push(f); });
-      try { localStorage.setItem('river_food_lib', JSON.stringify(FOOD_LIBRARY)); } catch(e) {}
-      console.log('[syncFoodLib] replaced local with remote (' + FOOD_LIBRARY.length + ' items)');
-    }
+    // Remote always wins — Supabase is the single source of truth.
+    // Never push local up during a pull; saves go through syncFoodLibraryToSupabase explicitly.
+    FOOD_LIBRARY.length = 0;
+    remoteLib.forEach(function(f){ FOOD_LIBRARY.push(f); });
+    try { localStorage.setItem('river_food_lib', JSON.stringify(FOOD_LIBRARY)); } catch(e) {}
+    console.log('[syncFoodLib] replaced local with remote (' + FOOD_LIBRARY.length + ' items)');
   } catch(e) { console.warn('[syncFoodLib pull]', e.message); }
 }
 
@@ -9252,7 +9233,7 @@ function getTimeVal(id) {
 function openHypoLog() {
   var ex=document.getElementById('hypo-overlay'); if(ex){ex.remove();return;}
   var el=document.createElement('div'); el.id='hypo-overlay';
-  el.style.cssText='position:fixed;inset:0;z-index:60;background:rgba(3,5,20,0.9);backdrop-filter:blur(14px);display:flex;flex-direction:column;align-items:center;justify-content:center;padding:24px;transition:opacity .25s;opacity:0;touch-action:pan-y;pointer-events:auto';
+  el.style.cssText='position:fixed;inset:0;z-index:60;background:rgba(3,5,20,0.9);backdrop-filter:blur(14px);display:flex;flex-direction:column;align-items:center;justify-content:flex-start;padding:24px;padding-top:max(40px,env(safe-area-inset-top,40px));overflow-y:auto;-webkit-overflow-scrolling:touch;transition:opacity .25s;opacity:0;touch-action:pan-y;pointer-events:auto';
   el.addEventListener('touchstart',function(e){e.stopPropagation();},{passive:true});
   el.addEventListener('click',function(e){if(e.target===el)closeHypoLog();});
   var _hypoDefault = _radialDefaultT ? new Date(_radialDefaultT) : new Date();
