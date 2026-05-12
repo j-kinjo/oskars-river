@@ -10947,7 +10947,9 @@ function openDebugPanel() {
       '__BUILD_ID__ · ' + src + ' · last: ' + age + ' · ' + hist + ' readings<br>' +
       'BG: ' + (d.bg ? d.bg.toFixed(1) : '?') +
       ' IOB: ' + (d.iob ? d.iob.toFixed(2) : '?') +
-      ' COB: ' + (d.cob ? d.cob.toFixed(1) : '?') +
+      ' COB: ' + (d.cob ? d.cob.toFixed(1) : '?') + '<br>' +
+      'CGM: ' + HISTORY_RAW.length + ' pts · oldest: ' + (HISTORY_RAW.length ? new Date(HISTORY_RAW[0].t).toLocaleDateString('en-GB',{day:'numeric',month:'short'}) : 'none') + '<br>' +
+      'foods: ' + FOOD_LIBRARY.length + ' · fetchedTo: ' + (_olderHistoryFetchedTo ? new Date(_olderHistoryFetchedTo).toLocaleDateString('en-GB',{day:'numeric',month:'short'}) : 'none') + ' · fetching: ' + _olderHistoryFetching +
     '</div>' +
 
     // Error log with copy button
