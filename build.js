@@ -52,7 +52,7 @@ js = js.replace(/__BUILD_ID__/g, `build ${buildId}`);
 js = js.replace(/build 2026\d{4}-\d+/g, `build ${buildId}`);
 js = js.replace(/fillText\('build [^']+'/g, `fillText('build ${buildId}'`);
 // Note: BOLUS_EVENTS is now a live alias for LOGGED_EVENTS in app.js — no re-injection needed.
-js = `window.__RIVER_HISTORY__ = ${history};\nwindow.__RIVER_FOODS__ = ${foods};\n\n` + js;
+js = `window.__RIVER_HISTORY__ = ${history};\n\n` + js;
 
 // Read favicon from index.template.html if it exists, otherwise use default
 let favicon = `<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><circle cx='16' cy='16' r='15' fill='%23050912' stroke='%233ecfa0' stroke-width='1.5'/><path d='M8 22 Q10 16 16 16 Q22 16 24 10' fill='none' stroke='%233ecfa0' stroke-width='2' stroke-linecap='round'/><circle cx='16' cy='16' r='2.5' fill='%233ecfa0'/></svg>" type="image/svg+xml">`;
