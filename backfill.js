@@ -271,26 +271,112 @@ function bfCardHTML(ev, idx) {
   ].join('');
 }
 
+// ── Library lookup (name + alias aware) ───────────────────────
+function _bfLibLookup(name) {
+  if (!name) return null;
+  var lname = name.toLowerCase();
+  var combined = [].concat(
+    typeof FOOD_LIBRARY !== 'undefined' ? FOOD_LIBRARY : [],
+    typeof FOOD_DB      !== 'undefined' ? FOOD_DB      : []
+  );
+  // Exact name match first
+  var match = combined.find(function(f){ return (f.name||'').toLowerCase() === lname; });
+  if (match) return match;
+  // Alias match
+  return combined.find(function(f){
+    return Array.isArray(f.aliases) && f.aliases.some(function(a){ return a.toLowerCase() === lname; });
+  }) || null;
+}
+
 // ── Item row ───────────────────────────────────────────────────
 function bfItemRow(cardIdx, itemIdx, item) {
   var name  = (item.library_name || item.name || item.raw_name || '').replace(/"/g,'&quot;');
   var carbs = item.carbs != null ? parseFloat(item.carbs).toFixed(1) : '';
+  var c100  = item.c100  != null ? parseFloat(item.c100).toFixed(1)  : '';
+
+  // Resolve against library — catches alias matches too
+  var libMatch = _bfLibLookup(name);
+  if (libMatch) {
+    if (!c100 && libMatch.c100) c100 = parseFloat(libMatch.c100).toFixed(1);
+  }
+
+  var inLibrary = !!libMatch;
+
+  // Sub-row shown beneath when not in library: "+lib" and "this is actually…"
+  // Rendered as a second flex row so it doesn't crowd the main item row
+  var subRow = '';
+  if (name && !inLibrary) {
+    var enc = encodeURIComponent(name);
+    subRow = '<div style="display:flex;align-items:center;gap:8px;padding:0 0 4px 4px">' +
+      '<span style="font-size:9px;color:#40a870">+lib</span>' +
+      '<span style="font-size:9px;color:#333">\u00b7</span>' +
+      '<span onclick="bfShowAliasFor(\'' + cardIdx + '\',\'' + itemIdx + '\',decodeURIComponent(\'' + enc + '\'))" ' +
+        'style="font-size:9px;color:#555;cursor:pointer;font-style:italic;text-decoration:underline;text-decoration-color:#333" ' +
+        'onmouseover="this.style.color=\'#4a8fd4\'" onmouseout="this.style.color=\'#555\'">this is actually\u2026</span>' +
+    '</div>';
+  }
+
   return [
-    '<div class="bfi-row" style="display:flex;align-items:center;gap:6px;margin-bottom:4px">',
-      '<div style="flex:1;position:relative">',
-        '<input style="font-family:inherit;font-size:12px;width:100%;border:1px solid #26262f;border-radius:4px;padding:3px 6px;background:#0c0c0f;color:#e8e4dc" ',
-          'value="' + name + '" placeholder="food name…" autocomplete="off" ',
-          'oninput="bfNameInput(' + cardIdx + ',' + itemIdx + ',this)" ',
-          'onchange="bfUpdateItem(' + cardIdx + ',' + itemIdx + ',\'name\',this.value)">',
-        '<div id="bfac-' + cardIdx + '-' + itemIdx + '" style="position:absolute;top:100%;left:0;right:0;background:#1c1c22;border:1px solid #26262f;border-radius:4px;max-height:140px;overflow-y:auto;z-index:600;display:none"></div>',
+    '<div class="bfi-row" style="margin-bottom:' + (subRow?'0':'6px') + '">',
+      '<div style="display:flex;align-items:center;gap:6px">',
+        '<div style="flex:1;position:relative">',
+          '<input style="font-family:inherit;font-size:12px;width:100%;border:1px solid #26262f;border-radius:4px;padding:3px 6px;background:#0c0c0f;color:#e8e4dc" ',
+            'value="' + name + '" placeholder="food name\u2026" autocomplete="off" ',
+            'oninput="bfNameInput(' + cardIdx + ',' + itemIdx + ',this)" ',
+            'onblur="bfNameBlur(' + cardIdx + ',' + itemIdx + ',this)">',
+          '<div id="bfac-' + cardIdx + '-' + itemIdx + '" style="position:absolute;top:100%;left:0;right:0;background:#1c1c22;border:1px solid #26262f;border-radius:4px;max-height:160px;overflow-y:auto;z-index:600;display:none"></div>',
+        '</div>',
+        // c100 — amber border when missing (signals action needed before approve)
+        '<div style="display:flex;flex-direction:column;align-items:center;gap:1px">',
+          '<input type="number" step="0.1" min="0" max="100" value="' + c100 + '" placeholder="\u2014" ',
+            'title="carbs per 100g \u2014 saved to food library" ',
+            'onchange="bfUpdateItem(' + cardIdx + ',' + itemIdx + ',\'c100\',this.value)" ',
+            'style="font-family:inherit;font-size:11px;width:44px;text-align:right;border:1px solid ' + (!c100?'#4a2800':'#26262f') + ';border-radius:4px;padding:2px 5px;background:#0c0c0f;color:' + (!c100?'#b07820':'#e8e4dc') + '">',
+          '<span style="font-size:8px;color:#333;line-height:1">/100g</span>',
+        '</div>',
+        '<input type="number" step="0.1" value="' + carbs + '" placeholder="g" ',
+          'title="total carbs for this portion" ',
+          'onchange="bfUpdateItem(' + cardIdx + ',' + itemIdx + ',\'carbs\',this.value)" ',
+          'style="font-family:inherit;font-size:12px;width:52px;text-align:right;border:1px solid ' + (!carbs?'#4a1a1a':'#26262f') + ';border-radius:4px;padding:3px 6px;background:#0c0c0f;color:#e8e4dc">',
+        '<button onclick="bfDelItem(' + cardIdx + ',' + itemIdx + ')" style="font-family:inherit;background:none;border:none;color:#555;cursor:pointer;font-size:15px;padding:0 2px">\u00d7</button>',
       '</div>',
-      '<input type="number" step="0.1" value="' + carbs + '" placeholder="g" ',
-        'onchange="bfUpdateItem(' + cardIdx + ',' + itemIdx + ',\'carbs\',this.value)" ',
-        'style="font-family:inherit;font-size:12px;width:56px;text-align:right;border:1px solid ' + (!carbs?'#4a1a1a':'#26262f') + ';border-radius:4px;padding:3px 6px;background:#0c0c0f;color:#e8e4dc">',
-      '<button onclick="bfDelItem(' + cardIdx + ',' + itemIdx + ')" style="font-family:inherit;background:none;border:none;color:#555;cursor:pointer;font-size:15px;padding:0 2px">×</button>',
+      subRow,
     '</div>',
   ].join('');
 }
+
+// ── Name blur — re-resolve against library after manual edit ──
+function bfNameBlur(cardIdx, itemIdx, input) {
+  var name = (input.value || '').trim();
+  if (!name) return;
+
+  // Update state first
+  bfUpdateItem(cardIdx, itemIdx, 'name', name);
+
+  var match = _bfLibLookup(name);
+  if (match) {
+    // Resolved — update item state with library values
+    var items = _bfQueue[cardIdx] && _bfQueue[cardIdx].items;
+    if (items && items[itemIdx]) {
+      if (match.c100)   items[itemIdx].c100   = match.c100;
+      if (match.gi)     items[itemIdx].gi     = match.gi;
+      if (match.gi_cat) items[itemIdx].gi_cat = match.gi_cat;
+      // If matched via alias, normalise to canonical name
+      if ((match.name||'').toLowerCase() !== name.toLowerCase()) {
+        items[itemIdx].name = match.name;
+      }
+    }
+  }
+
+  // Re-render just this item row
+  var container = document.getElementById('bfi-' + cardIdx);
+  if (container && _bfQueue[cardIdx]) {
+    container.innerHTML = _bfQueue[cardIdx].items.map(function(item, ii){
+      return bfItemRow(cardIdx, ii, item);
+    }).join('');
+  }
+}
+window.bfNameBlur = bfNameBlur;
 
 // ── Toggle expand ──────────────────────────────────────────────
 function bfToggle(idx) {
@@ -344,48 +430,265 @@ function bfDrawCGM(idx, cgm) {
   });
 }
 
-// ── Autocomplete ───────────────────────────────────────────────
+// ── Autocomplete + inline-new-food + alias linking ─────────────
+
+var _bfDebounceTimers = {};
+var _bfInlineModes    = {}; // keyed "cardIdx-itemIdx"
+
 function bfSearchFoods(q) {
   if (!q || q.length < 2) return [];
   var lq = q.toLowerCase();
   var combined = [].concat(
     typeof FOOD_LIBRARY !== 'undefined' ? FOOD_LIBRARY : [],
-    typeof FOOD_DB !== 'undefined' ? FOOD_DB : []
+    typeof FOOD_DB      !== 'undefined' ? FOOD_DB      : []
   );
-  return combined.filter(function(f){ return (f.name||'').toLowerCase().includes(lq); }).slice(0,6);
+  // Match on name OR any alias
+  return combined.filter(function(f){
+    if ((f.name||'').toLowerCase().indexOf(lq) >= 0) return true;
+    if (Array.isArray(f.aliases) && f.aliases.some(function(a){ return a.toLowerCase().indexOf(lq) >= 0; })) return true;
+    return false;
+  }).slice(0, 7);
 }
 
 function bfNameInput(cardIdx, itemIdx, input) {
   var ac = document.getElementById('bfac-' + cardIdx + '-' + itemIdx);
   if (!ac) return;
-  var results = bfSearchFoods(input.value);
-  if (!results.length) { ac.style.display='none'; return; }
-  ac.innerHTML = results.map(function(f){
-    var enc = encodeURIComponent(f.name);
-    return '<div onclick="bfSelectFood(' + cardIdx + ',' + itemIdx + ',decodeURIComponent(\'' + enc + '\'))" ' +
-      'style="padding:5px 8px;cursor:pointer;border-bottom:1px solid #26262f;font-size:12px;color:#e8e4dc" ' +
-      'onmouseover="this.style.background=\'#0d1820\'" onmouseout="this.style.background=\'\'">' +
-      f.name + '<span style="float:right;font-size:10px;color:#555">' + (f.typical_carbs||f.carbs_per_portion||f.c100||'?') + 'g</span></div>';
-  }).join('');
-  ac.style.display = 'block';
+  var q = input.value;
+  if (!q || q.length < 2) { ac.style.display = 'none'; return; }
+
+  var results = bfSearchFoods(q);
+
+  if (results.length > 0) {
+    // Show matches immediately
+    var matchHtml = results.map(function(f) {
+      var enc    = encodeURIComponent(f.name);
+      var c100d  = f.c100 ? f.c100 + '/100g' : '?';
+      var giCol  = f.gi >= 70 ? '#c0392b' : f.gi >= 55 ? '#b07820' : '#1d9e72';
+      var aliasMatch = Array.isArray(f.aliases) && f.aliases.some(function(a){ return a.toLowerCase().indexOf(q.toLowerCase()) >= 0; });
+      return '<div onclick="bfSelectFood(' + cardIdx + ',' + itemIdx + ',decodeURIComponent(\'' + enc + '\'))" ' +
+        'style="padding:6px 8px;cursor:pointer;border-bottom:1px solid #26262f;display:flex;align-items:center;gap:6px" ' +
+        'onmouseover="this.style.background=\'#0d1820\'" onmouseout="this.style.background=\'\'">' +
+        '<div style="flex:1">' +
+          '<div style="font-size:12px;color:#e8e4dc">' + f.name + '</div>' +
+          (aliasMatch ? '<div style="font-size:9px;color:#555;font-style:italic">alias match</div>' : '') +
+        '</div>' +
+        '<span style="font-size:10px;color:#555">' + c100d + '</span>' +
+        (f.gi ? '<span style="font-size:9px;color:' + giCol + '">GI&nbsp;' + f.gi + '</span>' : '') +
+      '</div>';
+    }).join('');
+
+    // "→ alias for…" at the bottom — for when typed name should map to an existing entry
+    var aliasRow = '<div onclick="bfShowAliasFor(\'' + cardIdx + '\',\'' + itemIdx + '\',\'' + q.replace(/'/g,"\\'") + '\')" ' +
+      'style="padding:5px 8px;cursor:pointer;border-top:1px solid #26262f;font-size:10px;color:#555;font-style:italic" ' +
+      'onmouseover="this.style.color=\'#4a8fd4\'" onmouseout="this.style.color=\'#555\'">' +
+      '→ \u201c' + q + '\u201d is an alias for\u2026</div>';
+
+    ac.innerHTML = matchHtml + aliasRow;
+    ac.style.display = 'block';
+
+    // Cancel any pending inline-new debounce
+    clearTimeout(_bfDebounceTimers[cardIdx + '-' + itemIdx]);
+  } else {
+    // No match — debounce before showing the inline-new form
+    ac.style.display = 'none';
+    var key = cardIdx + '-' + itemIdx;
+    clearTimeout(_bfDebounceTimers[key]);
+    _bfDebounceTimers[key] = setTimeout(function() {
+      bfShowInlineNew(cardIdx, itemIdx, q, ac);
+    }, 420);
+  }
 }
 window.bfNameInput = bfNameInput;
 
+// ── Inline new-food form — mirrors searchFood no-match UI in app.js ──
+function bfShowInlineNew(cardIdx, itemIdx, q, ac) {
+  if (!ac) ac = document.getElementById('bfac-' + cardIdx + '-' + itemIdx);
+  if (!ac) return;
+
+  var estCat   = typeof _categoryFromName === 'function' ? _categoryFromName(q.toLowerCase()) : 'custom';
+  var estGIObj = typeof _giFromCategory   === 'function' ? _giFromCategory(estCat, q.toLowerCase()) : {gi:55, basis:'default'};
+
+  ac.innerHTML =
+    '<div style="padding:10px 12px">' +
+      '<div style="font-size:9px;color:rgba(220,100,60,0.8);margin-bottom:8px">\u201c' + q + '\u201d \u2014 not in library</div>' +
+
+      '<div style="margin-bottom:6px">' +
+        '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:3px">' +
+          '<span id="bfin-lbl-' + cardIdx + '-' + itemIdx + '" style="font-size:8px;color:#555;text-transform:uppercase;letter-spacing:0.06em">carbs per 100g</span>' +
+          '<div style="display:flex;border-radius:4px;overflow:hidden;border:1px solid #26262f">' +
+            '<button id="bfin-m100-' + cardIdx + '-' + itemIdx + '" onclick="bfInlineMode(\'' + cardIdx + '\',\'' + itemIdx + '\',\'per100\')" ' +
+              'style="font-family:inherit;padding:2px 6px;border:none;cursor:pointer;font-size:8px;background:#0d1820;color:#4a8fd4">per 100g</button>' +
+            '<button id="bfin-mserv-' + cardIdx + '-' + itemIdx + '" onclick="bfInlineMode(\'' + cardIdx + '\',\'' + itemIdx + '\',\'perServ\')" ' +
+              'style="font-family:inherit;padding:2px 6px;border:none;cursor:pointer;font-size:8px;background:transparent;color:#555">per serving</button>' +
+          '</div>' +
+        '</div>' +
+        '<input id="bfin-c100-' + cardIdx + '-' + itemIdx + '" type="number" min="0" max="100" step="0.1" inputmode="decimal" placeholder="e.g. 47" ' +
+          'oninput="bfInlinePreview(\'' + cardIdx + '\',\'' + itemIdx + '\')" ' +
+          'style="width:100%;padding:6px 8px;border-radius:6px;border:1px solid rgba(62,180,120,0.4);background:rgba(62,180,120,0.07);font-family:inherit;font-size:14px;color:rgba(100,220,160,0.95);text-align:center;outline:none;box-sizing:border-box">' +
+      '</div>' +
+
+      '<div style="margin-bottom:8px">' +
+        '<div style="font-size:8px;color:#b07820;text-transform:uppercase;letter-spacing:0.06em;margin-bottom:3px">GI <span style="opacity:0.5;text-transform:none">glycaemic index</span></div>' +
+        '<input id="bfin-gi-' + cardIdx + '-' + itemIdx + '" type="number" min="0" max="100" step="1" inputmode="decimal" value="' + estGIObj.gi + '" ' +
+          'oninput="bfInlinePreview(\'' + cardIdx + '\',\'' + itemIdx + '\')" ' +
+          'style="width:100%;padding:5px 8px;border-radius:6px;border:1px solid rgba(200,160,60,0.3);background:rgba(200,160,60,0.05);font-family:inherit;font-size:13px;color:rgba(220,180,80,0.9);text-align:center;outline:none;box-sizing:border-box">' +
+        '<div style="font-size:7px;color:#555;margin-top:2px">est. \u2014 ' + estGIObj.basis + '</div>' +
+      '</div>' +
+
+      '<div id="bfin-prev-' + cardIdx + '-' + itemIdx + '" style="font-size:10px;color:#40a870;min-height:14px;margin-bottom:8px"></div>' +
+
+      '<div style="display:flex;gap:6px">' +
+        '<button onclick="bfSaveInlineFood(\'' + cardIdx + '\',\'' + itemIdx + '\',\'' + q.replace(/'/g,"\\'") + '\')" ' +
+          'style="font-family:inherit;flex:1;padding:7px;border-radius:6px;border:1px solid rgba(62,180,120,0.4);background:rgba(62,180,120,0.1);font-size:11px;color:#40a870;cursor:pointer">save + use</button>' +
+        '<button onclick="bfShowAliasFor(\'' + cardIdx + '\',\'' + itemIdx + '\',\'' + q.replace(/'/g,"\\'") + '\')" ' +
+          'style="font-family:inherit;flex:1;padding:7px;border-radius:6px;border:1px solid #26262f;background:transparent;font-size:11px;color:#555;cursor:pointer;font-style:italic">\u2192 alias for\u2026</button>' +
+      '</div>' +
+    '</div>';
+
+  ac.style.display = 'block';
+  // Auto-focus the c100 input
+  setTimeout(function(){
+    var inp = document.getElementById('bfin-c100-' + cardIdx + '-' + itemIdx);
+    if (inp) inp.focus();
+  }, 30);
+}
+window.bfShowInlineNew = bfShowInlineNew;
+
+function bfInlineMode(cardIdx, itemIdx, mode) {
+  _bfInlineModes[cardIdx + '-' + itemIdx] = mode;
+  var lbl    = document.getElementById('bfin-lbl-'   + cardIdx + '-' + itemIdx);
+  var btn100 = document.getElementById('bfin-m100-'  + cardIdx + '-' + itemIdx);
+  var btnSrv = document.getElementById('bfin-mserv-' + cardIdx + '-' + itemIdx);
+  if (lbl)   lbl.textContent = mode === 'per100' ? 'carbs per 100g' : 'carbs per serving (g)';
+  if (btn100){ btn100.style.background = mode==='per100' ? '#0d1820' : 'transparent'; btn100.style.color = mode==='per100' ? '#4a8fd4' : '#555'; }
+  if (btnSrv){ btnSrv.style.background = mode==='perServ'? '#0d1820' : 'transparent'; btnSrv.style.color = mode==='perServ'? '#4a8fd4' : '#555'; }
+  bfInlinePreview(cardIdx, itemIdx);
+}
+window.bfInlineMode = bfInlineMode;
+
+function bfInlinePreview(cardIdx, itemIdx) {
+  var c100raw = parseFloat((document.getElementById('bfin-c100-' + cardIdx + '-' + itemIdx)||{}).value) || 0;
+  var gi      = parseInt((document.getElementById('bfin-gi-'   + cardIdx + '-' + itemIdx)||{}).value)   || 0;
+  var prev    = document.getElementById('bfin-prev-' + cardIdx + '-' + itemIdx);
+  if (!prev) return;
+  if (c100raw > 0) {
+    var gl = gi > 0 ? (gi * c100raw / 100).toFixed(1) : null;
+    prev.textContent = c100raw + 'g carbs/100g' + (gl ? ' \u00b7 GL ' + gl : '');
+  } else {
+    prev.textContent = '';
+  }
+}
+window.bfInlinePreview = bfInlinePreview;
+
+function bfSaveInlineFood(cardIdx, itemIdx, name) {
+  var c100raw = parseFloat((document.getElementById('bfin-c100-' + cardIdx + '-' + itemIdx)||{}).value) || 0;
+  var gi      = parseInt((document.getElementById('bfin-gi-'    + cardIdx + '-' + itemIdx)||{}).value)  || 55;
+  if (!c100raw) {
+    var inp = document.getElementById('bfin-c100-' + cardIdx + '-' + itemIdx);
+    if (inp) inp.focus();
+    return;
+  }
+  var c100  = Math.round(c100raw * 10) / 10;
+  var lname = name.toLowerCase();
+  var cat   = typeof _categoryFromName === 'function' ? _categoryFromName(lname) : 'custom';
+  var entry = { name: name, c100: c100, gi: gi, cat: cat, g_serv: null, g_each: null };
+
+  // Save to library immediately — same path as _saveInlineNewFood in app.js
+  if (typeof FOOD_LIBRARY !== 'undefined' && typeof saveFoodLibrary === 'function') {
+    if (!FOOD_LIBRARY.some(function(f){ return (f.name||'').toLowerCase() === lname; })) {
+      FOOD_LIBRARY.push(entry);
+      saveFoodLibrary();
+      if (typeof __debugLog === 'function') __debugLog('backfill: saved "' + name + '" to library c100=' + c100);
+    }
+  }
+
+  // Update item in queue state
+  if (_bfQueue[cardIdx]) {
+    var items = _bfQueue[cardIdx].items || [];
+    items[itemIdx] = Object.assign(items[itemIdx] || {}, { name: name, c100: c100, gi: gi, gi_cat: cat });
+    _bfQueue[cardIdx].items = items;
+  }
+
+  var ac = document.getElementById('bfac-' + cardIdx + '-' + itemIdx);
+  if (ac) ac.style.display = 'none';
+  var container = document.getElementById('bfi-' + cardIdx);
+  if (container && _bfQueue[cardIdx]) {
+    container.innerHTML = _bfQueue[cardIdx].items.map(function(item, ii){ return bfItemRow(cardIdx, ii, item); }).join('');
+  }
+}
+window.bfSaveInlineFood = bfSaveInlineFood;
+
+// ── Alias linking ──────────────────────────────────────────────
+function bfShowAliasFor(cardIdx, itemIdx, alias) {
+  var ac = document.getElementById('bfac-' + cardIdx + '-' + itemIdx);
+  if (!ac) return;
+
+  ac.innerHTML =
+    '<div style="padding:8px 10px">' +
+      '<div style="font-size:9px;color:#555;margin-bottom:6px;font-style:italic">\u201c' + alias + '\u201d is an alias for:</div>' +
+      '<input id="bfalias-search-' + cardIdx + '-' + itemIdx + '" type="text" placeholder="type canonical name\u2026" autocomplete="off" ' +
+        'oninput="bfAliasSearch(\'' + cardIdx + '\',\'' + itemIdx + '\',\'' + alias.replace(/'/g,"\\'") + '\',this.value)" ' +
+        'style="width:100%;padding:5px 8px;border-radius:5px;border:1px solid #26262f;background:#0c0c0f;color:#e8e4dc;font-family:inherit;font-size:12px;outline:none;box-sizing:border-box">' +
+      '<div id="bfalias-results-' + cardIdx + '-' + itemIdx + '" style="margin-top:4px"></div>' +
+      '<button onclick="document.getElementById(\'bfac-' + cardIdx + '-' + itemIdx + '\').style.display=\'none\'" ' +
+        'style="font-family:inherit;width:100%;margin-top:6px;padding:5px;border:1px solid #26262f;border-radius:5px;background:transparent;font-size:10px;color:#555;cursor:pointer">cancel</button>' +
+    '</div>';
+
+  ac.style.display = 'block';
+  setTimeout(function(){
+    var si = document.getElementById('bfalias-search-' + cardIdx + '-' + itemIdx);
+    if (si) si.focus();
+  }, 30);
+}
+window.bfShowAliasFor = bfShowAliasFor;
+
+function bfAliasSearch(cardIdx, itemIdx, alias, q) {
+  var res = document.getElementById('bfalias-results-' + cardIdx + '-' + itemIdx);
+  if (!res) return;
+  if (!q || q.length < 2) { res.innerHTML = ''; return; }
+  var matches = bfSearchFoods(q);
+  if (!matches.length) { res.innerHTML = '<div style="font-size:10px;color:#555;padding:5px 8px">no matches</div>'; return; }
+  res.innerHTML = matches.map(function(f) {
+    var enc = encodeURIComponent(f.name);
+    return '<div onclick="bfLinkAlias(\'' + cardIdx + '\',\'' + itemIdx + '\',\'' + alias.replace(/'/g,"\\'") + '\',decodeURIComponent(\'' + enc + '\'))" ' +
+      'style="padding:5px 8px;cursor:pointer;border-bottom:1px solid #26262f;font-size:12px;color:#e8e4dc" ' +
+      'onmouseover="this.style.background=\'#0d1820\'" onmouseout="this.style.background=\'\'">' +
+      f.name + '<span style="float:right;font-size:10px;color:#555">' + (f.c100||'?') + '/100g</span></div>';
+  }).join('');
+}
+window.bfAliasSearch = bfAliasSearch;
+
+function bfLinkAlias(cardIdx, itemIdx, alias, canonicalName) {
+  // Attach alias to the canonical library entry and push
+  if (typeof FOOD_LIBRARY !== 'undefined' && typeof saveFoodLibrary === 'function') {
+    var canonical = FOOD_LIBRARY.find(function(f){ return (f.name||'').toLowerCase() === canonicalName.toLowerCase(); });
+    if (canonical) {
+      canonical.aliases = canonical.aliases || [];
+      var aliaslc = alias.toLowerCase();
+      if (!canonical.aliases.some(function(a){ return a.toLowerCase() === aliaslc; })) {
+        canonical.aliases.push(alias);
+      }
+      saveFoodLibrary();
+      if (typeof __debugLog === 'function') __debugLog('backfill: alias "' + alias + '" \u2192 "' + canonicalName + '"');
+    }
+  }
+  // Resolve this item to the canonical food (reuses bfSelectFood)
+  bfSelectFood(cardIdx, itemIdx, canonicalName);
+}
+window.bfLinkAlias = bfLinkAlias;
+
 function bfSelectFood(cardIdx, itemIdx, name) {
-  var combined = [].concat(
-    typeof FOOD_LIBRARY !== 'undefined' ? FOOD_LIBRARY : [],
-    typeof FOOD_DB !== 'undefined' ? FOOD_DB : []
-  );
-  var food = combined.find(function(f){ return f.name === name; });
+  var food = _bfLibLookup(name);
   if (!food || !_bfQueue[cardIdx]) return;
   var items = _bfQueue[cardIdx].items || [];
+  var existing = items[itemIdx] || {};
   items[itemIdx] = {
-    name:       food.name,
-    library_id: food.id || null,
-    carbs:      food.typical_carbs || food.carbs_per_portion || food.c100 || null,
-    gi:         food.gi || null,
+    name:       food.name,                    // canonical name, not the alias
+    library_id: food.id   || null,
+    c100:       food.c100 || null,
+    carbs:      existing.carbs || null,       // preserve existing total carbs
+    gi:         food.gi   || null,
     gi_cat:     food.gi_cat || null,
-    grams:      null
   };
   _bfQueue[cardIdx].items = items;
   var ac = document.getElementById('bfac-' + cardIdx + '-' + itemIdx);
@@ -400,7 +703,7 @@ function bfUpdateItem(cardIdx, itemIdx, field, val) {
   if (!_bfQueue[cardIdx]) return;
   var items = _bfQueue[cardIdx].items || [];
   if (!items[itemIdx]) return;
-  if (field === 'carbs') items[itemIdx].carbs = val==='' ? null : parseFloat(val);
+  if (field === 'carbs' || field === 'c100') items[itemIdx][field] = val==='' ? null : parseFloat(val);
   else items[itemIdx][field] = val;
   _bfQueue[cardIdx].items = items;
 }
@@ -433,6 +736,44 @@ function bfUpdateNotes(cardIdx, val) {
   _bfQueue[cardIdx].notes = val;
 }
 window.bfUpdateNotes = bfUpdateNotes;
+
+// ── Sync new foods to FOOD_LIBRARY after approve ───────────────
+// For each approved item that has a name + c100 and isn't already in
+// the library, add it and push to Supabase. This is how the library
+// gets rebuilt progressively through backfill review.
+function _bfSyncNewFoodsToLibrary(items) {
+  if (!items || !items.length) return;
+  if (typeof FOOD_LIBRARY === 'undefined' || typeof saveFoodLibrary !== 'function') return;
+
+  var added = 0;
+  items.forEach(function(item) {
+    var name = (item.name || '').trim();
+    var c100 = parseFloat(item.c100);
+    if (!name || isNaN(c100) || c100 <= 0) return;
+
+    // Skip if already in library (case-insensitive match)
+    var exists = FOOD_LIBRARY.some(function(f){ return (f.name||'').toLowerCase() === name.toLowerCase(); });
+    if (exists) return;
+
+    // Build a food library entry — keep it consistent with inline-new-food format in app.js
+    var entry = {
+      name:   name,
+      c100:   Math.round(c100 * 10) / 10,
+      gi:     item.gi    || null,
+      cat:    item.gi_cat || null,
+      g_serv: null,
+      g_each: null,
+    };
+    FOOD_LIBRARY.push(entry);
+    added++;
+    if (typeof __debugLog === 'function') __debugLog('backfill: added "' + name + '" to library (c100=' + entry.c100 + ')');
+  });
+
+  if (added > 0) {
+    saveFoodLibrary(); // persists to localStorage + Supabase
+    if (typeof __debugLog === 'function') __debugLog('backfill: library now ' + FOOD_LIBRARY.length + ' items (+' + added + ')');
+  }
+}
 
 // ── Approve ────────────────────────────────────────────────────
 async function bfApprove(idx) {
@@ -487,6 +828,11 @@ async function bfApprove(idx) {
     if (!res.ok) throw new Error('Worker ' + res.status);
     var result = await res.json();
     if (result.errors && Object.keys(result.errors).length) throw new Error(JSON.stringify(result.errors));
+
+    // Save any new food items to the library — this is how we rebuild the
+    // library progressively through backfill. First "pita" → added to library.
+    // Second "pita" entry → autocompletes from library.
+    _bfSyncNewFoodsToLibrary(ev.items);
 
     // Mark approved in backfill_queue
     await _bfFetch(
