@@ -10994,14 +10994,70 @@ function openDebugPanel() {
     '</div>' +
 
     // Status line
-    '<div id="repair-status" style="font-size:9px;color:var(--rv-text-muted);min-height:14px;text-align:center"></div>';
+    '<div id="repair-status" style="font-size:9px;color:var(--rv-text-muted);min-height:14px;text-align:center"></div>' +
+
+    // Backlog
+    '<div style="border-top:1px solid rgba(255,255,255,0.08);margin-top:10px;padding-top:10px">' +
+      '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">' +
+        '<div style="font-size:8px;letter-spacing:1px;text-transform:uppercase;color:var(--rv-text-muted)">backlog</div>' +
+        '<div style="display:flex;gap:4px">' +
+          '<button onclick="loadDebugBacklog(\'open\')" id="blq-btn-open" style="padding:2px 6px;border-radius:4px;border:1px solid rgba(62,207,160,0.3);background:rgba(62,207,160,0.08);color:rgba(62,207,160,0.8);font-family:monospace;font-size:8px;cursor:pointer">open</button>' +
+          '<button onclick="loadDebugBacklog(\'p0\')" id="blq-btn-p0" style="padding:2px 6px;border-radius:4px;border:1px solid rgba(220,80,60,0.3);background:rgba(220,80,60,0.08);color:rgba(220,80,60,0.8);font-family:monospace;font-size:8px;cursor:pointer">p0</button>' +
+          '<button onclick="loadDebugBacklog(\'done\')" id="blq-btn-done" style="padding:2px 6px;border-radius:4px;border:1px solid rgba(100,100,100,0.3);background:rgba(100,100,100,0.08);color:rgba(150,150,150,0.8);font-family:monospace;font-size:8px;cursor:pointer">done</button>' +
+        '</div>' +
+      '</div>' +
+      '<div id="backlog-list" style="font-size:9px;line-height:1.6;color:rgba(180,200,180,0.7)">loading…</div>' +
+    '</div>';
 
   document.body.appendChild(el);
   if (window.__updateDebugPanel) window.__updateDebugPanel();
+  loadDebugBacklog('open');
 }
 
 
 
+
+// ── BACKLOG — fetch and render backlog items in debug panel ──────────
+var _blqFilter = 'open';
+async function loadDebugBacklog(filter) {
+  _blqFilter = filter || _blqFilter;
+  var el = document.getElementById('backlog-list');
+  if (!el) return;
+  el.textContent = 'loading…';
+  try {
+    var qs = _blqFilter === 'p0'
+      ? '?select=id,title,priority,status,type,session_id&priority=eq.p0&status=eq.open&order=created_at.asc'
+      : _blqFilter === 'done'
+        ? '?select=id,title,priority,status,type,session_id&status=eq.done&order=updated_at.desc&limit=10'
+        : '?select=id,title,priority,status,type,session_id&status=in.(open,in_session)&order=priority.asc,created_at.asc';
+    var r = await fetch(SUPABASE_URL + '/rest/v1/backlog' + qs, {
+      headers: { 'apikey': SUPABASE_ANON_KEY, 'Authorization': 'Bearer ' + SUPABASE_ANON_KEY }
+    });
+    if (!r.ok) throw new Error(await r.text());
+    var items = await r.json();
+    if (!items.length) { el.textContent = 'none'; return; }
+    var priColor = { p0: 'rgba(220,80,60,0.9)', p1: 'rgba(220,160,40,0.9)', p2: 'rgba(80,150,220,0.9)', future: 'rgba(120,120,120,0.7)' };
+    el.innerHTML = items.map(function(item) {
+      var done = ['done','deferred','wont_do'].includes(item.status);
+      return '<div style="display:flex;align-items:baseline;gap:6px;padding:3px 0;border-bottom:1px solid rgba(255,255,255,0.04)">' +
+        '<span style="color:' + (priColor[item.priority]||'#aaa') + ';min-width:22px;font-size:8px">' + item.priority + '</span>' +
+        '<span style="flex:1;' + (done ? 'opacity:0.4;text-decoration:line-through;' : '') + '">' + item.title + '</span>' +
+        (item.session_id ? '<span style="color:rgba(62,207,160,0.4);font-size:8px">' + item.session_id + '</span>' : '') +
+        (!done ? '<button onclick="markBacklogDone(\'' + item.id + '\')" style="padding:1px 5px;border-radius:3px;border:1px solid rgba(62,207,160,0.2);background:none;color:rgba(62,207,160,0.6);font-family:monospace;font-size:8px;cursor:pointer">✓</button>' : '') +
+      '</div>';
+    }).join('');
+  } catch(e) {
+    if (el) el.textContent = 'error: ' + e.message.slice(0, 60);
+  }
+}
+async function markBacklogDone(id) {
+  await fetch(SUPABASE_URL + '/rest/v1/backlog?id=eq.' + id, {
+    method: 'PATCH',
+    headers: { 'apikey': SUPABASE_ANON_KEY, 'Authorization': 'Bearer ' + SUPABASE_ANON_KEY, 'Content-Type': 'application/json', 'Prefer': 'return=minimal' },
+    body: JSON.stringify({ status: 'done' })
+  });
+  loadDebugBacklog();
+}
 
 // ── DEPLOY — push current app.js to GitHub ───────────────────────────
 async function deployToGitHub() {
