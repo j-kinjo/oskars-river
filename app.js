@@ -3931,6 +3931,74 @@ async function _loadOlderHistory() {
     setTimeout(function(){ if (_histLoadEl.parentNode) _histLoadEl.remove(); }, 500);
   }
 }
+// ── BULK HISTORY FETCH — pulls all history from a start date in one go ──
+async function _bulkFetchHistory(fromDate) {
+  var bulkEl = document.getElementById('bulk-hist-indicator');
+  if (!bulkEl) {
+    bulkEl = document.createElement('div');
+    bulkEl.id = 'bulk-hist-indicator';
+    bulkEl.style.cssText = 'position:fixed;top:12px;left:50%;transform:translateX(-50%);' +
+      'font-family:"DM Mono",monospace;font-size:10px;color:rgba(160,190,210,0.8);' +
+      'background:rgba(3,5,20,0.8);padding:6px 12px;border-radius:8px;' +
+      'pointer-events:none;z-index:999;letter-spacing:0.05em';
+    document.body.appendChild(bulkEl);
+  }
+
+  var targetStart = fromDate instanceof Date ? fromDate.getTime() : new Date(fromDate).getTime();
+  var cursor = Date.now();
+  var totalAdded = 0;
+  var chunk = 0;
+
+  while (cursor > targetStart) {
+    var fetchTo   = cursor;
+    var fetchFrom = Math.max(targetStart, cursor - 7 * 24 * 3600000); // 7-day chunks
+    chunk++;
+    bulkEl.textContent = 'loading history… ' + new Date(fetchFrom).toLocaleDateString('en-GB',{day:'numeric',month:'short'});
+
+    try {
+      var readRows = await _sbFetch(
+        'readings?t=gte.' + fetchFrom + '&t=lt.' + fetchTo + '&order=t.asc&limit=2000',
+        { method: 'GET' }
+      );
+      if (Array.isArray(readRows) && readRows.length > 0) {
+        readRows.forEach(function(row) {
+          var exists = HISTORY_RAW.findIndex(function(h){ return Math.abs(h.t - row.t) < 90000; });
+          if (exists < 0) { HISTORY_RAW.push({ t: row.t, bg: row.bg, iob: 0, cob: 0, pen: 1 }); totalAdded++; }
+        });
+        HISTORY_RAW.sort(function(a,b){ return a.t - b.t; });
+        updateCGMBounds();
+        persistReadings();
+      }
+      var evRows = await _sbFetch(
+        'events?t=gte.' + fetchFrom + '&t=lt.' + fetchTo + '&order=t.asc&limit=500&note=neq.food_library',
+        { method: 'GET' }
+      );
+      if (Array.isArray(evRows) && evRows.length > 0) {
+        evRows.forEach(function(row) {
+          if (typeof _deletedEventTs !== 'undefined' && _deletedEventTs.has(row.t)) return;
+          var existsL = LOGGED_EVENTS.findIndex(function(e){ return e.t === row.t; });
+          if (existsL < 0) {
+            var rowItems = row.items;
+            if (typeof rowItems === 'string') { try { rowItems = JSON.parse(rowItems); } catch(_e) { rowItems = null; } }
+            LOGGED_EVENTS.push({ t: row.t, c: row.c||0, u: row.u||0, gi: row.gi, note: row.note, items: rowItems, local: false });
+          }
+        });
+        try { localStorage.setItem('river_logged', JSON.stringify(LOGGED_EVENTS)); } catch(e) {}
+      }
+    } catch(e) {
+      console.warn('[bulkFetch]', e.message);
+    }
+
+    cursor = fetchFrom;
+    await new Promise(function(r){ setTimeout(r, 200); }); // 200ms between chunks
+  }
+
+  _olderHistoryFetchedTo = targetStart;
+  bulkEl.textContent = '✓ loaded ' + totalAdded + ' readings';
+  setTimeout(function(){ if (bulkEl.parentNode) bulkEl.remove(); }, 3000);
+  showToast('history loaded\n' + totalAdded + ' readings added');
+}
+
 CV.addEventListener('click', function(e) {
   var rect = CV.getBoundingClientRect();
   var mx = e.clientX - rect.left;
@@ -10940,7 +11008,7 @@ function openDebugPanel() {
       '<div style="display:flex;gap:6px">' +
         '<button onclick="deployToGitHub()" style="padding:3px 8px;border-radius:6px;border:1px solid rgba(62,207,160,0.3);background:rgba(62,207,160,0.08);color:rgba(62,207,160,0.8);font-family:monospace;font-size:9px;cursor:pointer">⬆ deploy</button>' +
         '<button onclick="if(confirm(\'Clear all local data and reload?\'))nukeLocalData()" style="padding:3px 8px;border-radius:6px;border:1px solid rgba(220,80,60,0.4);background:rgba(220,80,60,0.08);color:rgba(220,80,60,0.8);font-family:monospace;font-size:9px;cursor:pointer">nuke local</button>' +
-        '<button onclick="_olderHistoryFetchedTo=Date.now();_olderHistoryLastFetch=0;_loadOlderHistory().then(function(){showToast(\'history fetch fired\');})" style="padding:3px 8px;border-radius:6px;border:1px solid rgba(80,160,220,0.4);background:rgba(80,160,220,0.08);color:rgba(80,160,220,0.8);font-family:monospace;font-size:9px;cursor:pointer">reload history</button>' +
+        '<button onclick="_bulkFetchHistory(new Date(\'2026-03-07\'))" style="padding:3px 8px;border-radius:6px;border:1px solid rgba(80,160,220,0.4);background:rgba(80,160,220,0.08);color:rgba(80,160,220,0.8);font-family:monospace;font-size:9px;cursor:pointer">load all history</button>' +
         '<button onclick="if(confirm(\'Delete ALL Supabase events? Cannot be undone.\'))nukeSupabaseEvents()" style="padding:3px 8px;border-radius:6px;border:1px solid rgba(220,80,60,0.6);background:rgba(220,80,60,0.12);color:rgba(220,80,60,0.9);font-family:monospace;font-size:9px;cursor:pointer">nuke supa</button>' +
         '<button onclick="document.getElementById(\'debug-panel\').remove()" style="background:none;border:none;color:var(--rv-text-muted);cursor:pointer;font-size:18px;padding:0;line-height:1">×</button>' +
       '</div>' +
