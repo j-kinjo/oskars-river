@@ -3962,12 +3962,12 @@ async function _backfillFromNightscout(fromDate, toDate) {
     indEl.textContent = 'NS backfill… ' + new Date(chunkStart).toLocaleDateString('en-GB',{day:'numeric',month:'short'});
 
     try {
-      var sep = token ? '&' : '';
-      var auth = token ? 'token=' + encodeURIComponent(token) : '';
-      var url = nsUrl + '/api/v1/entries/sgv.json?find[date][$gte]=' + chunkStart +
-                '&find[date][$lte]=' + chunkEnd + '&count=500' + (auth ? '&' + auth : '');
+      var auth = token ? '&token=' + encodeURIComponent(token) : '';
+      var nsTarget = nsUrl + '/api/v1/entries/sgv.json?find[date][$gte]=' + chunkStart +
+                     '&find[date][$lte]=' + chunkEnd + '&count=500' + auth;
+      var proxyUrl = 'https://orange-surf-6f98.john-king-uk.workers.dev/?url=' + encodeURIComponent(nsTarget);
 
-      var resp = await fetch(url);
+      var resp = await fetch(proxyUrl);
       if (!resp.ok) throw new Error('NS ' + resp.status);
       var entries = await resp.json();
 
