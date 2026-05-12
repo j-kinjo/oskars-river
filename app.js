@@ -4711,7 +4711,7 @@ async function _evaluateUnannouncedMeal(run, preBG) {
   var candidateMeals = await _matchGhostToMealHistory(run, peakMins, estCarbs, startT, iob);
 
   // ── Fallback: food library GI curves (when meal_history has <3 viable rows) ──
-  var allFoods    = (window.FOOD_DB || []).concat(FOOD_LIBRARY || []);
+  var allFoods    = FOOD_LIBRARY.slice();
   var candidateFoods = allFoods.map(function(f) {
     var gi = f.gi || 55;
     var expectedPeak = Math.max(15, 95 - gi);
@@ -5311,7 +5311,7 @@ function totalPlateCarbs() {
 }
 
 function addPlateFood(name) {
-  var all  = FOOD_DB.concat(FOOD_LIBRARY);
+  var all  = FOOD_LIBRARY.slice();
   var food = all.find(function(f){ return f.name===name; });
   if (!food) return;
   var defaultG = food.g_each || food.g_serv || 100;
@@ -5498,7 +5498,7 @@ function renderKitchen() {
 function searchPlateFood(q) {
   var results = document.getElementById('plate-results');
   if (!q||q.length<1){ results.style.display='none'; return; }
-  var all = FOOD_DB.concat(FOOD_LIBRARY);
+  var all = FOOD_LIBRARY.slice();
   var matches = all.filter(function(f){ return f.name.toLowerCase().indexOf(q.toLowerCase())>=0; }).slice(0,8);
   if (matches.length===0){ results.style.display='none'; return; }
   results.style.display='block';
@@ -5727,7 +5727,7 @@ function recipeIngRow(i, name, c100, gi) {
 function searchRecipeIng(q) {
   var res=document.getElementById('recipe-ing-results');
   if(!q||q.length<1){res.style.display='none';return;}
-  var all=FOOD_DB.concat(FOOD_LIBRARY);
+  var all=FOOD_LIBRARY.slice();
   var matches=all.filter(function(f){return f.name.toLowerCase().indexOf(q.toLowerCase())>=0&&f.c100>0;}).slice(0,8);
   if(matches.length===0){res.style.display='none';return;}
   res.style.display='block';
@@ -6458,7 +6458,7 @@ var _searchDebounceTimer = null;
 function _debouncedSearchFood(q) {
   clearTimeout(_searchDebounceTimer);
   // Show matches immediately (fast feedback); only show no-match inline form after pause
-  var all = FOOD_DB.concat(FOOD_LIBRARY);
+  var all = FOOD_LIBRARY.slice();
   var ql = q.toLowerCase();
   var matches = q && q.length >= 1 ? all.filter(function(f){ return f.name.toLowerCase().indexOf(ql) >= 0; }).slice(0,8) : [];
   if (matches.length > 0) {
@@ -6479,7 +6479,7 @@ function searchFood(q) {
   var ql = q.toLowerCase();
 
   // Combine DB + library
-  var all = FOOD_DB.concat(FOOD_LIBRARY);
+  var all = FOOD_LIBRARY.slice();
   var matches = all.filter(function(f) { return f.name.toLowerCase().indexOf(ql) >= 0; }).slice(0, 8);
 
   if (matches.length === 0) {
@@ -6643,7 +6643,7 @@ function _saveInlineNewFood(name) {
   var f = {name:name, c100:c100, gi:gi, cat:cat, g_serv:grams, g_each:grams};
 
   // Save to library as side-effect
-  var all = FOOD_DB.concat(FOOD_LIBRARY);
+  var all = FOOD_LIBRARY.slice();
   if (!all.find(function(x){ return x.name.toLowerCase() === lname; })) {
     FOOD_LIBRARY.push(f);
     saveFoodLibrary();
@@ -6726,7 +6726,7 @@ async function _parseSpeechToFood(transcript) {
   // Build known recipe/dish names for context
   var knownDishes = RECIPES.map(function(r){ return r.name; }).join(', ') || 'none';
   // Build a short food library hint (first 30 items)
-  var libraryHint = FOOD_DB.concat(FOOD_LIBRARY).slice(0,30).map(function(f){ return f.name; }).join(', ');
+  var libraryHint = FOOD_LIBRARY.slice().slice(0,30).map(function(f){ return f.name; }).join(', ');
 
   _showFoodAIStatus('parsing meal\u2026');
   try {
@@ -6833,7 +6833,7 @@ function _closeVoicePanel() {
 }
 
 function _showVoiceResults(items, transcript) {
-  var all2 = FOOD_DB.concat(FOOD_LIBRARY);
+  var all2 = FOOD_LIBRARY.slice();
 
   // Group items by dish
   var dishes = {};   // dishName -> [items]
@@ -6939,7 +6939,7 @@ function _showVoiceResults(items, transcript) {
 }
 
 function _addAllVoiceItems(items) {
-  var all2 = FOOD_DB.concat(FOOD_LIBRARY);
+  var all2 = FOOD_LIBRARY.slice();
   items.forEach(function(item) {
     if (!item || !item.name) return;
     var ql3 = item.name.toLowerCase();
@@ -6974,7 +6974,7 @@ function _addUnknownFoodToSheet(name, grams) {
 }
 
 function addFoodItemGrams(name, grams) {
-  var all   = FOOD_DB.concat(FOOD_LIBRARY);
+  var all   = FOOD_LIBRARY.slice();
   var food  = null;
   for (var i=0; i<all.length; i++) { if (all[i].name === name) { food = all[i]; break; } }
   if (!food) return;
@@ -7191,7 +7191,7 @@ function _showPhotoConfirmCard(info) {
     card.remove();
     var cat = info.cat || _categoryFromName((info.name||'').toLowerCase());
     var f = {name:info.name, c100:c100, gi:gi, cat:cat, g_serv:grams, g_each:grams};
-    var all = FOOD_DB.concat(FOOD_LIBRARY);
+    var all = FOOD_LIBRARY.slice();
     var existing = all.find(function(x){ return x.name.toLowerCase() === info.name.toLowerCase(); });
     if (!existing) { FOOD_LIBRARY.push(f); saveFoodLibrary(); }
     addFoodItemGrams(info.name, grams);
@@ -7305,7 +7305,7 @@ async function checkFoodPaste(val) {
 
 function addUrlFoodItem(item) {
   // Save to library if not already present
-  var all = FOOD_DB.concat(FOOD_LIBRARY);
+  var all = FOOD_LIBRARY.slice();
   var existing = all.filter(function(f){ return f.name === item.name; })[0];
   if (!existing) {
     var newFood = { name: item.name, c100: item.c100, gi: item.gi || 55, g_serv: item.g_serv || 100 };
@@ -7317,7 +7317,7 @@ function addUrlFoodItem(item) {
 }
 
 function addFoodItem(name) {
-  var all   = FOOD_DB.concat(FOOD_LIBRARY);
+  var all   = FOOD_LIBRARY.slice();
   var food  = null;
   for (var i=0; i<all.length; i++) { if (all[i].name === name) { food = all[i]; break; } }
   if (!food) return;
@@ -7912,7 +7912,7 @@ function loadMealHistory(idx) {
   if (!m || !m.items) return;
   _mealItems = m.items.map(function(item) {
     // Try to find original food object
-    var all  = FOOD_DB.concat(FOOD_LIBRARY);
+    var all  = FOOD_LIBRARY.slice();
     var food = null;
     for (var i=0; i<all.length; i++) { if (all[i].name === item.name) { food=all[i]; break; } }
     if (!food) food = {name:item.name, c100:0, gi:55, cat:'saved'};
@@ -9168,23 +9168,15 @@ const CGM_SOURCES = {
 
 
 // ── HYPO TREATMENT QUICK-LOG ──────────────────────────────────────
-// HYPO_TREATMENTS: derived from FOOD_LIBRARY cat='hypo' — no hardcoded items.
+// HYPO_TREATMENTS: derived live from FOOD_LIBRARY cat='hypo'.
 // Add/remove hypo options by editing the food library in Supabase.
 function getHypoTreatments() {
   return FOOD_LIBRARY.filter(function(f){ return f.cat === 'hypo'; })
     .map(function(f) {
       var carbs_each = Math.round((f.c100 * (f.g_each || f.g_serv)) / 100 * 100) / 100;
       var id = f.name.toLowerCase().replace(/[^a-z0-9]+/g,'_');
-      return {
-        id:          id,
-        name:        f.name,
-        carbs_each:  carbs_each,
-        carbs:       carbs_each,
-        gi:          f.gi,
-        unit:        'item',
-        default_qty: 1,
-        note:        f.note || '',
-      };
+      return { id: id, name: f.name, carbs_each: carbs_each, carbs: carbs_each,
+               gi: f.gi, unit: 'item', default_qty: 1, note: f.note || '' };
     });
 }
 
@@ -10033,9 +10025,7 @@ function renderFoodManager(el) {
                    fruit:'fruit',dairy:'dairy',protein:'protein',main:'mains',
                    drink:'drinks',custom:'your foods'};
 
-  var all = FOOD_DB.concat(FOOD_LIBRARY.filter(function(f){
-    return !FOOD_DB.some(function(d){ return d.name===f.name; });
-  }));
+  var all = FOOD_LIBRARY;
 
   var html = '<div style="max-width:500px;margin:0 auto;padding:20px 16px 60px">';
 
@@ -10109,7 +10099,7 @@ function startAddFood() {
 
 function editFood(encodedName) {
   var name = decodeURIComponent(encodedName);
-  var all  = FOOD_DB.concat(FOOD_LIBRARY);
+  var all  = FOOD_LIBRARY.slice();
   var f    = all.find(function(x){ return x.name===name; });
   showFoodEditForm(f);
 }
@@ -10202,7 +10192,7 @@ function saveFoodEdit(encodedOldName, isNew) {
   var oldName = encodedOldName ? decodeURIComponent(encodedOldName) : null;
   FOOD_LIBRARY = FOOD_LIBRARY.filter(function(x){ return x.name !== oldName && x.name !== name; });
 
-  // Also remove from FOOD_DB if editing a built-in (it goes into library as override)
+  // Edit goes into FOOD_LIBRARY (single source of truth)
   FOOD_LIBRARY.push(f);
   saveFoodLibrary();
   showToast('saved: ' + name);
@@ -13350,12 +13340,11 @@ function resolveScannedFood(name) {
   // Check alias map first
   if (FOOD_ALIASES[n]) {
     var aliased = FOOD_ALIASES[n].toLowerCase();
-    var found = (FOOD_DB||[]).find(function(f){ return f.name.toLowerCase() === aliased; }) ||
-                (FOOD_LIBRARY||[]).find(function(f){ return f.name.toLowerCase() === aliased; });
+    var found = (FOOD_LIBRARY||[]).find(function(f){ return f.name.toLowerCase() === aliased; });
     if (found) return found;
   }
   // Fuzzy match
-  var all = [...(FOOD_DB||[]), ...(FOOD_LIBRARY||[])];
+  var all = [...(FOOD_LIBRARY||[])];
   var exact = all.find(function(f){ return f.name.toLowerCase() === n; });
   if (exact) return exact;
   var partial = all.filter(function(f){ return f.name.toLowerCase().includes(n) || n.includes(f.name.toLowerCase()); });
@@ -13680,7 +13669,7 @@ function openAddFoodFromPad(itemIdx) {
 function openAliasLinker(itemIdx) {
   var item = window._padItems[itemIdx];
   if (!item) return;
-  var all = [...(FOOD_DB||[]), ...(FOOD_LIBRARY||[])];
+  var all = [...(FOOD_LIBRARY||[])];
 
   var el = document.createElement('div');
   el.id  = 'alias-linker';
