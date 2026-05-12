@@ -194,18 +194,10 @@ const _deviceId = (function() {
   return id;
 })();
 
-// ── START SYNC POLLING ─────────────────────────────────────────────────
-if (SUPABASE_READY && typeof syncFromSupabase === 'function') {
-  _syncInterval = setInterval(function() {
-    if (_syncState !== 'syncing') syncFromSupabase();
-  }, 60000); // poll every 60s
-}
-
 // ── SYNC STATE ─────────────────────────────────────────────────────────
 var _syncState    = 'idle';  // idle | syncing | error | ok
 var _lastSyncT    = 0;
 var _syncError    = null;
-var _syncInterval = null;
 var _pendingPush  = [];      // events queued while offline
 
 // ── HTTP HELPER ────────────────────────────────────────────────────────
