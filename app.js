@@ -3849,17 +3849,14 @@ var _olderHistoryLastFetch = 0;
 var _olderHistoryToast = null;
 
 function _maybeLoadOlderHistory() {
-  if (!SUPABASE_READY) return;
-  if (_olderHistoryFetching) return;
-  // Trigger when viewport left edge is within 1 viewSpan of our oldest data
+  if (!SUPABASE_READY) { console.log('[hist] blocked: supabase not ready'); return; }
+  if (_olderHistoryFetching) { return; }
   var leftEdgeT = viewTime - viewSpan * NOW_X;
-  var triggerT  = CGM_START + viewSpan; // 1 span of breathing room
-  if (leftEdgeT >= triggerT) return;
-  // Don't re-fetch if we already fetched to this point (or further back)
-  if (_olderHistoryFetchedTo <= leftEdgeT - viewSpan) return;
-  // Throttle: min 30s between fetches
-  if (Date.now() - _olderHistoryLastFetch < 30000) return;
-
+  var triggerT  = CGM_START + viewSpan;
+  if (leftEdgeT >= triggerT) { console.log('[hist] blocked: not scrolled far enough. left='+new Date(leftEdgeT).toISOString().slice(0,16)+' trigger='+new Date(triggerT).toISOString().slice(0,16)); return; }
+  if (_olderHistoryFetchedTo <= leftEdgeT - viewSpan) { console.log('[hist] blocked: already fetched this range. fetchedTo='+new Date(_olderHistoryFetchedTo).toISOString().slice(0,16)); return; }
+  if (Date.now() - _olderHistoryLastFetch < 30000) { console.log('[hist] blocked: throttle. next in '+Math.round((30000-(Date.now()-_olderHistoryLastFetch))/1000)+'s'); return; }
+  console.log('[hist] firing fetch. CGM_START='+new Date(CGM_START).toISOString().slice(0,16));
   _loadOlderHistory();
 }
 
@@ -10943,6 +10940,7 @@ function openDebugPanel() {
       '<div style="display:flex;gap:6px">' +
         '<button onclick="deployToGitHub()" style="padding:3px 8px;border-radius:6px;border:1px solid rgba(62,207,160,0.3);background:rgba(62,207,160,0.08);color:rgba(62,207,160,0.8);font-family:monospace;font-size:9px;cursor:pointer">⬆ deploy</button>' +
         '<button onclick="if(confirm(\'Clear all local data and reload?\'))nukeLocalData()" style="padding:3px 8px;border-radius:6px;border:1px solid rgba(220,80,60,0.4);background:rgba(220,80,60,0.08);color:rgba(220,80,60,0.8);font-family:monospace;font-size:9px;cursor:pointer">nuke local</button>' +
+        '<button onclick="_olderHistoryFetchedTo=Date.now();_olderHistoryLastFetch=0;_loadOlderHistory().then(function(){showToast(\'history fetch fired\');})" style="padding:3px 8px;border-radius:6px;border:1px solid rgba(80,160,220,0.4);background:rgba(80,160,220,0.08);color:rgba(80,160,220,0.8);font-family:monospace;font-size:9px;cursor:pointer">reload history</button>' +
         '<button onclick="if(confirm(\'Delete ALL Supabase events? Cannot be undone.\'))nukeSupabaseEvents()" style="padding:3px 8px;border-radius:6px;border:1px solid rgba(220,80,60,0.6);background:rgba(220,80,60,0.12);color:rgba(220,80,60,0.9);font-family:monospace;font-size:9px;cursor:pointer">nuke supa</button>' +
         '<button onclick="document.getElementById(\'debug-panel\').remove()" style="background:none;border:none;color:var(--rv-text-muted);cursor:pointer;font-size:18px;padding:0;line-height:1">×</button>' +
       '</div>' +
