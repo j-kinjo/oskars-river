@@ -278,10 +278,10 @@ async function syncPushReadings(readings) {
 
 // ── PULL: Supabase readings → local ───────────────────────────────────
 async function syncPullReadings(sinceT) {
-  // On first sync (sinceT=0), pull full history — Supabase is the longitudinal record.
-  // Subsequent syncs use _lastSyncT to only fetch new readings.
-  var since = sinceT || 0;
-  var limit = sinceT ? 500 : 5000; // larger batch on first full pull
+  // On first sync (sinceT=0), pull last 30 days — bulk history loaded separately via _bulkFetchHistory.
+  // Subsequent syncs use _lastSyncT to only fetch new readings (capped at 500).
+  var since = sinceT || (Date.now() - 30 * 24 * 3600000);
+  var limit = sinceT ? 500 : 20000;
   var rows  = await _sbFetch(
     'readings?t=gte.' + since + '&order=t.asc&limit=' + limit,
     { method: 'GET' }
@@ -3881,7 +3881,7 @@ async function _loadOlderHistory() {
 
     // ── Readings from Supabase ──
     var readRows = await _sbFetch(
-      'readings?t=gte.' + fetchFrom + '&t=lt.' + fetchTo + '&order=t.asc&limit=500',
+      'readings?t=gte.' + fetchFrom + '&t=lt.' + fetchTo + '&order=t.asc&limit=1000',
       { method: 'GET' }
     );
     if (Array.isArray(readRows) && readRows.length > 0) {
@@ -3951,13 +3951,13 @@ async function _bulkFetchHistory(fromDate) {
 
   while (cursor > targetStart) {
     var fetchTo   = cursor;
-    var fetchFrom = Math.max(targetStart, cursor - 7 * 24 * 3600000); // 7-day chunks
+    var fetchFrom = Math.max(targetStart, cursor - 24 * 3600000); // 24h chunks
     chunk++;
     bulkEl.textContent = 'loading history… ' + new Date(fetchFrom).toLocaleDateString('en-GB',{day:'numeric',month:'short'});
 
     try {
       var readRows = await _sbFetch(
-        'readings?t=gte.' + fetchFrom + '&t=lt.' + fetchTo + '&order=t.asc&limit=2000',
+        'readings?t=gte.' + fetchFrom + '&t=lt.' + fetchTo + '&order=t.asc&limit=500',
         { method: 'GET' }
       );
       if (Array.isArray(readRows) && readRows.length > 0) {
