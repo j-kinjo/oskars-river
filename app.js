@@ -3838,7 +3838,13 @@ CV.addEventListener('mouseup',()=>md.on=false);
 // All fetches throttled: one in flight at a time, 30s minimum between fetches.
 
 var _olderHistoryFetching = false;
-var _olderHistoryFetchedTo = CGM_START; // furthest-back timestamp already fetched
+// If HISTORY_RAW is thin (< 2h of data) relative to CGM_START age,
+// reset fetchedTo to now so lazy fetch triggers immediately on scroll.
+var _olderHistoryFetchedTo = (function() {
+  var age = Date.now() - CGM_START;
+  var thin = HISTORY_RAW.length < 30; // fewer than ~2.5h of readings
+  return (thin && age > 2 * 3600000) ? Date.now() : CGM_START;
+})();
 var _olderHistoryLastFetch = 0;
 var _olderHistoryToast = null;
 
