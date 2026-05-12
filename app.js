@@ -3931,6 +3931,89 @@ async function _loadOlderHistory() {
     setTimeout(function(){ if (_histLoadEl.parentNode) _histLoadEl.remove(); }, 500);
   }
 }
+// ── NIGHTSCOUT BACKFILL — fetches CGM readings from NS for gap periods ──
+async function _backfillFromNightscout(fromDate, toDate) {
+  var cfg = loadCGMConfig();
+  if (!cfg || !cfg.fields) { showToast('No CGM config found\nSet up Nightscout in settings first'); return; }
+  var nsUrl = (cfg.fields.url || '').replace(/\/+$/, '');
+  var token = cfg.fields.token || '';
+  if (!nsUrl) { showToast('No Nightscout URL configured'); return; }
+
+  var indEl = document.getElementById('bulk-hist-indicator');
+  if (!indEl) {
+    indEl = document.createElement('div');
+    indEl.id = 'bulk-hist-indicator';
+    indEl.style.cssText = 'position:fixed;top:12px;left:50%;transform:translateX(-50%);' +
+      'font-family:"DM Mono",monospace;font-size:10px;color:rgba(160,190,210,0.8);' +
+      'background:rgba(3,5,20,0.8);padding:6px 12px;border-radius:8px;' +
+      'pointer-events:none;z-index:999;letter-spacing:0.05em';
+    document.body.appendChild(indEl);
+  }
+
+  var fromT  = fromDate instanceof Date ? fromDate : new Date(fromDate);
+  var toT    = toDate   instanceof Date ? toDate   : new Date(toDate);
+  var cursor = toT.getTime();
+  var target = fromT.getTime();
+  var totalAdded = 0;
+
+  while (cursor > target) {
+    var chunkEnd   = cursor;
+    var chunkStart = Math.max(target, cursor - 24 * 3600000);
+    indEl.textContent = 'NS backfill… ' + new Date(chunkStart).toLocaleDateString('en-GB',{day:'numeric',month:'short'});
+
+    try {
+      var sep = token ? '&' : '';
+      var auth = token ? 'token=' + encodeURIComponent(token) : '';
+      var url = nsUrl + '/api/v1/entries/sgv.json?find[date][$gte]=' + chunkStart +
+                '&find[date][$lte]=' + chunkEnd + '&count=500' + (auth ? '&' + auth : '');
+
+      var resp = await fetch(url);
+      if (!resp.ok) throw new Error('NS ' + resp.status);
+      var entries = await resp.json();
+
+      if (Array.isArray(entries) && entries.length > 0) {
+        var toInsert = [];
+        entries.forEach(function(e) {
+          var t  = e.date || (new Date(e.dateString).getTime());
+          var bg = e.sgv ? +(e.sgv / 18).toFixed(1) : null;
+          if (!t || !bg) return;
+          var exists = HISTORY_RAW.findIndex(function(h){ return Math.abs(h.t - t) < 90000; });
+          if (exists < 0) {
+            HISTORY_RAW.push({ t: t, bg: bg, iob: 0, cob: 0, pen: 1 });
+            toInsert.push({ t: t, bg: bg });
+            totalAdded++;
+          }
+        });
+
+        if (toInsert.length > 0) {
+          HISTORY_RAW.sort(function(a,b){ return a.t - b.t; });
+          updateCGMBounds();
+          persistReadings();
+          // Write to Supabase
+          try {
+            await _sbFetch('readings?on_conflict=t', {
+              method: 'POST',
+              prefer: 'resolution=ignore-duplicates,return=minimal',
+              body: toInsert,
+            });
+          } catch(e) { console.warn('[NS backfill supabase]', e.message); }
+        }
+      }
+    } catch(e) {
+      console.warn('[NS backfill]', e.message);
+      indEl.textContent = 'error: ' + e.message;
+      await new Promise(function(r){ setTimeout(r, 2000); });
+    }
+
+    cursor = chunkStart;
+    await new Promise(function(r){ setTimeout(r, 300); });
+  }
+
+  indEl.textContent = '✓ NS backfill: ' + totalAdded + ' readings added';
+  setTimeout(function(){ if (indEl.parentNode) indEl.remove(); }, 3000);
+  showToast('NS backfill done\n' + totalAdded + ' readings added');
+}
+
 // ── BULK HISTORY FETCH — pulls all history from a start date in one go ──
 async function _bulkFetchHistory(fromDate) {
   var bulkEl = document.getElementById('bulk-hist-indicator');
@@ -11009,6 +11092,7 @@ function openDebugPanel() {
         '<button onclick="deployToGitHub()" style="padding:3px 8px;border-radius:6px;border:1px solid rgba(62,207,160,0.3);background:rgba(62,207,160,0.08);color:rgba(62,207,160,0.8);font-family:monospace;font-size:9px;cursor:pointer">⬆ deploy</button>' +
         '<button onclick="if(confirm(\'Clear all local data and reload?\'))nukeLocalData()" style="padding:3px 8px;border-radius:6px;border:1px solid rgba(220,80,60,0.4);background:rgba(220,80,60,0.08);color:rgba(220,80,60,0.8);font-family:monospace;font-size:9px;cursor:pointer">nuke local</button>' +
         '<button onclick="_bulkFetchHistory(new Date(\'2026-03-07\'))" style="padding:3px 8px;border-radius:6px;border:1px solid rgba(80,160,220,0.4);background:rgba(80,160,220,0.08);color:rgba(80,160,220,0.8);font-family:monospace;font-size:9px;cursor:pointer">load all history</button>' +
+        '<button onclick="_backfillFromNightscout(new Date(\'2026-03-07\'), new Date())" style="padding:3px 8px;border-radius:6px;border:1px solid rgba(120,200,150,0.4);background:rgba(120,200,150,0.08);color:rgba(120,200,150,0.8);font-family:monospace;font-size:9px;cursor:pointer">NS backfill</button>' +
         '<button onclick="if(confirm(\'Delete ALL Supabase events? Cannot be undone.\'))nukeSupabaseEvents()" style="padding:3px 8px;border-radius:6px;border:1px solid rgba(220,80,60,0.6);background:rgba(220,80,60,0.12);color:rgba(220,80,60,0.9);font-family:monospace;font-size:9px;cursor:pointer">nuke supa</button>' +
         '<button onclick="document.getElementById(\'debug-panel\').remove()" style="background:none;border:none;color:var(--rv-text-muted);cursor:pointer;font-size:18px;padding:0;line-height:1">×</button>' +
       '</div>' +
