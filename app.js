@@ -100,6 +100,19 @@ var _supabase = (function() {
       if (isUpsert && _opts.upsert && _opts.upsert.onConflict) {
         path = table + '?on_conflict=' + _opts.upsert.onConflict + (_buildQS() ? _buildQS().replace('?','&') : '');
         prefer = 'resolution=merge-duplicates,return=minimal';
+        // Deduplicate timestamps in body to avoid 21000 constraint violation
+        if (body && Array.isArray(body) && _opts.upsert.onConflict === 't') {
+          var seen = {};
+          body = body.map(function(row) {
+            if (row.t !== undefined) {
+              var key = row.t;
+              while (seen[key]) key++;
+              seen[key] = true;
+              if (key !== row.t) row = Object.assign({}, row, {t: key});
+            }
+            return row;
+          });
+        }
       }
       var fetchOpts = { method: method, prefer: prefer };
       if (body !== undefined) fetchOpts.body = body;
