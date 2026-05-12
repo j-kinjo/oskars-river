@@ -4148,6 +4148,13 @@ function showToast(msg){
 // GI: low<55, medium 55-69, high>=70
 const FOOD_DB = window.__RIVER_FOODS__ || [];
 
+// ONE-TIME MIGRATION: nuke legacy food library cache so Supabase wins clean.
+// Remove this block once all devices have reloaded once.
+if (localStorage.getItem('river_food_lib_nuked') !== '2') {
+  localStorage.removeItem('river_food_lib');
+  localStorage.setItem('river_food_lib_nuked', '2');
+}
+
 var FOOD_LIBRARY = (function() {
   try { return JSON.parse(localStorage.getItem('river_food_lib') || '[]'); } catch(e) { return []; }
 })();
@@ -10902,6 +10909,7 @@ function nukeLocalData() {
     try{ if(typeof SESSION!=='undefined')        SESSION.length=0;       }catch(_e){}
     try{ if(typeof MEAL_HISTORY!=='undefined')   MEAL_HISTORY.length=0;  }catch(_e){}
     try{ if(typeof HISTORY_RAW!=='undefined')    HISTORY_RAW.length=0;   }catch(_e){}
+    try{ if(typeof FOOD_LIBRARY!=='undefined')   FOOD_LIBRARY.length=0;  }catch(_e){}
   } catch(_e) {}
   try { showToast('cache cleared — reloading'); } catch(_e){}
   setTimeout(function(){ window.location.reload(); }, 800);
