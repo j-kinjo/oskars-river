@@ -1225,7 +1225,7 @@ function bfExpandInsert(el, defaultDt) {
         [['prick','◆ blood prick','#4a8fd4','#0d1820'],
          ['free','free snack / pre-hypo','#906090','#180d1a'],
          ['note','✎ note','#555','#1a1a1a']].map(function(t) {
-          return '<button onclick="bfInsertTypeSelect(this,'' + t[0] + '')" data-itype="' + t[0] + '" ' +
+          return '<button onclick="bfInsertTypeSelect(this,\'' + t[0] + '\')" data-itype="' + t[0] + '" ' +
             'style="font-family:inherit;font-size:10px;padding:4px 8px;border:1px solid #26262f;border-radius:4px;background:transparent;color:#555;cursor:pointer">' + t[1] + '</button>';
         }).join(''),
       '</div>',
@@ -1278,7 +1278,7 @@ function bfInsertTypeSelect(btn, type) {
       '<div style="font-size:8px;color:#555;text-transform:uppercase;letter-spacing:0.06em;margin-bottom:3px">BG value (mmol/L)</div>' +
       '<input id="bfins-bg" type="number" step="0.1" min="1" max="30" inputmode="decimal" placeholder="e.g. 6.2" ' +
         'style="font-family:inherit;font-size:18px;width:100%;padding:6px 8px;border:1px solid rgba(74,143,212,0.4);border-radius:5px;background:rgba(74,143,212,0.06);color:#4a8fd4;outline:none;text-align:center;font-weight:600;box-sizing:border-box" ' +
-        'onkeydown="if(event.key==='Enter')bfSaveInsert()">';
+        'onkeydown="if(event.key===\'Enter\')bfSaveInsert()">';
     setTimeout(function(){ var i=document.getElementById('bfins-bg'); if(i)i.focus(); }, 30);
 
   } else if (type === 'free') {
