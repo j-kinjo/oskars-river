@@ -374,8 +374,8 @@ function bfNameBlur(cardIdx, itemIdx, input) {
     }
   }
   // No match: do NOT re-render — the debounce timer in bfNameInput is still
-  // running and will show bfShowInlineNew. Re-rendering here would destroy
-  // the timer target and the inline form would never appear.
+  // running and will show bfShowInlineNew. Re-rendering here destroys the
+  // timer target and the inline form never appears.
 }
 window.bfNameBlur = bfNameBlur;
 
@@ -802,6 +802,41 @@ async function bfApprove(idx) {
   var ev = _bfQueue[idx];
   if (!ev) return;
 
+  // Pre-flight: any named item missing c100 must be defined before approve
+  var missing = (ev.items||[]).reduce(function(acc, item, ii) {
+    var name = (item.name || '').trim();
+    if (name && !item.c100) acc.push(ii);
+    return acc;
+  }, []);
+
+  if (missing.length) {
+    // Highlight the offending rows — amber border on the c100 input
+    missing.forEach(function(ii) {
+      var inp = document.querySelector('#bfi-' + idx + ' .bfi-row:nth-child(' + (ii+1) + ') input[type=number]');
+      // Simpler: find by scanning all c100 inputs in this card
+      var allRows = document.querySelectorAll('#bfi-' + idx + ' .bfi-row');
+      if (allRows[ii]) {
+        var c100inp = allRows[ii].querySelector('input[type=number]');
+        if (c100inp) {
+          c100inp.style.borderColor = '#c0392b';
+          c100inp.style.boxShadow   = '0 0 0 2px rgba(192,57,43,0.3)';
+          c100inp.focus();
+        }
+      }
+    });
+    __debugLog('backfill: approve blocked — ' + missing.length + ' item(s) missing carbs/100g');
+    // Show brief message near the approve button
+    var btn = document.querySelector('#bfc-' + idx + ' button[onclick*="bfApprove"]');
+    if (btn) {
+      var orig = btn.textContent;
+      btn.textContent = missing.length + ' item' + (missing.length>1?'s':' ') + ' need carbs/100g';
+      btn.style.color = '#c0392b';
+      btn.style.borderColor = '#c0392b';
+      setTimeout(function(){ btn.textContent = orig; btn.style.color = ''; btn.style.borderColor = ''; }, 2500);
+    }
+    return;
+  }
+
   try {
     var items = (ev.items||[]).map(function(i){
       return { name:i.library_name||i.name||'', carbs:i.carbs, gi:i.gi||null, g:i.grams||null };
@@ -872,6 +907,9 @@ async function bfApprove(idx) {
         }
       }
     );
+
+    // Update in-memory status so re-renders don't bring the card back
+    ev.status = 'approved';
 
     // Remove card from UI
     var card = document.getElementById('bfc-' + idx);
