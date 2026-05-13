@@ -14,6 +14,7 @@ const BF_WORKER = 'https://orange-surf-6f98.john-king-uk.workers.dev';
 
 // ── State ──────────────────────────────────────────────────────
 let _bfQueue        = [];
+let _bfInsertItems  = [];   // items for the current insert-form free snack
 let _bfFilter       = 'pending';
 let _bfTypeFilter   = 'all';   // 'all' | 'bolus' | 'correction' | 'free'
 let _bfDateFrom     = '';      // YYYY-MM-DD
@@ -389,8 +390,17 @@ function bfCardHTML(ev, idx) {
         '<span style="font-size:11px;color:#555;min-width:76px">' + ev.date + '</span>',
         '<span style="font-size:11px;color:#555;min-width:40px">' + (ev.time||'?') + '</span>',
         '<span style="font-size:9px;font-weight:700;padding:2px 6px;border-radius:3px;background:' + tInfo.bg + ';color:' + tInfo.col + ';min-width:52px;text-align:center;text-transform:uppercase;letter-spacing:0.05em">' + tInfo.label + '</span>',
-        // Period badge — hide for correction (type badge is sufficient)
-        evType !== 'correction' ? '<span style="font-size:9px;font-weight:600;padding:2px 6px;border-radius:3px;background:' + pbg + ';color:' + pco + ';text-transform:uppercase;letter-spacing:0.04em">' + (ev.period||'?') + '</span>' : '',
+        // Period — editable select (corrections show nothing)
+        evType !== 'correction' ? (function(){
+          var PERIOD_OPTS = ['Breakfast','Morning snack','Lunch','Afternoon snack','Dinner','Evening snack','Bedtime snack','Overnight','Unknown'];
+          var opts = PERIOD_OPTS.map(function(p){
+            return '<option value="' + p + '"' + (p===ev.period?' selected':'') + '>' + p + '</option>';
+          }).join('');
+          return '<select onchange="bfUpdatePeriod(' + idx + ',this.value)" onclick="event.stopPropagation()" ' +
+            'style="font-family:inherit;font-size:9px;font-weight:600;padding:2px 4px;border-radius:3px;' +
+            'background:' + pbg + ';color:' + pco + ';border:none;cursor:pointer;text-transform:uppercase;' +
+            'letter-spacing:0.04em;outline:none;-webkit-appearance:none;appearance:none">' + opts + '</select>';
+        })() : '',
         headerCarbs,
         headerUnits,
         ev.peak_bg ? '<span style="font-size:11px;color:' + (ev.peak_bg>12?'#c0392b':ev.peak_bg>10?'#b07820':'#1d9e72') + '">↑' + ev.peak_bg + ' +' + ev.peak_mins + 'm</span>' : '',
@@ -427,6 +437,21 @@ function bfCardHTML(ev, idx) {
     '</div>',
   ].join('');
 }
+
+// ── Period label edit ─────────────────────────────────────────
+function bfUpdatePeriod(idx, value) {
+  if (_bfQueue[idx]) {
+    _bfQueue[idx].period = value;
+    // Persist to Supabase immediately
+    _bfFetch('backfill_queue?t=eq.' + _bfQueue[idx].t, {
+      method: 'PATCH', prefer: 'return=minimal',
+      body: { period: value }
+    }).catch(function(e){
+      if (typeof __debugLog === 'function') __debugLog('period update error: ' + e.message);
+    });
+  }
+}
+window.bfUpdatePeriod = bfUpdatePeriod;
 
 // ── Auto bolus wait from pre_bg ───────────────────────────────
 function _bfAutoWait(pre_bg) {
@@ -1274,29 +1299,34 @@ function bfInsertTypeSelect(btn, type) {
   if (!fields) return;
 
   if (type === 'prick') {
-    fields.innerHTML =
-      '<div style="font-size:8px;color:#555;text-transform:uppercase;letter-spacing:0.06em;margin-bottom:3px">BG value (mmol/L)</div>' +
-      '<input id="bfins-bg" type="number" step="0.1" min="1" max="30" inputmode="decimal" placeholder="e.g. 6.2" ' +
-        'style="font-family:inherit;font-size:18px;width:100%;padding:6px 8px;border:1px solid rgba(74,143,212,0.4);border-radius:5px;background:rgba(74,143,212,0.06);color:#4a8fd4;outline:none;text-align:center;font-weight:600;box-sizing:border-box" ' +
-        'onkeydown="if(event.key===\'Enter\')bfSaveInsert()">';
-    setTimeout(function(){ var i=document.getElementById('bfins-bg'); if(i)i.focus(); }, 30);
-
-  } else if (type === 'free') {
     fields.innerHTML = [
-      '<div style="display:flex;gap:8px">',
+      '<div style="display:flex;gap:10px">',
         '<div style="flex:1">',
-          '<div style="font-size:8px;color:#555;text-transform:uppercase;letter-spacing:0.06em;margin-bottom:3px">carbs (g)</div>',
-          '<input id="bfins-carbs" type="number" step="0.5" min="0" inputmode="decimal" placeholder="0" ',
-            'style="font-family:inherit;font-size:14px;width:100%;padding:5px 8px;border:1px solid #26262f;border-radius:4px;background:#0c0c0f;color:#e8e4dc;outline:none;text-align:center;box-sizing:border-box">',
+          '<div style="font-size:8px;color:#4a8fd4;text-transform:uppercase;letter-spacing:0.06em;margin-bottom:3px">finger prick (mmol/L)</div>',
+          '<input id="bfins-bg" type="number" step="0.1" min="1" max="30" inputmode="decimal" placeholder="e.g. 6.2" ',
+            'style="font-family:inherit;font-size:18px;width:100%;padding:6px 8px;border:1px solid rgba(74,143,212,0.4);border-radius:5px;background:rgba(74,143,212,0.06);color:#4a8fd4;outline:none;text-align:center;font-weight:600;box-sizing:border-box" ',
+            'onkeydown="if(event.key===\'Enter\')bfSaveInsert()">',
         '</div>',
         '<div style="flex:1">',
-          '<div style="font-size:8px;color:#555;text-transform:uppercase;letter-spacing:0.06em;margin-bottom:3px">description</div>',
-          '<input id="bfins-desc" type="text" placeholder="e.g. biscuit, jelly bean…" autocomplete="off" ',
-            'style="font-family:inherit;font-size:11px;width:100%;padding:5px 8px;border:1px solid #26262f;border-radius:4px;background:#0c0c0f;color:#e8e4dc;outline:none;box-sizing:border-box">',
+          '<div style="font-size:8px;color:#555;text-transform:uppercase;letter-spacing:0.06em;margin-bottom:3px">CGM at same time</div>',
+          '<input id="bfins-cgm" type="number" step="0.1" min="1" max="30" inputmode="decimal" placeholder="optional" ',
+            'style="font-family:inherit;font-size:18px;width:100%;padding:6px 8px;border:1px solid #26262f;border-radius:5px;background:#0c0c0f;color:#e8e4dc;outline:none;text-align:center;font-weight:600;box-sizing:border-box">',
+          '<div style="font-size:8px;color:#333;margin-top:2px">used to align with trace</div>',
         '</div>',
       '</div>',
     ].join('');
-    setTimeout(function(){ var i=document.getElementById('bfins-carbs'); if(i)i.focus(); }, 30);
+    setTimeout(function(){ var i=document.getElementById('bfins-bg'); if(i)i.focus(); }, 30);
+
+  } else if (type === 'free') {
+    // Full item-row UI — identical to meal cards
+    _bfInsertItems = [];
+    fields.innerHTML =
+      '<div style="font-size:8px;color:#906090;text-transform:uppercase;letter-spacing:0.06em;margin-bottom:6px">items eaten</div>' +
+      '<div id="bfins-item-list"></div>' +
+      '<button onclick="bfInsertAddItem()" style="font-family:inherit;font-size:11px;color:#555;border:1px dashed #26262f;' +
+        'border-radius:4px;padding:3px 8px;cursor:pointer;background:none;width:100%;text-align:left;margin-top:2px">+ add item</button>';
+    // Add first blank row
+    bfInsertAddItem();
 
   } else {
     fields.innerHTML =
@@ -1312,6 +1342,111 @@ function bfInsertTypeSelect(btn, type) {
 }
 window.bfInsertTypeSelect = bfInsertTypeSelect;
 
+// ── Insert-form item rows (free snack — full library flow) ─────
+function bfInsertAddItem() {
+  _bfInsertItems.push({ name: '', carbs: null, c100: null, gi: null });
+  _bfInsertRenderItems();
+}
+window.bfInsertAddItem = bfInsertAddItem;
+
+function bfInsertDelItem(ii) {
+  _bfInsertItems.splice(ii, 1);
+  _bfInsertRenderItems();
+}
+window.bfInsertDelItem = bfInsertDelItem;
+
+function bfInsertUpdateItem(ii, field, val) {
+  if (!_bfInsertItems[ii]) return;
+  if (field === 'carbs' || field === 'c100') _bfInsertItems[ii][field] = val===''?null:parseFloat(val);
+  else _bfInsertItems[ii][field] = val;
+}
+window.bfInsertUpdateItem = bfInsertUpdateItem;
+
+function bfInsertNameBlur(ii, input) {
+  var name = (input.value||'').trim();
+  if (!name) return;
+  bfInsertUpdateItem(ii, 'name', name);
+  var match = _bfLibLookup(name);
+  if (match) {
+    if (match.c100)   _bfInsertItems[ii].c100   = match.c100;
+    if (match.gi)     _bfInsertItems[ii].gi     = match.gi;
+    if (match.gi_cat) _bfInsertItems[ii].gi_cat = match.gi_cat;
+    if ((match.name||'').toLowerCase() !== name.toLowerCase()) _bfInsertItems[ii].name = match.name;
+    _bfInsertRenderItems();
+  }
+}
+window.bfInsertNameBlur = bfInsertNameBlur;
+
+function bfInsertNameInput(ii, input) {
+  var ac = document.getElementById('bfiac-' + ii);
+  if (!ac) return;
+  var q = input.value;
+  if (!q || q.length < 2) { ac.style.display = 'none'; return; }
+  var results = bfSearchFoods(q);
+  if (results.length) {
+    ac.innerHTML = results.map(function(f) {
+      var enc = encodeURIComponent(f.name);
+      var oc = 'bfInsertSelectFood(' + ii + ',decodeURIComponent(\'' + enc + '\'))';
+      return '<div onmousedown="event.preventDefault()" onclick="' + oc + '" ' +
+        'style="padding:5px 8px;cursor:pointer;border-bottom:1px solid #26262f;font-size:12px;color:#e8e4dc" ' +
+        'onmouseover="this.style.background=\'#0d1820\'" onmouseout="this.style.background=\'\'">' +
+        f.name + '<span style="float:right;font-size:10px;color:#555">' + (f.c100||'?') + '/100g</span></div>';
+    }).join('');
+    ac.style.display = 'block';
+  } else {
+    ac.style.display = 'none';
+  }
+}
+window.bfInsertNameInput = bfInsertNameInput;
+
+function bfInsertSelectFood(ii, name) {
+  var food = _bfLibLookup(name);
+  if (food) {
+    _bfInsertItems[ii] = { name: food.name, c100: food.c100||null, gi: food.gi||null, gi_cat: food.gi_cat||null, carbs: _bfInsertItems[ii]&&_bfInsertItems[ii].carbs||null };
+  } else {
+    _bfInsertItems[ii].name = name;
+  }
+  var ac = document.getElementById('bfiac-' + ii);
+  if (ac) ac.style.display = 'none';
+  _bfInsertRenderItems();
+}
+window.bfInsertSelectFood = bfInsertSelectFood;
+
+function _bfInsertRenderItems() {
+  var list = document.getElementById('bfins-item-list');
+  if (!list) return;
+  list.innerHTML = _bfInsertItems.map(function(item, ii) {
+    var name  = (item.name||'').replace(/"/g,'&quot;');
+    var carbs = item.carbs != null ? parseFloat(item.carbs).toFixed(1) : '';
+    var c100  = item.c100  != null ? parseFloat(item.c100).toFixed(1)  : '';
+    var lib   = _bfLibLookup(name);
+    if (!c100 && lib && lib.c100) c100 = parseFloat(lib.c100).toFixed(1);
+    var inLib = !!lib;
+    return [
+      '<div style="display:flex;align-items:center;gap:6px;margin-bottom:4px">',
+        '<div style="flex:1;position:relative">',
+          '<input style="font-family:inherit;font-size:12px;width:100%;border:1px solid #26262f;border-radius:4px;padding:3px 6px;background:#0c0c0f;color:#e8e4dc" ',
+            'value="' + name + '" placeholder="food name…" autocomplete="off" ',
+            'oninput="bfInsertNameInput(' + ii + ',this)" ',
+            'onblur="bfInsertNameBlur(' + ii + ',this)">',
+          '<div id="bfiac-' + ii + '" style="position:absolute;left:0;right:0;background:#1c1c22;border:1px solid #26262f;border-radius:4px;z-index:620;display:none;max-height:150px;overflow-y:auto"></div>',
+        '</div>',
+        '<div style="display:flex;flex-direction:column;align-items:center;gap:1px">',
+          '<input type="number" step="0.1" min="0" max="100" value="' + c100 + '" placeholder="—" ',
+            'onchange="bfInsertUpdateItem(' + ii + ',\'c100\',this.value)" ',
+            'style="font-family:inherit;font-size:11px;width:44px;text-align:right;border:1px solid ' + (!c100?'#4a2800':'#26262f') + ';border-radius:4px;padding:2px 5px;background:#0c0c0f;color:' + (!c100?'#b07820':'#e8e4dc') + '">',
+          '<span style="font-size:8px;color:#333;line-height:1">/100g</span>',
+        '</div>',
+        '<input type="number" step="0.1" value="' + carbs + '" placeholder="g" ',
+          'onchange="bfInsertUpdateItem(' + ii + ',\'carbs\',this.value)" ',
+          'style="font-family:inherit;font-size:12px;width:52px;text-align:right;border:1px solid ' + (!carbs?'#4a1a1a':'#26262f') + ';border-radius:4px;padding:3px 6px;background:#0c0c0f;color:#e8e4dc">',
+        '<button onclick="bfInsertDelItem(' + ii + ')" style="font-family:inherit;background:none;border:none;color:#555;cursor:pointer;font-size:15px;padding:0 2px">×</button>',
+        !inLib && name ? '<span style="font-size:8px;color:#40a870">+lib</span>' : '',
+      '</div>',
+    ].join('');
+  }).join('');
+}
+
 async function bfSaveInsert() {
   var form = document.querySelector('.bf-insert-form');
   if (!form) return;
@@ -1326,34 +1461,45 @@ async function bfSaveInsert() {
 
   try {
     if (type === 'prick') {
-      var bg = parseFloat((document.getElementById('bfins-bg')||{}).value);
+      var bg  = parseFloat((document.getElementById('bfins-bg') ||{}).value);
+      var cgm = parseFloat((document.getElementById('bfins-cgm')||{}).value);
       if (isNaN(bg) || bg < 1) { var i=document.getElementById('bfins-bg'); if(i){i.style.borderColor='#c0392b';i.focus();} return; }
+
+      // gi = finger prick value; if CGM also provided, store as sensor_bg in items
+      var prickItems = !isNaN(cgm) ? [{name:'cgm_reading', carbs:0, sensor_bg: cgm}] : [];
 
       await _sbFetch('events?on_conflict=t', {
         method: 'POST', prefer: 'resolution=merge-duplicates,return=minimal',
         body: [{ t: t, c: 0, u: 0, gi: bg, note: 'prick',
+                 items: prickItems,
                  device_id: typeof _deviceId !== 'undefined' ? _deviceId : 'backfill',
                  updated_at: new Date().toISOString() }],
       });
 
       if (typeof BLOOD_PRICKS !== 'undefined' && typeof _savePricks === 'function') {
-        BLOOD_PRICKS.push({ t: t, bg: bg, logged_by: 'backfill' });
+        BLOOD_PRICKS.push({ t: t, bg: bg, sensor_bg: isNaN(cgm)?null:cgm, logged_by: 'backfill' });
         BLOOD_PRICKS.sort(function(a,b){ return a.t-b.t; });
         _savePricks();
       }
 
     } else if (type === 'free') {
-      var carbs = parseFloat((document.getElementById('bfins-carbs')||{}).value) || 0;
-      var desc  = ((document.getElementById('bfins-desc')||{}).value || '').trim();
+      // Collect items from the insert form's item rows (same structure as meal cards)
+      var insItems = _bfInsertItems || [];
+      var totalC   = insItems.reduce(function(s,i){ return s+(parseFloat(i.carbs)||0); }, 0);
+      var wGI      = totalC > 0
+        ? insItems.reduce(function(s,i){ return s+((i.carbs||0)*(i.gi||50)); },0) / totalC : null;
 
-      // Write directly to events as approved free snack
       await _sbFetch('events?on_conflict=t', {
         method: 'POST', prefer: 'resolution=merge-duplicates,return=minimal',
-        body: [{ t: t, c: carbs, u: 0, gi: null,
-                 note: 'carbs', items: desc ? [{name: desc, carbs: carbs}] : [],
+        body: [{ t: t, c: totalC, u: 0, gi: wGI ? +wGI.toFixed(1) : null,
+                 note: 'carbs', items: insItems,
                  device_id: typeof _deviceId !== 'undefined' ? _deviceId : 'backfill',
                  updated_at: new Date().toISOString() }],
       });
+
+      // Save any new foods to the library
+      _bfSyncNewFoodsToLibrary(insItems);
+      _bfInsertItems = [];
 
     } else {
       // note — store in backfill_queue as approved note event
