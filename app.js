@@ -197,6 +197,13 @@ var _supabase = (function() {
 // create policy "anyone can insert library" on library for insert with check (true);
 // create policy "anyone can update library" on library for update using (true);
 
+// ── DEBUG LOGGING ──────────────────────────────────────────────────────
+function __debugLog(msg) {
+  if (typeof console !== 'undefined' && console.log) {
+    console.log('[backfill] ' + msg);
+  }
+}
+
 // ── DEVICE ID — identifies this install ───────────────────────────────
 const _deviceId = (function() {
   var id = localStorage.getItem('river_device_id');
