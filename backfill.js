@@ -350,31 +350,32 @@ function bfNameBlur(cardIdx, itemIdx, input) {
   var name = (input.value || '').trim();
   if (!name) return;
 
-  // Update state first
+  // Always update state
   bfUpdateItem(cardIdx, itemIdx, 'name', name);
 
   var match = _bfLibLookup(name);
   if (match) {
-    // Resolved — update item state with library values
+    // Library match — update state and re-render so c100/subrow reflect the match
     var items = _bfQueue[cardIdx] && _bfQueue[cardIdx].items;
     if (items && items[itemIdx]) {
       if (match.c100)   items[itemIdx].c100   = match.c100;
       if (match.gi)     items[itemIdx].gi     = match.gi;
       if (match.gi_cat) items[itemIdx].gi_cat = match.gi_cat;
-      // If matched via alias, normalise to canonical name
       if ((match.name||'').toLowerCase() !== name.toLowerCase()) {
         items[itemIdx].name = match.name;
       }
     }
+    // Re-render only on match — something meaningful changed
+    var container = document.getElementById('bfi-' + cardIdx);
+    if (container && _bfQueue[cardIdx]) {
+      container.innerHTML = _bfQueue[cardIdx].items.map(function(item, ii){
+        return bfItemRow(cardIdx, ii, item);
+      }).join('');
+    }
   }
-
-  // Re-render just this item row
-  var container = document.getElementById('bfi-' + cardIdx);
-  if (container && _bfQueue[cardIdx]) {
-    container.innerHTML = _bfQueue[cardIdx].items.map(function(item, ii){
-      return bfItemRow(cardIdx, ii, item);
-    }).join('');
-  }
+  // No match: do NOT re-render — the debounce timer in bfNameInput is still
+  // running and will show bfShowInlineNew. Re-rendering here would destroy
+  // the timer target and the inline form would never appear.
 }
 window.bfNameBlur = bfNameBlur;
 
