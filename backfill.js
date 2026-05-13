@@ -15,6 +15,9 @@ const BF_WORKER = 'https://orange-surf-6f98.john-king-uk.workers.dev';
 // ── State ──────────────────────────────────────────────────────
 let _bfQueue        = [];
 let _bfFilter       = 'pending';
+let _bfTypeFilter   = 'all';   // 'all' | 'bolus' | 'correction' | 'free'
+let _bfDateFrom     = '';      // YYYY-MM-DD
+let _bfDateTo       = '';      // YYYY-MM-DD
 let _bfSheetOpen    = false;
 let _bfPendingCount = 0;
 
@@ -65,17 +68,35 @@ async function bfPendingCount() {
 // ── Load queue ─────────────────────────────────────────────────
 async function bfLoadQueue(filter) {
   filter = filter || 'pending';
-  var statusFilter = filter === 'all'
+  var params = [];
+
+  // Status filter
+  params.push(filter === 'all'
     ? 'status=in.(pending,flagged,approved)'
     : filter === 'flagged'
     ? 'status=eq.flagged'
-    : 'status=eq.pending';
+    : 'status=eq.pending');
 
-  var rows = await _bfFetch(
-    'backfill_queue?' + statusFilter + '&order=date.asc&order=time.asc',
-    { method: 'GET' }
-  );
-  return Array.isArray(rows) ? rows : [];
+  // Date range
+  if (_bfDateFrom) params.push('date=gte.' + _bfDateFrom);
+  if (_bfDateTo)   params.push('date=lte.' + _bfDateTo);
+
+  params.push('order=date.asc', 'order=time.asc');
+
+  var rows = await _bfFetch('backfill_queue?' + params.join('&'), { method: 'GET' });
+  var result = Array.isArray(rows) ? rows : [];
+
+  // Type filter applied client-side (notes field holds type)
+  if (_bfTypeFilter && _bfTypeFilter !== 'all') {
+    result = result.filter(function(ev) {
+      var t = ev.notes && ['bolus','correction','free'].indexOf(ev.notes) >= 0
+        ? ev.notes
+        : (ev.units > 0 && ev.carbs_device > 0 ? 'bolus'
+          : ev.units > 0 ? 'correction' : 'free');
+      return t === _bfTypeFilter;
+    });
+  }
+  return result;
 }
 
 // ── Open review sheet ──────────────────────────────────────────
@@ -92,24 +113,48 @@ async function openBackfillReview() {
   ].join(';');
 
   sheet.innerHTML = [
-    '<div id="bf-header" style="padding:14px 16px 10px;border-bottom:1px solid #26262f;',
-    'display:flex;align-items:center;gap:12px;flex-shrink:0">',
+    // ── Top bar: title + close ──
+    '<div style="padding:12px 16px 8px;border-bottom:1px solid #26262f;display:flex;align-items:center;gap:12px;flex-shrink:0">',
       '<div style="flex:1">',
-        '<div style="font-size:15px;font-weight:600;color:#e8e4dc">Meal History Review</div>',
-        '<div id="bf-progress" style="font-size:12px;color:#555;margin-top:2px">Loading…</div>',
+        '<div style="font-size:15px;font-weight:600;color:#e8e4dc">Event History Review</div>',
+        '<div id="bf-progress" style="font-size:11px;color:#555;margin-top:1px">Loading…</div>',
       '</div>',
-      '<div id="bf-filters" style="display:flex;gap:6px">',
+      '<button onclick="closeBackfillReview()" style="font-family:inherit;font-size:18px;background:none;border:none;color:#555;cursor:pointer;padding:0 4px;line-height:1">×</button>',
+    '</div>',
+
+    // ── Filter bar ──
+    '<div style="padding:8px 16px;border-bottom:1px solid #1a1a1e;display:flex;align-items:center;gap:8px;flex-wrap:wrap;flex-shrink:0;background:#0f0f12">',
+
+      // Status filters
+      '<div style="display:flex;gap:4px">',
         ['pending','flagged','all'].map(function(f) {
-          return '<button onclick="bfSetFilter(\'' + f + '\')" id="bff-' + f + '" style="' +
-            'font-family:inherit;font-size:11px;padding:4px 10px;' +
-            'border:1px solid ' + (f==='pending'?'#4a8fd4':'#26262f') + ';' +
-            'border-radius:5px;background:' + (f==='pending'?'#0d1820':'transparent') + ';' +
-            'color:' + (f==='pending'?'#4a8fd4':'#555') + ';cursor:pointer">' + f + '</button>';
+          var active = f === 'pending';
+          return '<button onclick="bfSetFilter(\'' + f + '\')" id="bff-' + f + '" style="font-family:inherit;font-size:10px;padding:3px 9px;border:1px solid ' + (active?'#4a8fd4':'#26262f') + ';border-radius:4px;background:' + (active?'#0d1820':'transparent') + ';color:' + (active?'#4a8fd4':'#555') + ';cursor:pointer">' + f + '</button>';
         }).join(''),
       '</div>',
-      '<button onclick="closeBackfillReview()" style="font-family:inherit;font-size:18px;',
-      'background:none;border:none;color:#555;cursor:pointer;padding:0 4px;line-height:1">×</button>',
+
+      '<span style="color:#26262f;font-size:14px">|</span>',
+
+      // Type filters
+      '<div style="display:flex;gap:4px">',
+        [['all','all'],['bolus','meal'],['correction','corr'],['free','free']].map(function(p) {
+          var active = p[0] === 'all';
+          return '<button onclick="bfSetTypeFilter(\'' + p[0] + '\')" id="bftf-' + p[0] + '" style="font-family:inherit;font-size:10px;padding:3px 9px;border:1px solid ' + (active?'#40a870':'#26262f') + ';border-radius:4px;background:' + (active?'#0d180d':'transparent') + ';color:' + (active?'#40a870':'#555') + ';cursor:pointer">' + p[1] + '</button>';
+        }).join(''),
+      '</div>',
+
+      '<span style="color:#26262f;font-size:14px">|</span>',
+
+      // Date range
+      '<input id="bf-date-from" type="date" placeholder="from" onchange="bfSetDateFilter()" ',
+        'style="font-family:inherit;font-size:10px;padding:3px 6px;border:1px solid #26262f;border-radius:4px;background:#0c0c0f;color:#555;width:112px">',
+      '<span style="color:#555;font-size:10px">→</span>',
+      '<input id="bf-date-to" type="date" placeholder="to" onchange="bfSetDateFilter()" ',
+        'style="font-family:inherit;font-size:10px;padding:3px 6px;border:1px solid #26262f;border-radius:4px;background:#0c0c0f;color:#555;width:112px">',
+      '<button onclick="bfClearDates()" style="font-family:inherit;font-size:10px;padding:3px 7px;border:1px solid #26262f;border-radius:4px;background:transparent;color:#555;cursor:pointer">×</button>',
+
     '</div>',
+
     '<div id="bf-body" style="flex:1;overflow-y:auto;padding:12px 16px">',
       '<div style="text-align:center;color:#555;padding:40px;font-size:13px">Loading events…</div>',
     '</div>',
@@ -147,17 +192,51 @@ async function bfSetFilter(f) {
     el.style.background  = active ? '#0d1820' : 'transparent';
     el.style.color       = active ? '#4a8fd4' : '#555';
   });
+  await _bfReload();
+}
+window.bfSetFilter = bfSetFilter;
+
+async function bfSetTypeFilter(f) {
+  _bfTypeFilter = f;
+  ['all','bolus','correction','free'].forEach(function(t) {
+    var el = document.getElementById('bftf-' + t);
+    if (!el) return;
+    var active = t === f;
+    el.style.borderColor = active ? '#40a870' : '#26262f';
+    el.style.background  = active ? '#0d180d' : 'transparent';
+    el.style.color       = active ? '#40a870' : '#555';
+  });
+  await _bfReload();
+}
+window.bfSetTypeFilter = bfSetTypeFilter;
+
+async function bfSetDateFilter() {
+  _bfDateFrom = (document.getElementById('bf-date-from')||{}).value || '';
+  _bfDateTo   = (document.getElementById('bf-date-to')  ||{}).value || '';
+  await _bfReload();
+}
+window.bfSetDateFilter = bfSetDateFilter;
+
+async function bfClearDates() {
+  _bfDateFrom = ''; _bfDateTo = '';
+  var f = document.getElementById('bf-date-from');
+  var t = document.getElementById('bf-date-to');
+  if (f) f.value = ''; if (t) t.value = '';
+  await _bfReload();
+}
+window.bfClearDates = bfClearDates;
+
+async function _bfReload() {
   var body = document.getElementById('bf-body');
   if (body) body.innerHTML = '<div style="text-align:center;color:#555;padding:40px;font-size:13px">Loading…</div>';
   try {
-    _bfQueue = await bfLoadQueue(f);
+    _bfQueue = await bfLoadQueue(_bfFilter);
     bfRenderQueue();
   } catch(e) {
     var body2 = document.getElementById('bf-body');
     if (body2) body2.innerHTML = '<div style="color:#c0392b;padding:20px">' + e.message + '</div>';
   }
 }
-window.bfSetFilter = bfSetFilter;
 
 // ── Render queue ───────────────────────────────────────────────
 function bfRenderQueue() {
@@ -175,7 +254,28 @@ function bfRenderQueue() {
     body.innerHTML = '<div style="text-align:center;color:#1d9e72;padding:60px 20px;font-size:14px">✓ All ' + _bfFilter + ' events reviewed</div>';
     return;
   }
-  body.innerHTML = _bfQueue.map(function(ev, i){ return bfCardHTML(ev, i); }).join('');
+  // Render cards with insert-event affordance between each pair
+  var parts = [];
+  _bfQueue.forEach(function(ev, i) {
+    parts.push(bfCardHTML(ev, i));
+    // Slim insert row — shows "+" between cards
+    if (i < _bfQueue.length - 1) {
+      var midT = Math.round((ev.t + _bfQueue[i+1].t) / 2);
+      var midDate = new Date(midT);
+      var pad = function(n){ return String(n).padStart(2,'0'); };
+      var midVal = midDate.getFullYear()+'-'+pad(midDate.getMonth()+1)+'-'+pad(midDate.getDate())+'T'+pad(midDate.getHours())+':'+pad(midDate.getMinutes());
+      parts.push(
+        '<div class="bf-insert" style="display:flex;align-items:center;gap:6px;padding:0 4px;margin:-4px 0;height:18px;cursor:pointer;opacity:0.35" ' +
+          'onmouseover="this.style.opacity=\'1\'" onmouseout="this.style.opacity=\'0.35\'" ' +
+          'onclick="bfExpandInsert(this,\'' + midVal + '\')">' +
+          '<div style="flex:1;height:1px;background:#26262f"></div>' +
+          '<span style="font-size:10px;color:#555;padding:0 4px">+</span>' +
+          '<div style="flex:1;height:1px;background:#26262f"></div>' +
+        '</div>'
+      );
+    }
+  });
+  body.innerHTML = parts.join('');
 }
 
 // ── Card HTML ──────────────────────────────────────────────────
@@ -213,6 +313,10 @@ function bfCardHTML(ev, idx) {
   var diffWarning = carbDiff && carbDiff > 2
     ? '<span style="color:#b07820;font-size:11px"> ⚠ ' + totalLogged.toFixed(1) + 'g logged vs ' + ev.carbs_device + 'g device</span>'
     : '';
+  // Auto-fill wait_mins from BG rule if not already set
+  if (ev.wait_mins == null && evType === 'bolus' && ev.pre_bg != null) {
+    ev.wait_mins = _bfAutoWait(ev.pre_bg);
+  }
   var waitHint   = ev.wait_src === 'written' ? '✓ written'
     : ev.wait_mins != null ? '≈ ' + ev.wait_mins + 'm · BG rule' : '';
   var statusCol  = ev.status==='approved'?'#1d9e72':ev.status==='flagged'?'#c0392b':'#555';
@@ -285,7 +389,8 @@ function bfCardHTML(ev, idx) {
         '<span style="font-size:11px;color:#555;min-width:76px">' + ev.date + '</span>',
         '<span style="font-size:11px;color:#555;min-width:40px">' + (ev.time||'?') + '</span>',
         '<span style="font-size:9px;font-weight:700;padding:2px 6px;border-radius:3px;background:' + tInfo.bg + ';color:' + tInfo.col + ';min-width:52px;text-align:center;text-transform:uppercase;letter-spacing:0.05em">' + tInfo.label + '</span>',
-        '<span style="font-size:9px;font-weight:600;padding:2px 6px;border-radius:3px;background:' + pbg + ';color:' + pco + ';text-transform:uppercase;letter-spacing:0.04em">' + (ev.period||'?') + '</span>',
+        // Period badge — hide for correction (type badge is sufficient)
+        evType !== 'correction' ? '<span style="font-size:9px;font-weight:600;padding:2px 6px;border-radius:3px;background:' + pbg + ';color:' + pco + ';text-transform:uppercase;letter-spacing:0.04em">' + (ev.period||'?') + '</span>' : '',
         headerCarbs,
         headerUnits,
         ev.peak_bg ? '<span style="font-size:11px;color:' + (ev.peak_bg>12?'#c0392b':ev.peak_bg>10?'#b07820':'#1d9e72') + '">↑' + ev.peak_bg + ' +' + ev.peak_mins + 'm</span>' : '',
@@ -321,6 +426,15 @@ function bfCardHTML(ev, idx) {
       '</div>',
     '</div>',
   ].join('');
+}
+
+// ── Auto bolus wait from pre_bg ───────────────────────────────
+function _bfAutoWait(pre_bg) {
+  // Rules: bg < 5.0 → 0 min, 5.0–6.0 → 10 min, > 6.0 → 15 min
+  if (pre_bg == null) return null;
+  if (pre_bg < 5.0)  return 0;
+  if (pre_bg <= 6.0) return 10;
+  return 15;
 }
 
 // ── Library lookup (name + alias aware) ───────────────────────
@@ -1036,14 +1150,245 @@ async function bfFlag(idx) {
 }
 window.bfFlag = bfFlag;
 
-// ── Skip ───────────────────────────────────────────────────────
-function bfSkip(idx) {
-  var det = document.getElementById('bfd-' + idx);
-  if (det) det.style.display = 'none';
-  var next = document.getElementById('bfc-' + (idx+1));
-  if (next) next.scrollIntoView({behavior:'smooth', block:'start'});
+// ── Skip — marks as skipped so it leaves pending ──────────────
+async function bfSkip(idx) {
+  var ev = _bfQueue[idx];
+  if (!ev) return;
+
+  // Mark as skipped in Supabase — out of pending, visible in 'all'
+  try {
+    await _bfFetch('backfill_queue?t=eq.' + ev.t, {
+      method: 'PATCH', prefer: 'return=minimal',
+      body: { status: 'skipped' }
+    });
+    ev.status = 'skipped';
+  } catch(e) {
+    if (typeof __debugLog === 'function') __debugLog('backfill skip error: ' + e.message);
+  }
+
+  // Remove from pending view
+  var card = document.getElementById('bfc-' + idx);
+  if (card) {
+    card.style.transition = 'opacity 0.15s';
+    card.style.opacity = '0';
+    setTimeout(function(){
+      if (card.parentNode) card.remove();
+      // Scroll to next
+      var next = document.getElementById('bfc-' + (idx+1));
+      if (next) next.scrollIntoView({behavior:'smooth', block:'start'});
+    }, 150);
+  }
+
+  _bfPendingCount = Math.max(0, _bfPendingCount - 1);
+  var prog = document.getElementById('bf-progress');
+  if (prog) prog.textContent = _bfPendingCount + ' pending remaining';
 }
 window.bfSkip = bfSkip;
+
+// ── Insert event between cards ────────────────────────────────
+function bfExpandInsert(el, defaultDt) {
+  // Collapse any other open insert forms first
+  document.querySelectorAll('.bf-insert-form').forEach(function(f){ f.remove(); });
+
+  // If this one was already expanded, just collapse
+  if (el.dataset.expanded === '1') {
+    el.dataset.expanded = '0';
+    el.style.opacity = '0.35';
+    return;
+  }
+  el.dataset.expanded = '1';
+  el.style.opacity = '1';
+
+  var form = document.createElement('div');
+  form.className = 'bf-insert-form';
+  form.style.cssText = 'background:#141418;border:1px solid #26262f;border-radius:8px;padding:12px 14px;margin:4px 0;font-family:inherit';
+
+  form.innerHTML = [
+    '<div style="display:flex;align-items:center;gap:8px;margin-bottom:10px">',
+      '<span style="font-size:10px;color:#555;text-transform:uppercase;letter-spacing:0.06em">Insert event</span>',
+      '<button onclick="bfCloseInsert()" style="font-family:inherit;margin-left:auto;background:none;border:none;color:#555;cursor:pointer;font-size:14px;padding:0">×</button>',
+    '</div>',
+
+    // Date + time
+    '<div style="display:flex;gap:8px;margin-bottom:10px">',
+      '<div style="flex:1">',
+        '<div style="font-size:8px;color:#555;text-transform:uppercase;letter-spacing:0.06em;margin-bottom:3px">date &amp; time</div>',
+        '<input id="bfins-dt" type="datetime-local" value="' + defaultDt + '" ',
+          'style="font-family:inherit;font-size:11px;width:100%;padding:4px 6px;border:1px solid #26262f;border-radius:4px;background:#0c0c0f;color:#e8e4dc;outline:none;box-sizing:border-box">',
+      '</div>',
+    '</div>',
+
+    // Type selector
+    '<div style="margin-bottom:10px">',
+      '<div style="font-size:8px;color:#555;text-transform:uppercase;letter-spacing:0.06em;margin-bottom:4px">type</div>',
+      '<div style="display:flex;gap:4px">',
+        [['prick','◆ blood prick','#4a8fd4','#0d1820'],
+         ['free','free snack / pre-hypo','#906090','#180d1a'],
+         ['note','✎ note','#555','#1a1a1a']].map(function(t) {
+          return '<button onclick="bfInsertTypeSelect(this,'' + t[0] + '')" data-itype="' + t[0] + '" ' +
+            'style="font-family:inherit;font-size:10px;padding:4px 8px;border:1px solid #26262f;border-radius:4px;background:transparent;color:#555;cursor:pointer">' + t[1] + '</button>';
+        }).join(''),
+      '</div>',
+    '</div>',
+
+    // Dynamic fields — swapped by type
+    '<div id="bfins-fields" style="margin-bottom:10px"></div>',
+
+    '<div style="display:flex;gap:6px">',
+      '<button onclick="bfSaveInsert()" ',
+        'style="font-family:inherit;flex:2;padding:7px;border-radius:6px;border:1px solid rgba(62,180,120,0.4);background:rgba(62,180,120,0.1);font-size:12px;color:#40a870;cursor:pointer;font-weight:600">save</button>',
+      '<button onclick="bfCloseInsert()" ',
+        'style="font-family:inherit;flex:1;padding:7px;border-radius:6px;border:1px solid #26262f;background:transparent;font-size:11px;color:#555;cursor:pointer">cancel</button>',
+    '</div>',
+  ].join('');
+
+  el.insertAdjacentElement('afterend', form);
+
+  // Pre-select blood prick as default
+  var firstBtn = form.querySelector('[data-itype="prick"]');
+  if (firstBtn) bfInsertTypeSelect(firstBtn, 'prick');
+}
+function bfCloseInsert() {
+  document.querySelectorAll('.bf-insert-form').forEach(function(f){ f.remove(); });
+  document.querySelectorAll('.bf-insert[data-expanded="1"]').forEach(function(el){
+    el.dataset.expanded = '0';
+    el.style.opacity = '0.35';
+  });
+}
+window.bfCloseInsert = bfCloseInsert;
+window.bfExpandInsert = bfExpandInsert;
+
+function bfInsertTypeSelect(btn, type) {
+  // Update button styles
+  btn.closest('div').querySelectorAll('[data-itype]').forEach(function(b) {
+    b.style.borderColor = '#26262f';
+    b.style.color = '#555';
+    b.style.background = 'transparent';
+  });
+  btn.style.borderColor = type==='prick'?'#4a8fd4':type==='free'?'#906090':'#555';
+  btn.style.color       = type==='prick'?'#4a8fd4':type==='free'?'#906090':'#aaa';
+  btn.style.background  = type==='prick'?'#0d1820':type==='free'?'#180d1a':'#1a1a1a';
+  btn.dataset.active = '1';
+
+  var fields = document.getElementById('bfins-fields');
+  if (!fields) return;
+
+  if (type === 'prick') {
+    fields.innerHTML =
+      '<div style="font-size:8px;color:#555;text-transform:uppercase;letter-spacing:0.06em;margin-bottom:3px">BG value (mmol/L)</div>' +
+      '<input id="bfins-bg" type="number" step="0.1" min="1" max="30" inputmode="decimal" placeholder="e.g. 6.2" ' +
+        'style="font-family:inherit;font-size:18px;width:100%;padding:6px 8px;border:1px solid rgba(74,143,212,0.4);border-radius:5px;background:rgba(74,143,212,0.06);color:#4a8fd4;outline:none;text-align:center;font-weight:600;box-sizing:border-box" ' +
+        'onkeydown="if(event.key==='Enter')bfSaveInsert()">';
+    setTimeout(function(){ var i=document.getElementById('bfins-bg'); if(i)i.focus(); }, 30);
+
+  } else if (type === 'free') {
+    fields.innerHTML = [
+      '<div style="display:flex;gap:8px">',
+        '<div style="flex:1">',
+          '<div style="font-size:8px;color:#555;text-transform:uppercase;letter-spacing:0.06em;margin-bottom:3px">carbs (g)</div>',
+          '<input id="bfins-carbs" type="number" step="0.5" min="0" inputmode="decimal" placeholder="0" ',
+            'style="font-family:inherit;font-size:14px;width:100%;padding:5px 8px;border:1px solid #26262f;border-radius:4px;background:#0c0c0f;color:#e8e4dc;outline:none;text-align:center;box-sizing:border-box">',
+        '</div>',
+        '<div style="flex:1">',
+          '<div style="font-size:8px;color:#555;text-transform:uppercase;letter-spacing:0.06em;margin-bottom:3px">description</div>',
+          '<input id="bfins-desc" type="text" placeholder="e.g. biscuit, jelly bean…" autocomplete="off" ',
+            'style="font-family:inherit;font-size:11px;width:100%;padding:5px 8px;border:1px solid #26262f;border-radius:4px;background:#0c0c0f;color:#e8e4dc;outline:none;box-sizing:border-box">',
+        '</div>',
+      '</div>',
+    ].join('');
+    setTimeout(function(){ var i=document.getElementById('bfins-carbs'); if(i)i.focus(); }, 30);
+
+  } else {
+    fields.innerHTML =
+      '<div style="font-size:8px;color:#555;text-transform:uppercase;letter-spacing:0.06em;margin-bottom:3px">note</div>' +
+      '<textarea id="bfins-note" placeholder="context, observation…" ' +
+        'style="font-family:inherit;font-size:12px;width:100%;padding:5px 8px;border:1px solid #26262f;border-radius:4px;background:#0c0c0f;color:#e8e4dc;resize:vertical;min-height:52px;outline:none;box-sizing:border-box"></textarea>';
+    setTimeout(function(){ var i=document.getElementById('bfins-note'); if(i)i.focus(); }, 30);
+  }
+
+  // Store type on form
+  var form = fields.closest('.bf-insert-form');
+  if (form) form.dataset.itype = type;
+}
+window.bfInsertTypeSelect = bfInsertTypeSelect;
+
+async function bfSaveInsert() {
+  var form = document.querySelector('.bf-insert-form');
+  if (!form) return;
+
+  var type  = form.dataset.itype || 'prick';
+  var dtEl  = document.getElementById('bfins-dt');
+  if (!dtEl || !dtEl.value) return;
+
+  var dt = new Date(dtEl.value);
+  if (isNaN(dt.getTime())) return;
+  var t = dt.getTime();
+
+  try {
+    if (type === 'prick') {
+      var bg = parseFloat((document.getElementById('bfins-bg')||{}).value);
+      if (isNaN(bg) || bg < 1) { var i=document.getElementById('bfins-bg'); if(i){i.style.borderColor='#c0392b';i.focus();} return; }
+
+      await _sbFetch('events?on_conflict=t', {
+        method: 'POST', prefer: 'resolution=merge-duplicates,return=minimal',
+        body: [{ t: t, c: 0, u: 0, gi: bg, note: 'prick',
+                 device_id: typeof _deviceId !== 'undefined' ? _deviceId : 'backfill',
+                 updated_at: new Date().toISOString() }],
+      });
+
+      if (typeof BLOOD_PRICKS !== 'undefined' && typeof _savePricks === 'function') {
+        BLOOD_PRICKS.push({ t: t, bg: bg, logged_by: 'backfill' });
+        BLOOD_PRICKS.sort(function(a,b){ return a.t-b.t; });
+        _savePricks();
+      }
+
+    } else if (type === 'free') {
+      var carbs = parseFloat((document.getElementById('bfins-carbs')||{}).value) || 0;
+      var desc  = ((document.getElementById('bfins-desc')||{}).value || '').trim();
+
+      // Write directly to events as approved free snack
+      await _sbFetch('events?on_conflict=t', {
+        method: 'POST', prefer: 'resolution=merge-duplicates,return=minimal',
+        body: [{ t: t, c: carbs, u: 0, gi: null,
+                 note: 'carbs', items: desc ? [{name: desc, carbs: carbs}] : [],
+                 device_id: typeof _deviceId !== 'undefined' ? _deviceId : 'backfill',
+                 updated_at: new Date().toISOString() }],
+      });
+
+    } else {
+      // note — store in backfill_queue as approved note event
+      var noteText = ((document.getElementById('bfins-note')||{}).value || '').trim();
+      if (!noteText) { var ni=document.getElementById('bfins-note'); if(ni){ni.style.borderColor='#c0392b';ni.focus();} return; }
+
+      await _bfFetch('backfill_queue', {
+        method: 'POST', prefer: 'resolution=merge-duplicates,return=minimal',
+        body: [{ t: t, date: dt.toISOString().slice(0,10), time: dtEl.value.slice(11,16),
+                 period: 'Note', status: 'approved', notes: noteText,
+                 src: 'manual', carbs_device: 0, units: 0, items: [], cgm_curve: [] }],
+      });
+    }
+
+    // Replace form with slim confirmed row
+    var pad = function(n){ return String(n).padStart(2,'0'); };
+    var timeStr = pad(dt.getHours()) + ':' + pad(dt.getMinutes());
+    var typeLabels = {prick: '◆ prick', free: 'free snack', note: '✎ note'};
+    var confirmed = document.createElement('div');
+    confirmed.style.cssText = 'display:flex;align-items:center;gap:8px;padding:3px 4px;margin:2px 0;border-left:2px solid #1d9e72;background:rgba(29,158,114,0.05);border-radius:0 4px 4px 0';
+    confirmed.innerHTML =
+      '<span style="font-size:9px;color:#1d9e72">✓</span>' +
+      '<span style="font-size:10px;color:#555">' + dt.toLocaleDateString('en-GB',{day:'numeric',month:'short'}) + ' ' + timeStr + '</span>' +
+      '<span style="font-size:10px;color:#555">' + (typeLabels[type]||type) + '</span>';
+
+    form.replaceWith(confirmed);
+
+    if (typeof __debugLog === 'function') __debugLog('backfill: inserted ' + type + ' at ' + timeStr);
+
+  } catch(e) {
+    if (typeof __debugLog === 'function') __debugLog('backfill insert error: ' + e.message);
+    alert('Error saving: ' + e.message);
+  }
+}
+window.bfSaveInsert = bfSaveInsert;
 
 // ── Close autocomplete on outside click ───────────────────────
 document.addEventListener('click', function(e) {
