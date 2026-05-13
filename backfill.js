@@ -36,12 +36,12 @@ async function initBackfill() {
     );
     _bfPendingCount = Array.isArray(rows) ? rows.length : 0;
     if (_bfPendingCount > 0) {
-      if (typeof __debugLog === 'function') __debugLog('backfill: ' + _bfPendingCount + ' events awaiting review');
+      if (typeof __debugLog === 'function') if (typeof __debugLog === 'function') __debugLog('backfill: ' + _bfPendingCount + ' events awaiting review');
       // Update settings tray label if it's currently open
       _bfUpdateTrayBadge();
     }
   } catch(e) {
-    if (typeof __debugLog === 'function') __debugLog('backfill init error: ' + e.message);
+    if (typeof __debugLog === 'function') if (typeof __debugLog === 'function') __debugLog('backfill init error: ' + e.message);
   }
 }
 
@@ -768,7 +768,7 @@ async function _bfLookupGI(foodName, cardIdx, itemIdx) {
     }
   } catch(e) {
     if (prev) prev.textContent = 'lookup failed \u2014 enter GI manually';
-    if (typeof __debugLog === 'function') __debugLog('GI lookup error: ' + e.message);
+    if (typeof __debugLog === 'function') if (typeof __debugLog === 'function') __debugLog('GI lookup error: ' + e.message);
   }
 
   giEl.disabled = false;
@@ -882,7 +882,7 @@ function bfSaveInlineFood(cardIdx, itemIdx, name) {
     if (!FOOD_LIBRARY.some(function(f){ return (f.name||'').toLowerCase() === lname; })) {
       FOOD_LIBRARY.push(entry);
       saveFoodLibrary();
-      if (typeof __debugLog === 'function') __debugLog('backfill: saved "' + name + '" to library c100=' + c100);
+      if (typeof __debugLog === 'function') if (typeof __debugLog === 'function') __debugLog('backfill: saved "' + name + '" to library c100=' + c100);
     }
   }
 
@@ -953,7 +953,7 @@ function bfLinkAlias(cardIdx, itemIdx, alias, canonicalName) {
         canonical.aliases.push(alias);
       }
       saveFoodLibrary();
-      if (typeof __debugLog === 'function') __debugLog('backfill: alias "' + alias + '" \u2192 "' + canonicalName + '"');
+      if (typeof __debugLog === 'function') if (typeof __debugLog === 'function') __debugLog('backfill: alias "' + alias + '" \u2192 "' + canonicalName + '"');
     }
   }
   // Resolve this item to the canonical food (reuses bfSelectFood)
@@ -1067,12 +1067,12 @@ function _bfSyncNewFoodsToLibrary(items) {
     };
     FOOD_LIBRARY.push(entry);
     added++;
-    if (typeof __debugLog === 'function') __debugLog('backfill: added "' + name + '" to library (c100=' + entry.c100 + ')');
+    if (typeof __debugLog === 'function') if (typeof __debugLog === 'function') __debugLog('backfill: added "' + name + '" to library (c100=' + entry.c100 + ')');
   });
 
   if (added > 0) {
     saveFoodLibrary(); // persists to localStorage + Supabase
-    if (typeof __debugLog === 'function') __debugLog('backfill: library now ' + FOOD_LIBRARY.length + ' items (+' + added + ')');
+    if (typeof __debugLog === 'function') if (typeof __debugLog === 'function') __debugLog('backfill: library now ' + FOOD_LIBRARY.length + ' items (+' + added + ')');
   }
 }
 
@@ -1108,7 +1108,7 @@ async function bfApprove(idx) {
         }
       }
     });
-    __debugLog('backfill: approve blocked — ' + missing.length + ' item(s) missing carbs/100g');
+    if (typeof __debugLog === 'function') __debugLog('backfill: approve blocked — ' + missing.length + ' item(s) missing carbs/100g');
     // Show brief message near the approve button
     var btn = document.querySelector('#bfc-' + idx + ' button[onclick*="bfApprove"]');
     if (btn) {
@@ -1207,10 +1207,10 @@ async function bfApprove(idx) {
     var prog = document.getElementById('bf-progress');
     if (prog) prog.textContent = _bfPendingCount + ' pending remaining';
 
-    __debugLog('backfill: approved ' + ev.date + ' ' + ev.period);
+    if (typeof __debugLog === 'function') __debugLog('backfill: approved ' + ev.date + ' ' + ev.period);
 
   } catch(e) {
-    __debugLog('backfill approve error: ' + e.message);
+    if (typeof __debugLog === 'function') __debugLog('backfill approve error: ' + e.message);
     alert('Error saving: ' + e.message);
   }
 }
@@ -1231,7 +1231,7 @@ async function bfFlag(idx) {
     var card = document.getElementById('bfc-' + idx);
     if (card) card.style.borderLeft = '2px solid #c0392b';
   } catch(e) {
-    __debugLog('backfill flag error: ' + e.message);
+    if (typeof __debugLog === 'function') __debugLog('backfill flag error: ' + e.message);
   }
 }
 window.bfFlag = bfFlag;
@@ -1249,7 +1249,7 @@ async function bfSkip(idx) {
     });
     ev.status = 'skipped';
   } catch(e) {
-    if (typeof __debugLog === 'function') __debugLog('backfill skip error: ' + e.message);
+    if (typeof __debugLog === 'function') if (typeof __debugLog === 'function') __debugLog('backfill skip error: ' + e.message);
   }
 
   // Remove from pending view
@@ -1467,10 +1467,10 @@ async function bfSaveInsert() {
 
     form.replaceWith(confirmed);
 
-    if (typeof __debugLog === 'function') __debugLog('backfill: inserted ' + type + ' at ' + timeStr);
+    if (typeof __debugLog === 'function') if (typeof __debugLog === 'function') __debugLog('backfill: inserted ' + type + ' at ' + timeStr);
 
   } catch(e) {
-    if (typeof __debugLog === 'function') __debugLog('backfill insert error: ' + e.message);
+    if (typeof __debugLog === 'function') if (typeof __debugLog === 'function') __debugLog('backfill insert error: ' + e.message);
     alert('Error saving: ' + e.message);
   }
 }
