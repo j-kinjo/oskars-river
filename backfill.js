@@ -181,86 +181,138 @@ function bfRenderQueue() {
 // ── Card HTML ──────────────────────────────────────────────────
 function bfCardHTML(ev, idx) {
   var PERIODS = {
-    'Breakfast':      '#0d1820:#4a8fd4',
-    'Morning snack':  '#0d180d:#40a870',
-    'Lunch':          '#0d180d:#40a870',
-    'Afternoon snack':'#1a1008:#c08040',
-    'Dinner':         '#1a1008:#c08040',
-    'Bedtime snack':  '#180d1a:#906090',
-    'Unknown':        '#1a1a1a:#666'
+    'Breakfast':        '#0d1820:#4a8fd4',
+    'Morning snack':    '#0d180d:#40a870',
+    'Lunch':            '#0d180d:#40a870',
+    'Afternoon snack':  '#1a1008:#c08040',
+    'Dinner':           '#1a1008:#c08040',
+    'Evening snack':    '#180d1a:#906090',
+    'Bedtime snack':    '#180d1a:#906090',
+    'Overnight':        '#0d0d1a:#6060a0',
+    'Unknown':          '#1a1a1a:#666'
   };
-  var parts    = ((PERIODS[ev.period] || PERIODS.Unknown)).split(':');
-  var pbg      = parts[0], pco = parts[1];
-  var items    = ev.items || [];
+  var parts  = (PERIODS[ev.period] || PERIODS.Unknown).split(':');
+  var pbg    = parts[0], pco = parts[1];
+
+  // Event type — stored in notes field from new seeder, fallback to inferring
+  var evType = ev.notes && ['bolus','correction','free'].indexOf(ev.notes) >= 0
+    ? ev.notes
+    : (ev.units > 0 && ev.carbs_device > 0 ? 'bolus'
+      : ev.units > 0 ? 'correction' : 'free');
+
+  var TYPE_LABELS = {
+    bolus:      {label:'meal',        col:'#4a8fd4', bg:'#0d1820'},
+    correction: {label:'correction',  col:'#b07820', bg:'#1a1008'},
+    free:       {label:'free / hypo', col:'#906090', bg:'#180d1a'},
+  };
+  var tInfo = TYPE_LABELS[evType] || TYPE_LABELS.bolus;
+
+  var items       = ev.items || [];
   var totalLogged = items.reduce(function(s,i){ return s+(parseFloat(i.carbs)||0); }, 0);
-  var carbDiff = ev.carbs_device && totalLogged > 0
-    ? Math.abs(totalLogged - ev.carbs_device) : null;
+  var carbDiff    = ev.carbs_device && totalLogged > 0 ? Math.abs(totalLogged - ev.carbs_device) : null;
   var diffWarning = carbDiff && carbDiff > 2
     ? '<span style="color:#b07820;font-size:11px"> ⚠ ' + totalLogged.toFixed(1) + 'g logged vs ' + ev.carbs_device + 'g device</span>'
     : '';
-  var waitHint = ev.wait_src === 'written'
-    ? '✓ written'
+  var waitHint   = ev.wait_src === 'written' ? '✓ written'
     : ev.wait_mins != null ? '≈ ' + ev.wait_mins + 'm · BG rule' : '';
-  var statusCol = ev.status==='approved' ? '#1d9e72' : ev.status==='flagged' ? '#c0392b' : '#555';
-  var borderLeft = ev.status==='approved' ? 'border-left:2px solid #1d9e72'
-    : ev.status==='flagged' ? 'border-left:2px solid #c0392b' : '';
+  var statusCol  = ev.status==='approved'?'#1d9e72':ev.status==='flagged'?'#c0392b':'#555';
+  var borderLeft = ev.status==='approved'?'border-left:3px solid #1d9e72'
+    : ev.status==='flagged'?'border-left:3px solid #c0392b':'border-left:3px solid #26262f';
+
+  // Header summary differs by type
+  var headerCarbs = evType === 'correction'
+    ? '<span style="font-size:11px;color:#b07820;min-width:50px">BG corr.</span>'
+    : '<span style="font-size:14px;font-weight:600;color:#e8e4dc;min-width:50px">' + (ev.carbs_device||'?') + 'g</span>';
+
+  var headerUnits = ev.units
+    ? '<span style="font-size:11px;color:#555;flex:1">' + ev.units + 'U' + (ev.ic_ratio?' · 1:'+ev.ic_ratio:'') + '</span>'
+    : '<span style="font-size:11px;color:#555;flex:1">no insulin</span>';
+
+  // Left panel content — differs by type
+  var leftPanel;
+  if (evType === 'correction') {
+    leftPanel = [
+      '<div style="padding:12px;background:#1a1008;border-radius:6px;margin-bottom:10px">',
+        '<div style="font-size:11px;color:#b07820;margin-bottom:4px">Correction bolus — no food logged</div>',
+        '<div style="font-size:11px;color:#555">BG was ' + (ev.pre_bg||'?') + ' mmol/L · ' + ev.units + 'U delivered</div>',
+      '</div>',
+      // Notes only — no items
+      '<textarea id="bfn-' + idx + '" placeholder="context, reason for correction…" onchange="bfUpdateNotes(' + idx + ',this.value)" ',
+        'style="font-family:inherit;font-size:12px;width:100%;border:1px solid #26262f;border-radius:4px;padding:5px 8px;background:#0c0c0f;color:#e8e4dc;resize:vertical;min-height:44px;box-sizing:border-box">' + (ev.notes&&ev.notes!=='correction'?ev.notes:'') + '</textarea>',
+      '<div style="display:flex;gap:8px;margin-top:8px">',
+        '<button onclick="bfApprove(' + idx + ')" style="font-family:inherit;font-size:12px;padding:6px 14px;border:1px solid #1d9e72;border-radius:5px;background:transparent;color:#1d9e72;cursor:pointer;font-weight:600">approve</button>',
+        '<button onclick="bfFlag(' + idx + ')" style="font-family:inherit;font-size:12px;padding:6px 14px;border:1px solid #c0392b;border-radius:5px;background:transparent;color:#c0392b;cursor:pointer">flag</button>',
+        '<button onclick="bfSkip(' + idx + ')" style="font-family:inherit;font-size:12px;padding:6px 14px;border:1px solid #26262f;border-radius:5px;background:transparent;color:#555;cursor:pointer">skip →</button>',
+      '</div>',
+    ].join('');
+  } else {
+    // bolus or free — show food items
+    var itemsLabel = evType === 'free'
+      ? 'items eaten (no insulin given) ' + diffWarning
+      : 'food items ' + diffWarning;
+    leftPanel = [
+      '<div style="font-size:10px;color:#555;text-transform:uppercase;letter-spacing:0.08em;margin-bottom:6px">' + itemsLabel + '</div>',
+      '<div id="bfi-' + idx + '">',
+        items.map(function(item, ii){ return bfItemRow(idx, ii, item); }).join(''),
+      '</div>',
+      '<button onclick="bfAddItem(' + idx + ')" style="font-family:inherit;font-size:11px;color:#555;border:1px dashed #26262f;border-radius:4px;padding:3px 8px;cursor:pointer;background:none;margin-top:4px;width:100%;text-align:left">+ add item</button>',
+
+      // Wait time — only meaningful for bolus events
+      evType === 'bolus' ? [
+        '<div style="display:flex;align-items:center;gap:8px;margin-top:10px">',
+          '<span style="font-size:11px;color:#555;min-width:70px;text-transform:uppercase;letter-spacing:0.05em">bolus wait</span>',
+          '<input type="number" min="0" max="60" step="5" id="bfw-' + idx + '" value="' + (ev.wait_mins!=null?ev.wait_mins:'') + '" placeholder="mins" onchange="bfUpdateWait(' + idx + ',this.value)" style="font-family:inherit;font-size:12px;width:60px;border:1px solid #26262f;border-radius:4px;padding:3px 6px;background:#0c0c0f;color:#e8e4dc;text-align:center">',
+          '<span style="font-size:11px;color:#555">' + waitHint + '</span>',
+        '</div>',
+      ].join('') : '',
+
+      '<textarea id="bfn-' + idx + '" placeholder="notes, unknowns, context…" onchange="bfUpdateNotes(' + idx + ',this.value)" ',
+        'style="font-family:inherit;font-size:12px;width:100%;margin-top:8px;border:1px solid #26262f;border-radius:4px;padding:5px 8px;background:#0c0c0f;color:#e8e4dc;resize:vertical;min-height:44px;box-sizing:border-box">' + (ev.notes&&['bolus','correction','free'].indexOf(ev.notes)<0?ev.notes:'') + '</textarea>',
+
+      '<div style="display:flex;gap:8px;margin-top:8px;flex-wrap:wrap">',
+        '<button onclick="bfApprove(' + idx + ')" style="font-family:inherit;font-size:12px;padding:6px 14px;border:1px solid #1d9e72;border-radius:5px;background:transparent;color:#1d9e72;cursor:pointer;font-weight:600">approve</button>',
+        '<button onclick="bfFlag(' + idx + ')" style="font-family:inherit;font-size:12px;padding:6px 14px;border:1px solid #c0392b;border-radius:5px;background:transparent;color:#c0392b;cursor:pointer">flag</button>',
+        '<button onclick="bfSkip(' + idx + ')" style="font-family:inherit;font-size:12px;padding:6px 14px;border:1px solid #26262f;border-radius:5px;background:transparent;color:#555;cursor:pointer">skip →</button>',
+      '</div>',
+    ].join('');
+  }
 
   return [
     '<div id="bfc-' + idx + '" style="background:#141418;border:1px solid #26262f;border-radius:8px;margin-bottom:10px;overflow:hidden;' + borderLeft + '">',
-      // Header row — tap to expand
-      '<div onclick="bfToggle(' + idx + ')" style="display:flex;align-items:center;gap:10px;padding:10px 12px;cursor:pointer">',
+
+      // Header — tap to expand
+      '<div onclick="bfToggle(' + idx + ')" style="display:flex;align-items:center;gap:8px;padding:10px 12px;cursor:pointer">',
         '<span style="font-size:11px;color:#555;min-width:76px">' + ev.date + '</span>',
         '<span style="font-size:11px;color:#555;min-width:40px">' + (ev.time||'?') + '</span>',
-        '<span style="font-size:10px;font-weight:700;padding:2px 8px;border-radius:4px;background:' + pbg + ';color:' + pco + ';min-width:88px;text-align:center;text-transform:uppercase;letter-spacing:0.05em">' + (ev.period||'?') + '</span>',
-        '<span style="font-size:14px;font-weight:600;color:#e8e4dc;min-width:50px">' + (ev.carbs_device||'?') + 'g</span>',
-        '<span style="font-size:11px;color:#555;flex:1">' + (ev.units||'?') + 'U' + (ev.ic_ratio?' · 1:'+ev.ic_ratio:'') + '</span>',
+        '<span style="font-size:9px;font-weight:700;padding:2px 6px;border-radius:3px;background:' + tInfo.bg + ';color:' + tInfo.col + ';min-width:52px;text-align:center;text-transform:uppercase;letter-spacing:0.05em">' + tInfo.label + '</span>',
+        '<span style="font-size:9px;font-weight:600;padding:2px 6px;border-radius:3px;background:' + pbg + ';color:' + pco + ';text-transform:uppercase;letter-spacing:0.04em">' + (ev.period||'?') + '</span>',
+        headerCarbs,
+        headerUnits,
         ev.peak_bg ? '<span style="font-size:11px;color:' + (ev.peak_bg>12?'#c0392b':ev.peak_bg>10?'#b07820':'#1d9e72') + '">↑' + ev.peak_bg + ' +' + ev.peak_mins + 'm</span>' : '',
-        '<span style="font-size:10px;color:' + statusCol + '">' + ev.status + '</span>',
+        '<span style="font-size:10px;color:' + statusCol + ';margin-left:auto">' + ev.status + '</span>',
       '</div>',
 
       // Expandable detail
       '<div id="bfd-' + idx + '" style="display:none;padding:0 12px 12px;border-top:1px solid #26262f">',
         '<div style="display:grid;grid-template-columns:1fr 200px;gap:12px;margin-top:10px">',
 
-          // Left: food items + controls
+          '<div>' + leftPanel + '</div>',
+
+          // Right: CGM + meta
           '<div>',
-            '<div style="font-size:10px;color:#555;text-transform:uppercase;letter-spacing:0.08em;margin-bottom:6px">food items ' + diffWarning + '</div>',
-            '<div id="bfi-' + idx + '">',
-              items.map(function(item, ii){ return bfItemRow(idx, ii, item); }).join(''),
-            '</div>',
-            '<button onclick="bfAddItem(' + idx + ')" style="font-family:inherit;font-size:11px;color:#555;border:1px dashed #26262f;border-radius:4px;padding:3px 8px;cursor:pointer;background:none;margin-top:4px;width:100%;text-align:left">+ add item</button>',
-
-            // Wait time
-            '<div style="display:flex;align-items:center;gap:8px;margin-top:10px">',
-              '<span style="font-size:11px;color:#555;min-width:70px;text-transform:uppercase;letter-spacing:0.05em">bolus wait</span>',
-              '<input type="number" min="0" max="60" step="5" id="bfw-' + idx + '" value="' + (ev.wait_mins!=null?ev.wait_mins:'') + '" placeholder="mins" onchange="bfUpdateWait(' + idx + ',this.value)" style="font-family:inherit;font-size:12px;width:60px;border:1px solid #26262f;border-radius:4px;padding:3px 6px;background:#0c0c0f;color:#e8e4dc;text-align:center">',
-              '<span style="font-size:11px;color:#555">' + waitHint + '</span>',
-            '</div>',
-
-            // Notes
-            '<textarea id="bfn-' + idx + '" placeholder="notes, unknowns, context…" onchange="bfUpdateNotes(' + idx + ',this.value)" style="font-family:inherit;font-size:12px;width:100%;margin-top:8px;border:1px solid #26262f;border-radius:4px;padding:5px 8px;background:#0c0c0f;color:#e8e4dc;resize:vertical;min-height:44px">' + (ev.notes||'') + '</textarea>',
-
-            // Actions
-            '<div style="display:flex;gap:8px;margin-top:8px;flex-wrap:wrap">',
-              '<button onclick="bfApprove(' + idx + ')" style="font-family:inherit;font-size:12px;padding:6px 14px;border:1px solid #1d9e72;border-radius:5px;background:transparent;color:#1d9e72;cursor:pointer;font-weight:600">approve</button>',
-              '<button onclick="bfFlag(' + idx + ')" style="font-family:inherit;font-size:12px;padding:6px 14px;border:1px solid #c0392b;border-radius:5px;background:transparent;color:#c0392b;cursor:pointer">flag</button>',
-              '<button onclick="bfSkip(' + idx + ')" style="font-family:inherit;font-size:12px;padding:6px 14px;border:1px solid #26262f;border-radius:5px;background:transparent;color:#555;cursor:pointer">skip →</button>',
-            '</div>',
-          '</div>',
-
-          // Right: CGM chart + meta
-          '<div>',
-            '<canvas id="bfcgm-' + idx + '" style="width:100%;height:110px;display:block;border-radius:4px"></canvas>',
+            '<canvas id="bfcgm-' + idx + '" style="width:100%;height:130px;display:block;border-radius:4px"></canvas>',
             '<div style="display:grid;grid-template-columns:1fr 1fr;gap:2px 8px;margin-top:8px">',
               [
                 ['pre-BG', ev.pre_bg ? ev.pre_bg+' mmol' : '—'],
-                ['units',  ev.units  ? ev.units+'U'      : '—'],
-                ['peak',   ev.peak_bg || '—'],
+                ['units',  ev.units  ? ev.units+'U'      : 'none'],
+                ['peak',   ev.peak_bg  || '—'],
                 ['peak at',ev.peak_mins ? '+'+ev.peak_mins+'m' : '—'],
-                ['I:C',    ev.ic_ratio  ? '1:'+ev.ic_ratio     : '—'],
+                ['I:C',    ev.ic_ratio  ? '1:'+ev.ic_ratio    : '—'],
                 ['src',    ev.src       || '—'],
               ].map(function(row) {
-                return '<div style="display:flex;justify-content:space-between;padding:2px 0;border-bottom:1px solid #1a1a1e;font-size:11px"><span style="color:#555">' + row[0] + '</span><span style="font-weight:500;color:#e8e4dc">' + row[1] + '</span></div>';
+                return '<div style="display:flex;justify-content:space-between;padding:2px 0;border-bottom:1px solid #1a1a1e;font-size:11px">' +
+                  '<span style="color:#555">' + row[0] + '</span>' +
+                  '<span style="font-weight:500;color:#e8e4dc">' + row[1] + '</span></div>';
               }).join(''),
             '</div>',
           '</div>',
@@ -393,16 +445,33 @@ window.bfToggle = bfToggle;
 function bfDrawCGM(idx, cgm) {
   var cv = document.getElementById('bfcgm-' + idx);
   if (!cv || !cgm || !cgm.length) return;
-  var W = cv.width = cv.offsetWidth || 200, H = cv.height = 110;
+  var W = cv.width = cv.offsetWidth || 200, H = cv.height = 130;
   var ctx = cv.getContext('2d');
   ctx.clearRect(0,0,W,H);
   var pad = {l:24,r:6,t:6,b:16};
-  var ms  = cgm.map(function(p){return p.m;}), vs = cgm.map(function(p){return p.bg;});
-  var mn  = Math.min.apply(null,ms), mx = Math.max.apply(null,ms);
-  var mV  = Math.min(3,Math.min.apply(null,vs)), xV = Math.max(12,Math.max.apply(null,vs));
+
+  // New data format: {t: unix_ms, v: mmol} — convert to relative minutes from event time
+  var ev = _bfQueue[idx];
+  var evT = ev ? ev.t : null;
+  var pts = cgm.map(function(p) {
+    // Support both old format (p.m/p.bg) and new format (p.t/p.v)
+    var mins = p.m != null ? p.m : (evT ? Math.round((p.t - evT) / 60000) : 0);
+    var val  = p.bg != null ? p.bg : p.v;
+    return {m: mins, v: val};
+  }).filter(function(p){ return p.v != null; });
+
+  if (!pts.length) return;
+
+  var ms  = pts.map(function(p){return p.m;});
+  var vs  = pts.map(function(p){return p.v;});
+  var mn  = Math.min.apply(null, ms);
+  var mx  = Math.max.apply(null, ms);
+  var mV  = Math.min(3,  Math.min.apply(null, vs));
+  var xV  = Math.max(12, Math.max.apply(null, vs));
   var xs  = function(m){ return (m-mn)/(mx-mn)*(W-pad.l-pad.r)+pad.l; };
   var ys  = function(v){ return H-pad.b-(v-mV)/(xV-mV)*(H-pad.t-pad.b); };
 
+  // BG threshold lines
   [[4,'rgba(192,57,43,0.35)'],[7,'rgba(255,255,255,0.07)'],[10,'rgba(176,120,32,0.35)']].forEach(function(r){
     ctx.beginPath(); ctx.strokeStyle=r[1]; ctx.lineWidth=0.5; ctx.setLineDash([3,4]);
     ctx.moveTo(pad.l,ys(r[0])); ctx.lineTo(W-pad.r,ys(r[0])); ctx.stroke(); ctx.setLineDash([]);
@@ -410,23 +479,33 @@ function bfDrawCGM(idx, cgm) {
     ctx.fillText(r[0],2,ys(r[0])+3);
   });
 
-  var x0 = xs(0);
-  ctx.beginPath(); ctx.strokeStyle='rgba(74,143,212,0.4)'; ctx.lineWidth=1; ctx.setLineDash([2,3]);
-  ctx.moveTo(x0,pad.t); ctx.lineTo(x0,H-pad.b); ctx.stroke(); ctx.setLineDash([]);
+  // T=0 vertical line — the event time
+  if (mn <= 0 && mx >= 0) {
+    var x0 = xs(0);
+    ctx.beginPath(); ctx.strokeStyle='rgba(74,143,212,0.6)'; ctx.lineWidth=1.5; ctx.setLineDash([2,3]);
+    ctx.moveTo(x0,pad.t); ctx.lineTo(x0,H-pad.b); ctx.stroke(); ctx.setLineDash([]);
+    ctx.fillStyle='rgba(74,143,212,0.7)'; ctx.font='8px monospace';
+    ctx.fillText(ev ? ev.time : '0', x0-8, pad.t+8);
+  }
 
+  // CGM line
   ctx.beginPath();
-  cgm.forEach(function(p,i){ i===0?ctx.moveTo(xs(p.m),ys(p.bg)):ctx.lineTo(xs(p.m),ys(p.bg)); });
+  pts.forEach(function(p,i){ i===0?ctx.moveTo(xs(p.m),ys(p.v)):ctx.lineTo(xs(p.m),ys(p.v)); });
   ctx.strokeStyle='#4a8fd4'; ctx.lineWidth=1.5; ctx.stroke();
 
-  cgm.forEach(function(p){
-    ctx.beginPath(); ctx.arc(xs(p.m),ys(p.bg),2,0,Math.PI*2);
-    ctx.fillStyle=p.bg>=10?'#c0392b':p.bg<=4?'#c0392b':'#4a8fd4';
+  // Dots — red if hypo or high
+  pts.forEach(function(p){
+    ctx.beginPath(); ctx.arc(xs(p.m),ys(p.v),1.5,0,Math.PI*2);
+    ctx.fillStyle=p.v>=10?'#c0392b':p.v<=4?'#c0392b':'#4a8fd4';
     ctx.fill();
   });
-  [0,60,120,180].forEach(function(m){
-    if(m>=mn&&m<=mx){
-      ctx.fillStyle='rgba(180,180,180,0.35)'; ctx.font='9px monospace';
-      ctx.fillText(m===0?'0':'+'+m+'m',xs(m)-8,H-2);
+
+  // X-axis labels: -120, -60, 0, +60, +120, +180
+  [-120,-60,0,60,120,180].forEach(function(m){
+    if(m>=mn-5&&m<=mx+5){
+      ctx.fillStyle='rgba(180,180,180,0.45)'; ctx.font='8px monospace';
+      var label = m===0?'0':( m>0?'+'+m+'m':m+'m' );
+      ctx.fillText(label, xs(m)-10, H-2);
     }
   });
 }
@@ -802,8 +881,13 @@ async function bfApprove(idx) {
   var ev = _bfQueue[idx];
   if (!ev) return;
 
-  // Pre-flight: any named item missing c100 must be defined before approve
-  var missing = (ev.items||[]).reduce(function(acc, item, ii) {
+  // Determine event type
+  var evType = ev.notes && ['bolus','correction','free'].indexOf(ev.notes) >= 0
+    ? ev.notes
+    : (ev.units > 0 && ev.carbs_device > 0 ? 'bolus' : ev.units > 0 ? 'correction' : 'free');
+
+  // Pre-flight: correction cards skip item check — no food to log
+  var missing = evType === 'correction' ? [] : (ev.items||[]).reduce(function(acc, item, ii) {
     var name = (item.name || '').trim();
     if (name && !item.c100) acc.push(ii);
     return acc;
