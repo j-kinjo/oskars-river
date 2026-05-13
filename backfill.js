@@ -323,8 +323,8 @@ function bfItemRow(cardIdx, itemIdx, item) {
           '<input style="font-family:inherit;font-size:12px;width:100%;border:1px solid #26262f;border-radius:4px;padding:3px 6px;background:#0c0c0f;color:#e8e4dc" ',
             'value="' + name + '" placeholder="food name\u2026" autocomplete="off" ',
             'oninput="bfNameInput(' + cardIdx + ',' + itemIdx + ',this)" ',
-            'onkeydown="if(event.key===\'Enter\'){event.preventDefault();bfNameCommit(' + cardIdx + ',' + itemIdx + ',this);}">',
-          '<div id="bfac-' + cardIdx + '-' + itemIdx + '" style="position:absolute;top:100%;left:0;right:0;background:#1c1c22;border:1px solid #26262f;border-radius:4px;max-height:160px;overflow-y:auto;z-index:600;display:none"></div>',
+            'onblur="bfNameBlur(' + cardIdx + ',' + itemIdx + ',this)">',
+          '<div id="bfac-' + cardIdx + '-' + itemIdx + '" style="position:absolute;left:0;right:0;background:#1c1c22;border:1px solid #26262f;border-radius:4px;z-index:600;display:none"></div>',
         '</div>',
         // c100 — amber border when missing (signals action needed before approve)
         '<div style="display:flex;flex-direction:column;align-items:center;gap:1px">',
@@ -346,47 +346,37 @@ function bfItemRow(cardIdx, itemIdx, item) {
 }
 
 // ── Name blur — re-resolve against library after manual edit ──
-function bfNameCommit(cardIdx, itemIdx, input) {
+function bfNameBlur(cardIdx, itemIdx, input) {
   var name = (input.value || '').trim();
   if (!name) return;
 
+  // Update state first
   bfUpdateItem(cardIdx, itemIdx, 'name', name);
 
-  var match   = _bfLibLookup(name);
-  var changed = false;
-
+  var match = _bfLibLookup(name);
   if (match) {
+    // Resolved — update item state with library values
     var items = _bfQueue[cardIdx] && _bfQueue[cardIdx].items;
     if (items && items[itemIdx]) {
-      if (match.c100   && items[itemIdx].c100   !== match.c100)   { items[itemIdx].c100   = match.c100;   changed = true; }
-      if (match.gi     && items[itemIdx].gi     !== match.gi)     { items[itemIdx].gi     = match.gi;     changed = true; }
-      if (match.gi_cat && items[itemIdx].gi_cat !== match.gi_cat) { items[itemIdx].gi_cat = match.gi_cat; changed = true; }
-      // Alias matched — normalise to canonical name
+      if (match.c100)   items[itemIdx].c100   = match.c100;
+      if (match.gi)     items[itemIdx].gi     = match.gi;
+      if (match.gi_cat) items[itemIdx].gi_cat = match.gi_cat;
+      // If matched via alias, normalise to canonical name
       if ((match.name||'').toLowerCase() !== name.toLowerCase()) {
         items[itemIdx].name = match.name;
-        changed = true;
       }
     }
-  } else {
-    // No match — state changed (name updated), subrow may need to appear
-    changed = true;
   }
 
-  // Only re-render if something actually changed — preserves focus otherwise
-  if (changed) {
-    var container = document.getElementById('bfi-' + cardIdx);
-    if (container && _bfQueue[cardIdx]) {
-      container.innerHTML = _bfQueue[cardIdx].items.map(function(item, ii){
-        return bfItemRow(cardIdx, ii, item);
-      }).join('');
-    }
+  // Re-render just this item row
+  var container = document.getElementById('bfi-' + cardIdx);
+  if (container && _bfQueue[cardIdx]) {
+    container.innerHTML = _bfQueue[cardIdx].items.map(function(item, ii){
+      return bfItemRow(cardIdx, ii, item);
+    }).join('');
   }
-
-  // Close autocomplete
-  var ac = document.getElementById('bfac-' + cardIdx + '-' + itemIdx);
-  if (ac) ac.style.display = 'none';
 }
-window.bfNameCommit = bfNameCommit;
+window.bfNameBlur = bfNameBlur;
 
 // ── Toggle expand ──────────────────────────────────────────────
 function bfToggle(idx) {
@@ -477,7 +467,7 @@ function bfNameInput(cardIdx, itemIdx, input) {
       var aliasMatch = Array.isArray(f.aliases) && f.aliases.some(function(a){ return a.toLowerCase().indexOf(q.toLowerCase()) >= 0; });
       return '<div onclick="bfSelectFood(' + cardIdx + ',' + itemIdx + ',decodeURIComponent(\'' + enc + '\'))" ' +
         'style="padding:6px 8px;cursor:pointer;border-bottom:1px solid #26262f;display:flex;align-items:center;gap:6px" ' +
-        'onmousedown="event.preventDefault()" onmouseover="this.style.background=\'#0d1820\'" onmouseout="this.style.background=\'\'">' +
+        'onmouseover="this.style.background=\'#0d1820\'" onmouseout="this.style.background=\'\'">' +
         '<div style="flex:1">' +
           '<div style="font-size:12px;color:#e8e4dc">' + f.name + '</div>' +
           (aliasMatch ? '<div style="font-size:9px;color:#555;font-style:italic">alias match</div>' : '') +
@@ -494,7 +484,15 @@ function bfNameInput(cardIdx, itemIdx, input) {
       '→ \u201c' + q + '\u201d is an alias for\u2026</div>';
 
     ac.innerHTML = matchHtml + aliasRow;
+    ac.style.top    = '100%';
+    ac.style.bottom = 'auto';
     ac.style.display = 'block';
+    // Flip above if list clips off bottom of viewport
+    var rect = ac.getBoundingClientRect();
+    if (rect.bottom > window.innerHeight - 20) {
+      ac.style.top    = 'auto';
+      ac.style.bottom = '100%';
+    }
 
     // Cancel any pending inline-new debounce
     clearTimeout(_bfDebounceTimers[cardIdx + '-' + itemIdx]);
@@ -519,44 +517,57 @@ function bfShowInlineNew(cardIdx, itemIdx, q, ac) {
   var estGIObj = typeof _giFromCategory   === 'function' ? _giFromCategory(estCat, q.toLowerCase()) : {gi:55, basis:'default'};
 
   ac.innerHTML =
-    '<div style="padding:10px 12px">' +
-      '<div style="font-size:9px;color:rgba(220,100,60,0.8);margin-bottom:8px">\u201c' + q + '\u201d \u2014 not in library</div>' +
+    '<div style="padding:8px 10px">' +
+      // Header — food name + not-in-library signal
+      '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px">' +
+        '<span style="font-size:10px;color:#e8e4dc;font-weight:500">' + q + '</span>' +
+        '<span style="font-size:8px;color:rgba(220,100,60,0.8)">not in library</span>' +
+      '</div>' +
 
-      '<div style="margin-bottom:6px">' +
-        '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:3px">' +
-          '<span id="bfin-lbl-' + cardIdx + '-' + itemIdx + '" style="font-size:8px;color:#555;text-transform:uppercase;letter-spacing:0.06em">carbs per 100g</span>' +
-          '<div style="display:flex;border-radius:4px;overflow:hidden;border:1px solid #26262f">' +
-            '<button id="bfin-m100-' + cardIdx + '-' + itemIdx + '" onclick="bfInlineMode(\'' + cardIdx + '\',\'' + itemIdx + '\',\'per100\')" ' +
-              'style="font-family:inherit;padding:2px 6px;border:none;cursor:pointer;font-size:8px;background:#0d1820;color:#4a8fd4">per 100g</button>' +
-            '<button id="bfin-mserv-' + cardIdx + '-' + itemIdx + '" onclick="bfInlineMode(\'' + cardIdx + '\',\'' + itemIdx + '\',\'perServ\')" ' +
-              'style="font-family:inherit;padding:2px 6px;border:none;cursor:pointer;font-size:8px;background:transparent;color:#555">per serving</button>' +
-          '</div>' +
+      // c100 + GI side by side — reduces vertical height significantly
+      '<div style="display:flex;gap:8px;margin-bottom:6px">' +
+        '<div style="flex:1">' +
+          '<div style="font-size:8px;color:#555;text-transform:uppercase;letter-spacing:0.05em;margin-bottom:3px">carbs / 100g</div>' +
+          '<input id="bfin-c100-' + cardIdx + '-' + itemIdx + '" type="number" min="0" max="100" step="0.1" inputmode="decimal" placeholder="e.g. 47" ' +
+            'onmousedown="event.stopPropagation()" ' +
+            'oninput="bfInlinePreview(\'' + cardIdx + '\',\'' + itemIdx + '\')" ' +
+            'style="width:100%;padding:5px 6px;border-radius:5px;border:1px solid rgba(62,180,120,0.4);background:rgba(62,180,120,0.07);font-family:inherit;font-size:14px;color:rgba(100,220,160,0.95);text-align:center;outline:none;box-sizing:border-box">' +
         '</div>' +
-        '<input id="bfin-c100-' + cardIdx + '-' + itemIdx + '" type="number" min="0" max="100" step="0.1" inputmode="decimal" placeholder="e.g. 47" ' +
-          'oninput="bfInlinePreview(\'' + cardIdx + '\',\'' + itemIdx + '\')" ' +
-          'style="width:100%;padding:6px 8px;border-radius:6px;border:1px solid rgba(62,180,120,0.4);background:rgba(62,180,120,0.07);font-family:inherit;font-size:14px;color:rgba(100,220,160,0.95);text-align:center;outline:none;box-sizing:border-box">' +
+        '<div style="flex:1">' +
+          '<div style="font-size:8px;color:#b07820;text-transform:uppercase;letter-spacing:0.05em;margin-bottom:3px">GI <span style="opacity:0.45;text-transform:none;font-size:7px">est.</span></div>' +
+          '<input id="bfin-gi-' + cardIdx + '-' + itemIdx + '" type="number" min="0" max="100" step="1" inputmode="decimal" value="' + estGIObj.gi + '" ' +
+            'onmousedown="event.stopPropagation()" ' +
+            'oninput="bfInlinePreview(\'' + cardIdx + '\',\'' + itemIdx + '\')" ' +
+            'style="width:100%;padding:5px 6px;border-radius:5px;border:1px solid rgba(200,160,60,0.3);background:rgba(200,160,60,0.05);font-family:inherit;font-size:14px;color:rgba(220,180,80,0.9);text-align:center;outline:none;box-sizing:border-box">' +
+        '</div>' +
       '</div>' +
 
-      '<div style="margin-bottom:8px">' +
-        '<div style="font-size:8px;color:#b07820;text-transform:uppercase;letter-spacing:0.06em;margin-bottom:3px">GI <span style="opacity:0.5;text-transform:none">glycaemic index</span></div>' +
-        '<input id="bfin-gi-' + cardIdx + '-' + itemIdx + '" type="number" min="0" max="100" step="1" inputmode="decimal" value="' + estGIObj.gi + '" ' +
-          'oninput="bfInlinePreview(\'' + cardIdx + '\',\'' + itemIdx + '\')" ' +
-          'style="width:100%;padding:5px 8px;border-radius:6px;border:1px solid rgba(200,160,60,0.3);background:rgba(200,160,60,0.05);font-family:inherit;font-size:13px;color:rgba(220,180,80,0.9);text-align:center;outline:none;box-sizing:border-box">' +
-        '<div style="font-size:7px;color:#555;margin-top:2px">est. \u2014 ' + estGIObj.basis + '</div>' +
-      '</div>' +
+      '<div id="bfin-prev-' + cardIdx + '-' + itemIdx + '" style="font-size:9px;color:#40a870;min-height:12px;margin-bottom:6px"></div>' +
 
-      '<div id="bfin-prev-' + cardIdx + '-' + itemIdx + '" style="font-size:10px;color:#40a870;min-height:14px;margin-bottom:8px"></div>' +
-
+      // Actions
       '<div style="display:flex;gap:6px">' +
-        '<button onclick="bfSaveInlineFood(\'' + cardIdx + '\',\'' + itemIdx + '\',\'' + q.replace(/'/g,"\\'") + '\')" ' +
-          'style="font-family:inherit;flex:1;padding:7px;border-radius:6px;border:1px solid rgba(62,180,120,0.4);background:rgba(62,180,120,0.1);font-size:11px;color:#40a870;cursor:pointer">save + use</button>' +
-        '<button onclick="bfShowAliasFor(\'' + cardIdx + '\',\'' + itemIdx + '\',\'' + q.replace(/'/g,"\\'") + '\')" ' +
-          'style="font-family:inherit;flex:1;padding:7px;border-radius:6px;border:1px solid #26262f;background:transparent;font-size:11px;color:#555;cursor:pointer;font-style:italic">\u2192 alias for\u2026</button>' +
+        '<button onmousedown="event.preventDefault()" onclick="bfSaveInlineFood(\'' + cardIdx + '\',\'' + itemIdx + '\',\'' + q.replace(/'/g,"\\'") + '\')" ' +
+          'style="font-family:inherit;flex:2;padding:8px;border-radius:6px;border:1px solid rgba(62,180,120,0.4);background:rgba(62,180,120,0.1);font-size:12px;color:#40a870;cursor:pointer">save + use</button>' +
+        '<button onmousedown="event.preventDefault()" onclick="bfShowAliasFor(\'' + cardIdx + '\',\'' + itemIdx + '\',\'' + q.replace(/'/g,"\\'") + '\')" ' +
+          'style="font-family:inherit;flex:1;padding:8px;border-radius:6px;border:1px solid #26262f;background:transparent;font-size:11px;color:#555;cursor:pointer;font-style:italic">\u2192 alias</button>' +
       '</div>' +
     '</div>';
 
+  // Position: below by default, flip above if not enough room
+  ac.style.top    = '';
+  ac.style.bottom = '';
   ac.style.display = 'block';
-  // Auto-focus the c100 input
+  var rect      = ac.getBoundingClientRect();
+  var vpHeight  = window.innerHeight;
+  if (rect.bottom > vpHeight - 20) {
+    // Not enough room below — anchor above the input instead
+    ac.style.top    = 'auto';
+    ac.style.bottom = '100%';
+  } else {
+    ac.style.top    = '100%';
+    ac.style.bottom = 'auto';
+  }
+
   setTimeout(function(){
     var inp = document.getElementById('bfin-c100-' + cardIdx + '-' + itemIdx);
     if (inp) inp.focus();
@@ -662,7 +673,7 @@ function bfAliasSearch(cardIdx, itemIdx, alias, q) {
     var enc = encodeURIComponent(f.name);
     return '<div onclick="bfLinkAlias(\'' + cardIdx + '\',\'' + itemIdx + '\',\'' + alias.replace(/'/g,"\\'") + '\',decodeURIComponent(\'' + enc + '\'))" ' +
       'style="padding:5px 8px;cursor:pointer;border-bottom:1px solid #26262f;font-size:12px;color:#e8e4dc" ' +
-      'onmousedown="event.preventDefault()" onmouseover="this.style.background=\'#0d1820\'" onmouseout="this.style.background=\'\'">' +
+      'onmouseover="this.style.background=\'#0d1820\'" onmouseout="this.style.background=\'\'">' +
       f.name + '<span style="float:right;font-size:10px;color:#555">' + (f.c100||'?') + '/100g</span></div>';
   }).join('');
 }
