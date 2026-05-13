@@ -323,7 +323,7 @@ function bfItemRow(cardIdx, itemIdx, item) {
           '<input style="font-family:inherit;font-size:12px;width:100%;border:1px solid #26262f;border-radius:4px;padding:3px 6px;background:#0c0c0f;color:#e8e4dc" ',
             'value="' + name + '" placeholder="food name\u2026" autocomplete="off" ',
             'oninput="bfNameInput(' + cardIdx + ',' + itemIdx + ',this)" ',
-            'onblur="bfNameBlur(' + cardIdx + ',' + itemIdx + ',this)">',
+            'onkeydown="if(event.key===\'Enter\'){event.preventDefault();bfNameCommit(' + cardIdx + ',' + itemIdx + ',this);}">',
           '<div id="bfac-' + cardIdx + '-' + itemIdx + '" style="position:absolute;top:100%;left:0;right:0;background:#1c1c22;border:1px solid #26262f;border-radius:4px;max-height:160px;overflow-y:auto;z-index:600;display:none"></div>',
         '</div>',
         // c100 — amber border when missing (signals action needed before approve)
@@ -346,37 +346,47 @@ function bfItemRow(cardIdx, itemIdx, item) {
 }
 
 // ── Name blur — re-resolve against library after manual edit ──
-function bfNameBlur(cardIdx, itemIdx, input) {
+function bfNameCommit(cardIdx, itemIdx, input) {
   var name = (input.value || '').trim();
   if (!name) return;
 
-  // Update state first
   bfUpdateItem(cardIdx, itemIdx, 'name', name);
 
-  var match = _bfLibLookup(name);
+  var match   = _bfLibLookup(name);
+  var changed = false;
+
   if (match) {
-    // Resolved — update item state with library values
     var items = _bfQueue[cardIdx] && _bfQueue[cardIdx].items;
     if (items && items[itemIdx]) {
-      if (match.c100)   items[itemIdx].c100   = match.c100;
-      if (match.gi)     items[itemIdx].gi     = match.gi;
-      if (match.gi_cat) items[itemIdx].gi_cat = match.gi_cat;
-      // If matched via alias, normalise to canonical name
+      if (match.c100   && items[itemIdx].c100   !== match.c100)   { items[itemIdx].c100   = match.c100;   changed = true; }
+      if (match.gi     && items[itemIdx].gi     !== match.gi)     { items[itemIdx].gi     = match.gi;     changed = true; }
+      if (match.gi_cat && items[itemIdx].gi_cat !== match.gi_cat) { items[itemIdx].gi_cat = match.gi_cat; changed = true; }
+      // Alias matched — normalise to canonical name
       if ((match.name||'').toLowerCase() !== name.toLowerCase()) {
         items[itemIdx].name = match.name;
+        changed = true;
       }
+    }
+  } else {
+    // No match — state changed (name updated), subrow may need to appear
+    changed = true;
+  }
+
+  // Only re-render if something actually changed — preserves focus otherwise
+  if (changed) {
+    var container = document.getElementById('bfi-' + cardIdx);
+    if (container && _bfQueue[cardIdx]) {
+      container.innerHTML = _bfQueue[cardIdx].items.map(function(item, ii){
+        return bfItemRow(cardIdx, ii, item);
+      }).join('');
     }
   }
 
-  // Re-render just this item row
-  var container = document.getElementById('bfi-' + cardIdx);
-  if (container && _bfQueue[cardIdx]) {
-    container.innerHTML = _bfQueue[cardIdx].items.map(function(item, ii){
-      return bfItemRow(cardIdx, ii, item);
-    }).join('');
-  }
+  // Close autocomplete
+  var ac = document.getElementById('bfac-' + cardIdx + '-' + itemIdx);
+  if (ac) ac.style.display = 'none';
 }
-window.bfNameBlur = bfNameBlur;
+window.bfNameCommit = bfNameCommit;
 
 // ── Toggle expand ──────────────────────────────────────────────
 function bfToggle(idx) {
@@ -467,7 +477,7 @@ function bfNameInput(cardIdx, itemIdx, input) {
       var aliasMatch = Array.isArray(f.aliases) && f.aliases.some(function(a){ return a.toLowerCase().indexOf(q.toLowerCase()) >= 0; });
       return '<div onclick="bfSelectFood(' + cardIdx + ',' + itemIdx + ',decodeURIComponent(\'' + enc + '\'))" ' +
         'style="padding:6px 8px;cursor:pointer;border-bottom:1px solid #26262f;display:flex;align-items:center;gap:6px" ' +
-        'onmouseover="this.style.background=\'#0d1820\'" onmouseout="this.style.background=\'\'">' +
+        'onmousedown="event.preventDefault()" onmouseover="this.style.background=\'#0d1820\'" onmouseout="this.style.background=\'\'">' +
         '<div style="flex:1">' +
           '<div style="font-size:12px;color:#e8e4dc">' + f.name + '</div>' +
           (aliasMatch ? '<div style="font-size:9px;color:#555;font-style:italic">alias match</div>' : '') +
@@ -495,7 +505,7 @@ function bfNameInput(cardIdx, itemIdx, input) {
     clearTimeout(_bfDebounceTimers[key]);
     _bfDebounceTimers[key] = setTimeout(function() {
       bfShowInlineNew(cardIdx, itemIdx, q, ac);
-    }, 420);
+    }, 900);
   }
 }
 window.bfNameInput = bfNameInput;
@@ -652,7 +662,7 @@ function bfAliasSearch(cardIdx, itemIdx, alias, q) {
     var enc = encodeURIComponent(f.name);
     return '<div onclick="bfLinkAlias(\'' + cardIdx + '\',\'' + itemIdx + '\',\'' + alias.replace(/'/g,"\\'") + '\',decodeURIComponent(\'' + enc + '\'))" ' +
       'style="padding:5px 8px;cursor:pointer;border-bottom:1px solid #26262f;font-size:12px;color:#e8e4dc" ' +
-      'onmouseover="this.style.background=\'#0d1820\'" onmouseout="this.style.background=\'\'">' +
+      'onmousedown="event.preventDefault()" onmouseover="this.style.background=\'#0d1820\'" onmouseout="this.style.background=\'\'">' +
       f.name + '<span style="float:right;font-size:10px;color:#555">' + (f.c100||'?') + '/100g</span></div>';
   }).join('');
 }
