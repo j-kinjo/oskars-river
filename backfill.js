@@ -352,8 +352,8 @@ function bfCardHTML(ev, idx) {
   } else {
     // bolus or free — show food items
     var itemsLabel = evType === 'free'
-      ? 'items eaten (no insulin given) ' + diffWarning
-      : 'food items ' + diffWarning;
+      ? 'items eaten (no insulin given)' + (diffWarning ? ' ' + diffWarning : '')
+      : 'food items · carbs per item' + (diffWarning ? ' ' + diffWarning : '');
     leftPanel = [
       '<div style="font-size:10px;color:#555;text-transform:uppercase;letter-spacing:0.08em;margin-bottom:6px">' + itemsLabel + '</div>',
       '<div id="bfi-' + idx + '">',
@@ -389,8 +389,8 @@ function bfCardHTML(ev, idx) {
         '<span style="font-size:11px;color:#555;min-width:76px">' + ev.date + '</span>',
         '<span style="font-size:11px;color:#555;min-width:40px">' + (ev.time||'?') + '</span>',
         '<span style="font-size:9px;font-weight:700;padding:2px 6px;border-radius:3px;background:' + tInfo.bg + ';color:' + tInfo.col + ';min-width:52px;text-align:center;text-transform:uppercase;letter-spacing:0.05em">' + tInfo.label + '</span>',
-        // Period badge — hide for correction (type badge is sufficient)
-        evType !== 'correction' ? '<span style="font-size:9px;font-weight:600;padding:2px 6px;border-radius:3px;background:' + pbg + ';color:' + pco + ';text-transform:uppercase;letter-spacing:0.04em">' + (ev.period||'?') + '</span>' : '',
+        // Period badge — editable, tap to cycle; hide for correction
+        evType !== 'correction' ? '<span id="bfperiod-' + idx + '" onclick="bfCyclePeriod(' + idx + ')" title="tap to change meal type" style="font-size:9px;font-weight:600;padding:2px 6px;border-radius:3px;background:' + pbg + ';color:' + pco + ';text-transform:uppercase;letter-spacing:0.04em;cursor:pointer;user-select:none">' + (ev.period||'?') + '</span>' : '',
         headerCarbs,
         headerUnits,
         ev.peak_bg ? '<span style="font-size:11px;color:' + (ev.peak_bg>12?'#c0392b':ev.peak_bg>10?'#b07820':'#1d9e72') + '">↑' + ev.peak_bg + ' +' + ev.peak_mins + 'm</span>' : '',
@@ -507,10 +507,22 @@ function bfItemRow(cardIdx, itemIdx, item) {
           '<span style="font-size:8px;color:#333;line-height:1">/100g</span>',
         '</div>',
         '<span id="bfgi-' + cardIdx + '-' + itemIdx + '" style="font-size:8px;color:' + giCol + ';min-width:28px;text-align:center" title="glycaemic index">' + giText + '</span>',
-        '<input type="number" step="0.1" value="' + carbs + '" placeholder="g" ',
-          'title="total carbs for this portion" ',
-          'onchange="bfUpdateItem(' + cardIdx + ',' + itemIdx + ',\'carbs\',this.value)" ',
-          'style="font-family:inherit;font-size:12px;width:52px;text-align:right;border:1px solid ' + (!carbs?'#4a1a1a':'#26262f') + ';border-radius:4px;padding:3px 6px;background:#0c0c0f;color:#e8e4dc">',
+        // Portion / weight — derived from carbs ÷ c100 × 100; editable
+        '<div style="display:flex;flex-direction:column;align-items:center;gap:1px">',
+          '<input type="number" step="1" min="0" value="' + (carbs && c100 ? Math.round(parseFloat(carbs)/parseFloat(c100)*100) : '') + '" placeholder="g" ',
+            'title="portion weight (g) — updates carbs automatically" ',
+            'oninput="bfPortionInput(' + cardIdx + ',' + itemIdx + ',this.value)" ',
+            'style="font-family:inherit;font-size:11px;width:44px;text-align:right;border:1px solid #1a1a22;border-radius:4px;padding:2px 5px;background:#0c0c0f;color:#888">',
+          '<span style="font-size:8px;color:#333;line-height:1">wt g</span>',
+        '</div>',
+        // carbs (g) — labelled
+        '<div style="display:flex;flex-direction:column;align-items:center;gap:1px">',
+          '<input type="number" step="0.1" value="' + carbs + '" placeholder="g" ',
+            'title="total carbs for this portion" ',
+            'onchange="bfUpdateItem(' + cardIdx + ',' + itemIdx + ',\'carbs\',this.value);bfUpdatePortionFromCarbs(' + cardIdx + ',' + itemIdx + ')" ',
+            'style="font-family:inherit;font-size:12px;width:52px;text-align:right;border:1px solid ' + (!carbs?'#4a1a1a':'#26262f') + ';border-radius:4px;padding:3px 6px;background:#0c0c0f;color:#e8e4dc">',
+          '<span style="font-size:8px;color:#555;line-height:1">carbs g</span>',
+        '</div>',
         '<button onclick="bfDelItem(' + cardIdx + ',' + itemIdx + ')" style="font-family:inherit;background:none;border:none;color:#555;cursor:pointer;font-size:15px;padding:0 2px">\u00d7</button>',
       '</div>',
       subRow,
@@ -539,6 +551,56 @@ function bfUpdateGIHint(cardIdx, itemIdx, c100val) {
   span.title = 'GI ' + gi + ' · GL ' + (gi * c100 / 100).toFixed(1);
 }
 window.bfUpdateGIHint = bfUpdateGIHint;
+
+// ── Portion weight helpers ─────────────────────────────────────
+// When weight input changes → recalculate carbs from c100
+function bfPortionInput(cardIdx, itemIdx, wtVal) {
+  var wt = parseFloat(wtVal);
+  if (isNaN(wt) || wt <= 0) return;
+  var items = _bfQueue[cardIdx] && _bfQueue[cardIdx].items;
+  var item  = items && items[itemIdx];
+  if (!item) return;
+  var c100 = parseFloat(item.c100);
+  if (isNaN(c100) || c100 <= 0) return;
+  var carbs = +(wt * c100 / 100).toFixed(1);
+  item.carbs = carbs;
+  // Update carbs input live — target the second number input in this row
+  var container = document.getElementById('bfi-' + cardIdx);
+  if (!container) return;
+  var rows = container.querySelectorAll('.bfi-row-wrap');
+  var row  = rows[itemIdx];
+  if (!row) return;
+  // Carbs input is the second number input (first is c100, then portion wt, then carbs)
+  var numInputs = row.querySelectorAll('input[type=number]');
+  // Layout: c100(idx0), portion-wt(idx1), carbs(idx2)
+  var carbsInp = numInputs[2];
+  if (carbsInp) {
+    carbsInp.value = carbs;
+    carbsInp.style.borderColor = '#26262f';
+    carbsInp.style.color = '#e8e4dc';
+  }
+}
+window.bfPortionInput = bfPortionInput;
+
+// When carbs changed manually → back-calculate and update weight input
+function bfUpdatePortionFromCarbs(cardIdx, itemIdx) {
+  var items = _bfQueue[cardIdx] && _bfQueue[cardIdx].items;
+  var item  = items && items[itemIdx];
+  if (!item) return;
+  var c100  = parseFloat(item.c100);
+  var carbs = parseFloat(item.carbs);
+  if (isNaN(c100) || c100 <= 0 || isNaN(carbs)) return;
+  var wt = Math.round(carbs / c100 * 100);
+  var container = document.getElementById('bfi-' + cardIdx);
+  if (!container) return;
+  var rows     = container.querySelectorAll('.bfi-row-wrap');
+  var row      = rows[itemIdx];
+  if (!row) return;
+  var numInputs = row.querySelectorAll('input[type=number]');
+  var wtInp     = numInputs[1]; // portion weight is index 1
+  if (wtInp) wtInp.value = wt;
+}
+window.bfUpdatePortionFromCarbs = bfUpdatePortionFromCarbs;
 
 // ── Name blur — re-resolve against library after manual edit ──
 function bfNameBlur(cardIdx, itemIdx, input) {
@@ -574,6 +636,41 @@ function bfToggle(idx) {
   if (!open) setTimeout(function(){ bfDrawCGM(idx, _bfQueue[idx] && _bfQueue[idx].cgm_curve); }, 30);
 }
 window.bfToggle = bfToggle;
+
+// ── Cycle period / meal type label (editable per-card) ────────
+var _BF_PERIODS_LIST = ['Breakfast','Morning snack','Lunch','Afternoon snack','Dinner','Evening snack','Bedtime snack','Overnight','Unknown'];
+var _BF_PERIOD_STYLES = {
+  'Breakfast':        {bg:'#0d1820',col:'#4a8fd4'},
+  'Morning snack':    {bg:'#0d180d',col:'#40a870'},
+  'Lunch':            {bg:'#0d180d',col:'#40a870'},
+  'Afternoon snack':  {bg:'#1a1008',col:'#c08040'},
+  'Dinner':           {bg:'#1a1008',col:'#c08040'},
+  'Evening snack':    {bg:'#180d1a',col:'#906090'},
+  'Bedtime snack':    {bg:'#180d1a',col:'#906090'},
+  'Overnight':        {bg:'#0d0d1a',col:'#6060a0'},
+  'Unknown':          {bg:'#1a1a1a',col:'#666'},
+};
+function bfCyclePeriod(idx) {
+  var ev = _bfQueue[idx];
+  if (!ev) return;
+  var current = ev.period || 'Unknown';
+  var i = _BF_PERIODS_LIST.indexOf(current);
+  var next = _BF_PERIODS_LIST[(i + 1) % _BF_PERIODS_LIST.length];
+  ev.period = next;
+  // Update just the badge on this card — no full re-render
+  var badge = document.getElementById('bfperiod-' + idx);
+  if (badge) {
+    var style = _BF_PERIOD_STYLES[next] || _BF_PERIOD_STYLES.Unknown;
+    badge.textContent = next;
+    badge.style.background = style.bg;
+    badge.style.color = style.col;
+  }
+  // Persist immediately — PATCH backfill_queue
+  _bfFetch('backfill_queue?t=eq.' + ev.t, {
+    method: 'PATCH', prefer: 'return=minimal', body: { period: next }
+  }).catch(function(e){ if (typeof __debugLog === 'function') __debugLog('backfill period update error: ' + e.message); });
+}
+window.bfCyclePeriod = bfCyclePeriod;
 
 // ── CGM sparkline ──────────────────────────────────────────────
 function bfDrawCGM(idx, cgm) {
@@ -895,10 +992,8 @@ function bfSaveInlineFood(cardIdx, itemIdx, name) {
 
   var ac = document.getElementById('bfac-' + cardIdx + '-' + itemIdx);
   if (ac) ac.style.display = 'none';
-  var container = document.getElementById('bfi-' + cardIdx);
-  if (container && _bfQueue[cardIdx]) {
-    container.innerHTML = _bfQueue[cardIdx].items.map(function(item, ii){ return bfItemRow(cardIdx, ii, item); }).join('');
-  }
+  // Re-render only this row — do NOT touch other rows
+  _bfRenderItemRow(cardIdx, itemIdx);
 }
 window.bfSaveInlineFood = bfSaveInlineFood;
 
@@ -1012,9 +1107,22 @@ window.bfUpdateItem = bfUpdateItem;
 
 function bfAddItem(cardIdx) {
   if (!_bfQueue[cardIdx]) return;
-  _bfQueue[cardIdx].items = (_bfQueue[cardIdx].items||[]).concat([{name:'',carbs:null}]);
+  var items = _bfQueue[cardIdx].items || [];
+  var newIdx = items.length;
+  items.push({name:'',carbs:null,c100:null});
+  _bfQueue[cardIdx].items = items;
+  // Append only the new row — do NOT wipe existing live inputs
   var container = document.getElementById('bfi-' + cardIdx);
-  if (container) container.innerHTML = _bfQueue[cardIdx].items.map(function(item,ii){ return bfItemRow(cardIdx,ii,item); }).join('');
+  if (container) {
+    var tmp = document.createElement('div');
+    tmp.innerHTML = bfItemRow(cardIdx, newIdx, items[newIdx]);
+    var rowEl = tmp.firstElementChild;
+    if (rowEl) {
+      container.appendChild(rowEl);
+      var nameInp = rowEl.querySelector('input');
+      if (nameInp) setTimeout(function(){ nameInp.focus(); }, 30);
+    }
+  }
 }
 window.bfAddItem = bfAddItem;
 
@@ -1375,25 +1483,22 @@ function bfInsertTypeSelect(btn, type) {
       '<div style="font-size:8px;color:#555;text-transform:uppercase;letter-spacing:0.06em;margin-bottom:3px">BG value (mmol/L)</div>' +
       '<input id="bfins-bg" type="number" step="0.1" min="1" max="30" inputmode="decimal" placeholder="e.g. 6.2" ' +
         'style="font-family:inherit;font-size:18px;width:100%;padding:6px 8px;border:1px solid rgba(74,143,212,0.4);border-radius:5px;background:rgba(74,143,212,0.06);color:#4a8fd4;outline:none;text-align:center;font-weight:600;box-sizing:border-box" ' +
-        'onkeydown="if(event.key===\'Enter\')bfSaveInsert()">';
+        'onkeydown="if(event.key===\'Enter\')bfSaveInsert()">' +
+      '<div style="font-size:9px;color:#555;margin-top:5px">Will attach to nearest CGM reading within ±5 min on the River. Enter the time the prick was taken.</div>';
     setTimeout(function(){ var i=document.getElementById('bfins-bg'); if(i)i.focus(); }, 30);
 
   } else if (type === 'free') {
-    fields.innerHTML = [
-      '<div style="display:flex;gap:8px">',
-        '<div style="flex:1">',
-          '<div style="font-size:8px;color:#555;text-transform:uppercase;letter-spacing:0.06em;margin-bottom:3px">carbs (g)</div>',
-          '<input id="bfins-carbs" type="number" step="0.5" min="0" inputmode="decimal" placeholder="0" ',
-            'style="font-family:inherit;font-size:14px;width:100%;padding:5px 8px;border:1px solid #26262f;border-radius:4px;background:#0c0c0f;color:#e8e4dc;outline:none;text-align:center;box-sizing:border-box">',
-        '</div>',
-        '<div style="flex:1">',
-          '<div style="font-size:8px;color:#555;text-transform:uppercase;letter-spacing:0.06em;margin-bottom:3px">description</div>',
-          '<input id="bfins-desc" type="text" placeholder="e.g. biscuit, jelly bean…" autocomplete="off" ',
-            'style="font-family:inherit;font-size:11px;width:100%;padding:5px 8px;border:1px solid #26262f;border-radius:4px;background:#0c0c0f;color:#e8e4dc;outline:none;box-sizing:border-box">',
-        '</div>',
-      '</div>',
-    ].join('');
-    setTimeout(function(){ var i=document.getElementById('bfins-carbs'); if(i)i.focus(); }, 30);
+    // Full item-row mechanism — same structure as main meal items
+    // We build a mini food-item list using the same bfItemRow UI
+    if (!window._bfInsertItems) window._bfInsertItems = [];
+    window._bfInsertItems = [{name:'',carbs:null,c100:null}];
+
+    fields.innerHTML =
+      '<div style="font-size:8px;color:#555;text-transform:uppercase;letter-spacing:0.06em;margin-bottom:6px">food items eaten</div>' +
+      '<div id="bfins-items">' + bfInsertItemRow(0, window._bfInsertItems[0]) + '</div>' +
+      '<button onclick="bfInsertAddItem()" style="font-family:inherit;font-size:11px;color:#555;border:1px dashed #26262f;border-radius:4px;padding:3px 8px;cursor:pointer;background:none;margin-top:4px;width:100%;text-align:left">+ add item</button>';
+
+    setTimeout(function(){ var i=document.getElementById('bfins-name-0'); if(i)i.focus(); }, 30);
 
   } else {
     fields.innerHTML =
@@ -1426,31 +1531,48 @@ async function bfSaveInsert() {
       var bg = parseFloat((document.getElementById('bfins-bg')||{}).value);
       if (isNaN(bg) || bg < 1) { var i=document.getElementById('bfins-bg'); if(i){i.style.borderColor='#c0392b';i.focus();} return; }
 
+      // Find nearest CGM reading to anchor the prick to the river rendering
+      var cgmAnchorT = t; // fallback: exact time entered
+      if (typeof HISTORY_RAW !== 'undefined' && HISTORY_RAW.length > 0) {
+        var bestDiff = Infinity;
+        HISTORY_RAW.forEach(function(r) {
+          var diff = Math.abs(r.t - t);
+          if (diff < bestDiff) { bestDiff = diff; cgmAnchorT = r.t; }
+        });
+        // Only use CGM anchor if within 5 minutes
+        if (bestDiff > 5 * 60000) cgmAnchorT = t;
+      }
+
       await _sbFetch('events?on_conflict=t', {
         method: 'POST', prefer: 'resolution=merge-duplicates,return=minimal',
-        body: [{ t: t, c: 0, u: 0, gi: bg, note: 'prick',
+        body: [{ t: cgmAnchorT, c: 0, u: 0, gi: bg, note: 'prick',
                  device_id: typeof _deviceId !== 'undefined' ? _deviceId : 'backfill',
                  updated_at: new Date().toISOString() }],
       });
 
       if (typeof BLOOD_PRICKS !== 'undefined' && typeof _savePricks === 'function') {
-        BLOOD_PRICKS.push({ t: t, bg: bg, logged_by: 'backfill' });
+        BLOOD_PRICKS.push({ t: cgmAnchorT, bg: bg, logged_by: 'backfill' });
         BLOOD_PRICKS.sort(function(a,b){ return a.t-b.t; });
         _savePricks();
       }
 
     } else if (type === 'free') {
-      var carbs = parseFloat((document.getElementById('bfins-carbs')||{}).value) || 0;
-      var desc  = ((document.getElementById('bfins-desc')||{}).value || '').trim();
+      var freeItems = (window._bfInsertItems || []).filter(function(it){ return (it.name||'').trim() || it.carbs; });
+      var totalCarbs = freeItems.reduce(function(s,it){ return s+(parseFloat(it.carbs)||0); }, 0);
 
-      // Write directly to events as approved free snack
+      // Sync any new foods to the library
+      _bfSyncNewFoodsToLibrary(freeItems);
+
+      // Write to events as approved free snack (matches main app food log format)
       await _sbFetch('events?on_conflict=t', {
         method: 'POST', prefer: 'resolution=merge-duplicates,return=minimal',
-        body: [{ t: t, c: carbs, u: 0, gi: null,
-                 note: 'carbs', items: desc ? [{name: desc, carbs: carbs}] : [],
+        body: [{ t: t, c: totalCarbs, u: 0, gi: null,
+                 note: 'carbs',
+                 items: freeItems.map(function(it){ return {name:it.name||'',carbs:it.carbs,gi:it.gi||null}; }),
                  device_id: typeof _deviceId !== 'undefined' ? _deviceId : 'backfill',
                  updated_at: new Date().toISOString() }],
       });
+      window._bfInsertItems = [];
 
     } else {
       // note — store in backfill_queue as approved note event
@@ -1469,12 +1591,15 @@ async function bfSaveInsert() {
     var pad = function(n){ return String(n).padStart(2,'0'); };
     var timeStr = pad(dt.getHours()) + ':' + pad(dt.getMinutes());
     var typeLabels = {prick: '◆ prick', free: 'free snack', note: '✎ note'};
+    var typeDetail = type === 'free' && (window._bfInsertItems||[]).length
+      ? 'free · ' + window._bfInsertItems.filter(function(it){return it.name;}).map(function(it){return it.name;}).join(', ')
+      : (typeLabels[type]||type);
     var confirmed = document.createElement('div');
     confirmed.style.cssText = 'display:flex;align-items:center;gap:8px;padding:3px 4px;margin:2px 0;border-left:2px solid #1d9e72;background:rgba(29,158,114,0.05);border-radius:0 4px 4px 0';
     confirmed.innerHTML =
       '<span style="font-size:9px;color:#1d9e72">✓</span>' +
       '<span style="font-size:10px;color:#555">' + dt.toLocaleDateString('en-GB',{day:'numeric',month:'short'}) + ' ' + timeStr + '</span>' +
-      '<span style="font-size:10px;color:#555">' + (typeLabels[type]||type) + '</span>';
+      '<span style="font-size:10px;color:#555">' + typeDetail + '</span>';
 
     form.replaceWith(confirmed);
 
@@ -1486,6 +1611,136 @@ async function bfSaveInsert() {
   }
 }
 window.bfSaveInsert = bfSaveInsert;
+
+// ── Mini item row for the free-food insert form ───────────────
+// Mirrors bfItemRow but uses a separate state array (_bfInsertItems)
+// and simplified IDs so it doesn't collide with card-level rows.
+function bfInsertItemRow(idx, item) {
+  var name  = (item.name||'').replace(/"/g,'&quot;');
+  var carbs = item.carbs != null ? parseFloat(item.carbs).toFixed(1) : '';
+  var c100  = item.c100  != null ? parseFloat(item.c100).toFixed(1)  : '';
+  var libMatch = _bfLibLookup(name);
+  if (libMatch && !c100 && libMatch.c100) c100 = parseFloat(libMatch.c100).toFixed(1);
+  var giText = item.gi ? 'GI ' + item.gi : 'GI?';
+  var giCol  = item.gi ? (item.gi>=70?'#c0392b':item.gi>=55?'#b07820':'#1d9e72') : '#333';
+
+  return '<div class="bfins-item-row" style="display:flex;align-items:center;gap:6px;margin-bottom:4px">' +
+    '<div style="flex:1;position:relative">' +
+      '<input id="bfins-name-' + idx + '" type="text" value="' + name + '" placeholder="food name…" autocomplete="off" ' +
+        'oninput="bfInsertItemNameInput(' + idx + ',this)" ' +
+        'onblur="bfInsertItemNameBlur(' + idx + ',this)" ' +
+        'style="font-family:inherit;font-size:12px;width:100%;border:1px solid #26262f;border-radius:4px;padding:3px 6px;background:#0c0c0f;color:#e8e4dc;box-sizing:border-box">' +
+      '<div id="bfinsac-' + idx + '" style="position:fixed;background:#1c1c22;border:1px solid #26262f;border-radius:4px;z-index:700;display:none;min-width:200px;max-width:300px"></div>' +
+    '</div>' +
+    '<div style="display:flex;flex-direction:column;align-items:center;gap:1px">' +
+      '<input id="bfins-c100-' + idx + '" type="number" step="0.1" min="0" max="100" value="' + c100 + '" placeholder="—" ' +
+        'title="carbs per 100g" ' +
+        'onchange="bfInsertItemUpdate(' + idx + ',\'c100\',this.value)" ' +
+        'style="font-family:inherit;font-size:11px;width:44px;text-align:right;border:1px solid ' + (!c100?'#4a2800':'#26262f') + ';border-radius:4px;padding:2px 5px;background:#0c0c0f;color:' + (!c100?'#b07820':'#e8e4dc') + '">' +
+      '<span style="font-size:8px;color:#333;line-height:1">/100g</span>' +
+    '</div>' +
+    '<span id="bfinsgi-' + idx + '" style="font-size:8px;color:' + giCol + ';min-width:28px;text-align:center">' + giText + '</span>' +
+    '<div style="display:flex;flex-direction:column;align-items:center;gap:1px">' +
+      '<input id="bfins-carbs-' + idx + '" type="number" step="0.1" value="' + carbs + '" placeholder="g" ' +
+        'title="total carbs (g)" ' +
+        'onchange="bfInsertItemUpdate(' + idx + ',\'carbs\',this.value)" ' +
+        'style="font-family:inherit;font-size:12px;width:52px;text-align:right;border:1px solid ' + (!carbs?'#4a1a1a':'#26262f') + ';border-radius:4px;padding:3px 6px;background:#0c0c0f;color:#e8e4dc">' +
+      '<span style="font-size:8px;color:#555;line-height:1">carbs g</span>' +
+    '</div>' +
+    '<button onclick="bfInsertDelItem(' + idx + ')" style="font-family:inherit;background:none;border:none;color:#555;cursor:pointer;font-size:15px;padding:0 2px">×</button>' +
+  '</div>';
+}
+window.bfInsertItemRow = bfInsertItemRow;
+
+function bfInsertItemUpdate(idx, field, val) {
+  if (!window._bfInsertItems || !window._bfInsertItems[idx]) return;
+  if (field === 'carbs' || field === 'c100') window._bfInsertItems[idx][field] = val==='' ? null : parseFloat(val);
+  else window._bfInsertItems[idx][field] = val;
+}
+window.bfInsertItemUpdate = bfInsertItemUpdate;
+
+function bfInsertAddItem() {
+  if (!window._bfInsertItems) window._bfInsertItems = [];
+  var newIdx = window._bfInsertItems.length;
+  window._bfInsertItems.push({name:'',carbs:null,c100:null});
+  var container = document.getElementById('bfins-items');
+  if (container) {
+    var tmp = document.createElement('div');
+    tmp.innerHTML = bfInsertItemRow(newIdx, window._bfInsertItems[newIdx]);
+    if (tmp.firstElementChild) container.appendChild(tmp.firstElementChild);
+    var inp = document.getElementById('bfins-name-' + newIdx);
+    if (inp) setTimeout(function(){ inp.focus(); }, 30);
+  }
+}
+window.bfInsertAddItem = bfInsertAddItem;
+
+function bfInsertDelItem(idx) {
+  if (!window._bfInsertItems) return;
+  window._bfInsertItems.splice(idx, 1);
+  var container = document.getElementById('bfins-items');
+  if (container) container.innerHTML = window._bfInsertItems.map(function(it,i){ return bfInsertItemRow(i,it); }).join('');
+}
+window.bfInsertDelItem = bfInsertDelItem;
+
+function bfInsertItemNameInput(idx, input) {
+  var q  = input.value;
+  var ac = document.getElementById('bfinsac-' + idx);
+  if (!ac) return;
+  if (!q || q.length < 2) { ac.style.display='none'; return; }
+  var results = bfSearchFoods(q);
+  if (!results.length) { ac.style.display='none'; return; }
+  var rect = input.getBoundingClientRect();
+  ac.style.left  = rect.left + 'px';
+  ac.style.top   = (rect.bottom + 2) + 'px';
+  ac.style.width = rect.width + 'px';
+  ac.innerHTML = results.map(function(f) {
+    var enc = encodeURIComponent(f.name);
+    return '<div onclick="bfInsertSelectFood(' + idx + ',decodeURIComponent(\'' + enc + '\'))" ' +
+      'style="padding:5px 8px;cursor:pointer;border-bottom:1px solid #26262f;display:flex;align-items:center;gap:6px" ' +
+      'onmouseover="this.style.background=\'#0d1820\'" onmouseout="this.style.background=\'\'">' +
+      '<span style="flex:1;font-size:12px;color:#e8e4dc">' + f.name + '</span>' +
+      '<span style="font-size:10px;color:#555">' + (f.c100||'?') + '/100g</span>' +
+    '</div>';
+  }).join('');
+  ac.style.display = 'block';
+}
+window.bfInsertItemNameInput = bfInsertItemNameInput;
+
+function bfInsertItemNameBlur(idx, input) {
+  setTimeout(function(){
+    var ac = document.getElementById('bfinsac-' + idx);
+    if (ac) ac.style.display = 'none';
+    if (window._bfInsertItems && window._bfInsertItems[idx]) {
+      window._bfInsertItems[idx].name = (input.value||'').trim();
+    }
+  }, 150);
+}
+window.bfInsertItemNameBlur = bfInsertItemNameBlur;
+
+function bfInsertSelectFood(idx, name) {
+  var food = _bfLibLookup(name);
+  if (!window._bfInsertItems) window._bfInsertItems = [];
+  var existing = window._bfInsertItems[idx] || {};
+  window._bfInsertItems[idx] = {
+    name:  food ? food.name : name,
+    c100:  food ? food.c100 : null,
+    gi:    food ? food.gi   : null,
+    carbs: existing.carbs || null,
+  };
+  // Update the row inputs in place
+  var nameInp  = document.getElementById('bfins-name-'  + idx);
+  var c100Inp  = document.getElementById('bfins-c100-'  + idx);
+  var giSpan   = document.getElementById('bfinsgi-'     + idx);
+  var ac       = document.getElementById('bfinsac-'     + idx);
+  if (nameInp) nameInp.value = window._bfInsertItems[idx].name;
+  if (c100Inp && food && food.c100) { c100Inp.value = food.c100; c100Inp.style.borderColor = '#26262f'; c100Inp.style.color = '#e8e4dc'; }
+  if (giSpan && food && food.gi) {
+    giSpan.textContent = 'GI ' + food.gi;
+    giSpan.style.color = food.gi>=70?'#c0392b':food.gi>=55?'#b07820':'#1d9e72';
+  }
+  if (ac) ac.style.display = 'none';
+}
+window.bfInsertSelectFood = bfInsertSelectFood;
 
 // ── Close autocomplete on outside click ───────────────────────
 document.addEventListener('click', function(e) {
