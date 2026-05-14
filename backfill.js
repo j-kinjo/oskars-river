@@ -832,210 +832,69 @@ function bfNameInput(cardIdx, itemIdx, input) {
     // Cancel any pending inline-new debounce
     clearTimeout(_bfDebounceTimers[cardIdx + '-' + itemIdx]);
   } else {
-    // No match — debounce before showing the inline-new form
+    // No match — brief debounce then open the full-screen add-food modal
     ac.style.display = 'none';
     var key = cardIdx + '-' + itemIdx;
     clearTimeout(_bfDebounceTimers[key]);
     _bfDebounceTimers[key] = setTimeout(function() {
       bfShowInlineNew(cardIdx, itemIdx, q, ac);
-    }, 900);
+    }, 500);
   }
 }
 window.bfNameInput = bfNameInput;
 
-// ── Inline new-food form — mirrors searchFood no-match UI in app.js ──
-// ── GI lookup via Claude API ───────────────────────────────────
-async function _bfLookupGI(foodName, cardIdx, itemIdx) {
-  var giEl = document.getElementById('bfin-gi-'   + cardIdx + '-' + itemIdx);
-  var prev = document.getElementById('bfin-prev-' + cardIdx + '-' + itemIdx);
-  if (!giEl) return;
+// ── New food entry — delegates entirely to app.js addCustomFood overlay ──
+// All entry points funnel here. Sets window._foodAddCallback so saveCustomFood
+// can write back into the backfill queue item and re-render the row.
 
-  giEl.placeholder = '\u231b';
-  giEl.disabled = true;
-  if (prev) prev.textContent = 'looking up GI\u2026';
+function _bfOpenAddFoodModal(cardIdx, itemIdx, name) {
+  if (typeof window.addCustomFood !== 'function') {
+    if (typeof __debugLog === 'function') __debugLog('addCustomFood not available — app.js not loaded?');
+    return;
+  }
+  // Close any open autocomplete dropdown for this item
+  var ac = document.getElementById('bfac-' + cardIdx + '-' + itemIdx);
+  if (ac) ac.style.display = 'none';
 
-  try {
-    var resp = await fetch('https://api.anthropic.com/v1/messages', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        model: 'claude-sonnet-4-20250514',
-        max_tokens: 100,
-        system: 'You are a nutrition database. Return ONLY a JSON object, no explanation, no markdown. Format: {"gi":<integer 0-100>,"note":"<one short phrase>"}. If the food is primarily protein/fat with negligible carbs (plain meat, eggs, cheese, olives, nuts) return gi:0. If genuinely unknown return gi:null.',
-        messages: [{ role: 'user', content: 'Glycaemic index of: ' + foodName }]
-      })
-    });
-    var data = await resp.json();
-    var text = (data.content && data.content[0] && data.content[0].text) || '{}';
-    var result = {};
-    try { result = JSON.parse(text.replace(/```json|```/g,'').trim()); } catch(e){}
-
-    if (result.gi != null) {
-      giEl.value = result.gi;
-      var col = result.gi >= 70 ? 'rgba(192,57,43,0.9)' : result.gi >= 55 ? 'rgba(176,120,32,0.9)' : 'rgba(100,220,160,0.9)';
-      giEl.style.color = col;
-      if (prev) {
-        var c100 = parseFloat((document.getElementById('bfin-c100-' + cardIdx + '-' + itemIdx)||{}).value) || 0;
-        var gl = c100 > 0 ? ' \u00b7 GL ' + (result.gi * c100 / 100).toFixed(1) : '';
-        prev.textContent = 'GI ' + result.gi + gl + (result.note ? ' \u00b7 ' + result.note : '');
-      }
-      var span = document.getElementById('bfgi-' + cardIdx + '-' + itemIdx);
-      if (span) {
-        span.textContent = 'GI\u00a0' + result.gi;
-        span.style.color = result.gi>=70?'#c0392b':result.gi>=55?'#b07820':'#1d9e72';
-      }
-    } else {
-      if (prev) prev.textContent = 'GI unknown \u2014 enter manually';
+  // Callback: called by saveCustomFood after library save
+  window._foodAddCallback = function(savedFood) {
+    // Merge the saved food into the queue item
+    if (_bfQueue[cardIdx]) {
+      var items = _bfQueue[cardIdx].items || [];
+      items[itemIdx] = Object.assign(items[itemIdx] || {}, {
+        name:    savedFood.name,
+        c100:    savedFood.c100,
+        gi:      savedFood.gi,
+        gi_cat:  savedFood.cat,
+      });
+      _bfQueue[cardIdx].items = items;
     }
-  } catch(e) {
-    if (prev) prev.textContent = 'lookup failed \u2014 enter GI manually';
-    if (typeof __debugLog === 'function') if (typeof __debugLog === 'function') __debugLog('GI lookup error: ' + e.message);
-  }
+    // Re-render only this row
+    _bfRenderItemRow(cardIdx, itemIdx);
+    if (typeof __debugLog === 'function') __debugLog('backfill: food "' + savedFood.name + '" saved via shared overlay c100=' + savedFood.c100);
+  };
 
-  giEl.disabled = false;
-  giEl.placeholder = '\u2014';
+  window.addCustomFood(name);
 }
+window._bfOpenAddFoodModal = _bfOpenAddFoodModal;
 
+// bfShowInlineNew — previously showed an inline dropdown form.
+// Now opens the full-screen shared modal instead.
 function bfShowInlineNew(cardIdx, itemIdx, q, ac) {
-  if (!ac) ac = document.getElementById('bfac-' + cardIdx + '-' + itemIdx);
-  if (!ac) return;
-
-  ac.innerHTML =
-    '<div style="padding:8px 10px">' +
-      '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px">' +
-        '<span style="font-size:10px;color:#e8e4dc;font-weight:500">' + q + '</span>' +
-        '<span style="font-size:8px;color:rgba(220,100,60,0.8)">not in library</span>' +
-      '</div>' +
-      '<div style="display:flex;gap:8px;margin-bottom:6px">' +
-        '<div style="flex:1">' +
-          '<div style="font-size:8px;color:#555;text-transform:uppercase;letter-spacing:0.05em;margin-bottom:3px">carbs / 100g</div>' +
-          '<input id="bfin-c100-' + cardIdx + '-' + itemIdx + '" type="number" min="0" max="100" step="0.1" inputmode="decimal" placeholder="e.g. 47" ' +
-            'onmousedown="event.stopPropagation()" ' +
-            'oninput="bfInlinePreview(\'' + cardIdx + '\',\'' + itemIdx + '\')" ' +
-            'style="width:100%;padding:5px 6px;border-radius:5px;border:1px solid rgba(62,180,120,0.4);background:rgba(62,180,120,0.07);font-family:inherit;font-size:14px;color:rgba(100,220,160,0.95);text-align:center;outline:none;box-sizing:border-box">' +
-        '</div>' +
-        '<div style="flex:1">' +
-          '<div style="font-size:8px;color:#b07820;text-transform:uppercase;letter-spacing:0.05em;margin-bottom:3px">GI <span style="opacity:0.45;text-transform:none;font-size:7px">auto</span></div>' +
-          '<input id="bfin-gi-' + cardIdx + '-' + itemIdx + '" type="number" min="0" max="100" step="1" inputmode="decimal" placeholder="\u2014" ' +
-            'onmousedown="event.stopPropagation()" ' +
-            'oninput="bfInlinePreview(\'' + cardIdx + '\',\'' + itemIdx + '\')" ' +
-            'style="width:100%;padding:5px 6px;border-radius:5px;border:1px solid rgba(200,160,60,0.3);background:rgba(200,160,60,0.05);font-family:inherit;font-size:14px;color:rgba(220,180,80,0.9);text-align:center;outline:none;box-sizing:border-box">' +
-        '</div>' +
-      '</div>' +
-      '<div id="bfin-prev-' + cardIdx + '-' + itemIdx + '" style="font-size:9px;color:#40a870;min-height:12px;margin-bottom:6px"></div>' +
-      '<div style="display:flex;gap:6px">' +
-        '<button onmousedown="event.preventDefault()" onclick="bfSaveInlineFood(\'' + cardIdx + '\',\'' + itemIdx + '\',\'' + q.replace(/'/g,"\\'") + '\')" ' +
-          'style="font-family:inherit;flex:2;padding:8px;border-radius:6px;border:1px solid rgba(62,180,120,0.4);background:rgba(62,180,120,0.1);font-size:12px;color:#40a870;cursor:pointer">save + use</button>' +
-        '<button onmousedown="event.preventDefault()" onclick="bfShowAliasFor(\'' + cardIdx + '\',\'' + itemIdx + '\',\'' + q.replace(/'/g,"\\'") + '\')" ' +
-          'style="font-family:inherit;flex:1;padding:8px;border-radius:6px;border:1px solid #26262f;background:transparent;font-size:11px;color:#555;cursor:pointer;font-style:italic">\u2192 alias</button>' +
-      '</div>' +
-    '</div>';
-
-  ac.style.top = ''; ac.style.bottom = '';
-  ac.style.display = 'block';
-  var rect = ac.getBoundingClientRect();
-  if (rect.bottom > window.innerHeight - 20) {
-    ac.style.top = 'auto'; ac.style.bottom = '100%';
-  } else {
-    ac.style.top = '100%'; ac.style.bottom = 'auto';
-  }
-
-  // Fire GI lookup immediately — food name is known; result arrives async
-  // and fills the GI field without blocking the c100 input focus
-  _bfLookupGI(q, cardIdx, itemIdx);
-
-  setTimeout(function(){
-    var inp = document.getElementById('bfin-c100-' + cardIdx + '-' + itemIdx);
-    if (inp) inp.focus();
-  }, 30);
+  if (ac) ac.style.display = 'none';
+  _bfOpenAddFoodModal(cardIdx, itemIdx, q);
 }
 window.bfShowInlineNew = bfShowInlineNew;
 
-// ── Open "add to library" inline form from the sub-row link ───
-// Reuses bfShowInlineNew — shows the c100/GI form anchored to the item's ac div.
-// The ac div may be hidden; ensure it's visible and positioned before calling.
+// bfOpenAddToLib — "add to library" link from the sub-row.
 function bfOpenAddToLib(cardIdx, itemIdx, name) {
-  // Make sure item name is saved
   bfUpdateItem(cardIdx, itemIdx, 'name', name);
-  var ac = document.getElementById('bfac-' + cardIdx + '-' + itemIdx);
-  if (!ac) return;
-  // Show the inline new-food form (same as no-match debounce path)
-  bfShowInlineNew(cardIdx, itemIdx, name, ac);
+  _bfOpenAddFoodModal(cardIdx, itemIdx, name);
 }
 window.bfOpenAddToLib = bfOpenAddToLib;
 
-function bfInlineMode(cardIdx, itemIdx, mode) {
-  _bfInlineModes[cardIdx + '-' + itemIdx] = mode;
-  var lbl    = document.getElementById('bfin-lbl-'   + cardIdx + '-' + itemIdx);
-  var btn100 = document.getElementById('bfin-m100-'  + cardIdx + '-' + itemIdx);
-  var btnSrv = document.getElementById('bfin-mserv-' + cardIdx + '-' + itemIdx);
-  if (lbl)   lbl.textContent = mode === 'per100' ? 'carbs per 100g' : 'carbs per serving (g)';
-  if (btn100){ btn100.style.background = mode==='per100' ? '#0d1820' : 'transparent'; btn100.style.color = mode==='per100' ? '#4a8fd4' : '#555'; }
-  if (btnSrv){ btnSrv.style.background = mode==='perServ'? '#0d1820' : 'transparent'; btnSrv.style.color = mode==='perServ'? '#4a8fd4' : '#555'; }
-  bfInlinePreview(cardIdx, itemIdx);
-}
-window.bfInlineMode = bfInlineMode;
-
-function bfInlinePreview(cardIdx, itemIdx) {
-  var c100raw = parseFloat((document.getElementById('bfin-c100-' + cardIdx + '-' + itemIdx)||{}).value) || 0;
-  var gi      = parseInt((document.getElementById('bfin-gi-'   + cardIdx + '-' + itemIdx)||{}).value)   || 0;
-  var prev    = document.getElementById('bfin-prev-' + cardIdx + '-' + itemIdx);
-  if (!prev) return;
-  if (c100raw > 0) {
-    var gl = gi > 0 ? (gi * c100raw / 100).toFixed(1) : null;
-    prev.textContent = c100raw + 'g carbs/100g' + (gl ? ' \u00b7 GL ' + gl : '');
-    // Update GI hint on the item row live
-    if (gi > 0) {
-      var span = document.getElementById('bfgi-' + cardIdx + '-' + itemIdx);
-      if (span) {
-        var col = gi >= 70 ? '#c0392b' : gi >= 55 ? '#b07820' : '#1d9e72';
-        span.textContent = 'GI\u00a0' + gi;
-        span.style.color = col;
-        span.title = 'GI ' + gi + ' \u00b7 GL ' + (gi * c100raw / 100).toFixed(1);
-      }
-    }
-  } else {
-    prev.textContent = '';
-  }
-}
-window.bfInlinePreview = bfInlinePreview;
-
-function bfSaveInlineFood(cardIdx, itemIdx, name) {
-  var c100raw = parseFloat((document.getElementById('bfin-c100-' + cardIdx + '-' + itemIdx)||{}).value) || 0;
-  var giRaw   = (document.getElementById('bfin-gi-' + cardIdx + '-' + itemIdx)||{}).value;
-  var gi      = giRaw !== '' && giRaw != null ? parseInt(giRaw) : null;
-  if (!c100raw) {
-    var inp = document.getElementById('bfin-c100-' + cardIdx + '-' + itemIdx);
-    if (inp) inp.focus();
-    return;
-  }
-  var c100  = Math.round(c100raw * 10) / 10;
-  var lname = name.toLowerCase();
-  var cat   = typeof _categoryFromName === 'function' ? _categoryFromName(lname) : 'custom';
-  var entry = { name: name, c100: c100, gi: gi !== null ? gi : null, cat: cat, g_serv: null, g_each: null };
-
-  // Save to library immediately — same path as _saveInlineNewFood in app.js
-  if (typeof FOOD_LIBRARY !== 'undefined' && typeof saveFoodLibrary === 'function') {
-    if (!FOOD_LIBRARY.some(function(f){ return (f.name||'').toLowerCase() === lname; })) {
-      FOOD_LIBRARY.push(entry);
-      saveFoodLibrary();
-      if (typeof __debugLog === 'function') if (typeof __debugLog === 'function') __debugLog('backfill: saved "' + name + '" to library c100=' + c100);
-    }
-  }
-
-  // Update item in queue state
-  if (_bfQueue[cardIdx]) {
-    var items = _bfQueue[cardIdx].items || [];
-    items[itemIdx] = Object.assign(items[itemIdx] || {}, { name: name, c100: c100, gi: gi, gi_cat: cat });
-    _bfQueue[cardIdx].items = items;
-  }
-
-  var ac = document.getElementById('bfac-' + cardIdx + '-' + itemIdx);
-  if (ac) ac.style.display = 'none';
-  // Re-render only this row — do NOT touch other rows
-  _bfRenderItemRow(cardIdx, itemIdx);
-}
-window.bfSaveInlineFood = bfSaveInlineFood;
+// bfInlineMode / bfInlinePreview / bfSaveInlineFood removed — all entry points
+// now use the shared addCustomFood overlay via _bfOpenAddFoodModal.
 
 // ── Alias linking ──────────────────────────────────────────────
 function bfShowAliasFor(cardIdx, itemIdx, alias) {
@@ -1857,47 +1716,45 @@ function bfInsertItemNameBlur(idx, input) {
     if (window._bfInsertItems && window._bfInsertItems[idx]) {
       window._bfInsertItems[idx].name = name;
     }
-    // If not already in library and name is meaningful, look up GI
-    if (name && name.length >= 2 && !_bfLibLookup(name)) {
-      _bfLookupGIForInsert(idx, name);
+    if (!name || name.length < 2) return;
+
+    var existing = _bfLibLookup(name);
+    if (existing) {
+      // In library — store GI if missing, nothing else needed
+      if (!existing.gi && typeof window.addCustomFood === 'function') {
+        // Has no GI — open modal so user can fill it in and it gets saved back
+        // (unusual path; library items usually have GI already)
+      }
+      return;
     }
+
+    // Not in library — open the shared full-screen add-food modal
+    if (typeof window.addCustomFood !== 'function') return;
+    window._foodAddCallback = function(savedFood) {
+      if (window._bfInsertItems && window._bfInsertItems[idx]) {
+        window._bfInsertItems[idx].name  = savedFood.name;
+        window._bfInsertItems[idx].c100  = savedFood.c100;
+        window._bfInsertItems[idx].gi    = savedFood.gi;
+      }
+      // Update the row inputs in place
+      var c100Inp = document.getElementById('bfins-c100-' + idx);
+      var giSpan  = document.getElementById('bfinsgi-'    + idx);
+      var nameInp = document.getElementById('bfins-name-' + idx);
+      if (nameInp) nameInp.value = savedFood.name;
+      if (c100Inp && savedFood.c100) { c100Inp.value = savedFood.c100; }
+      if (giSpan && savedFood.gi) {
+        var col = savedFood.gi >= 70 ? '#c0392b' : savedFood.gi >= 55 ? '#b07820' : '#1d9e72';
+        giSpan.textContent = 'GI ' + savedFood.gi;
+        giSpan.style.color = col;
+      }
+    };
+    window.addCustomFood(name);
   }, 150);
 }
 window.bfInsertItemNameBlur = bfInsertItemNameBlur;
 
-// GI lookup variant for the insert-form rows (different ID scheme)
-async function _bfLookupGIForInsert(idx, foodName) {
-  var giEl  = document.getElementById('bfinsgi-' + idx);
-  if (!giEl) return;
-  giEl.textContent = '⏳';
-  giEl.style.color = '#555';
-  try {
-    var resp = await fetch('https://api.anthropic.com/v1/messages', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        model: 'claude-sonnet-4-20250514',
-        max_tokens: 100,
-        system: 'Return ONLY a JSON object: {"gi":<integer 1-100>,"note":"<one short phrase>"}. If primarily fat/protein with negligible carbs return gi:5. Never return null for gi.',
-        messages: [{ role: 'user', content: 'Glycaemic index for: "' + foodName + '"' }]
-      })
-    });
-    var data = await resp.json();
-    var text = (data.content && data.content[0] && data.content[0].text) || '{}';
-    var result = {};
-    try { result = JSON.parse(text.replace(/```json|```/g,'').trim()); } catch(e){}
-    var gi = Math.max(1, Math.min(100, parseInt(result.gi)||55));
-    // Store on item
-    if (window._bfInsertItems && window._bfInsertItems[idx]) {
-      window._bfInsertItems[idx].gi = gi;
-    }
-    var col = gi >= 70 ? '#c0392b' : gi >= 55 ? '#b07820' : '#1d9e72';
-    if (giEl) { giEl.textContent = 'GI ' + gi; giEl.style.color = col; giEl.title = result.note || ''; }
-  } catch(e) {
-    if (giEl) { giEl.textContent = 'GI?'; giEl.style.color = '#333'; }
-  }
-}
-window._bfLookupGIForInsert = _bfLookupGIForInsert;
+// _bfLookupGIForInsert removed — GI is now populated via the shared addCustomFood
+// overlay. Library items with missing GI can be updated by opening addCustomFood.
 
 function bfInsertSelectFood(idx, name) {
   var food = _bfLibLookup(name);
@@ -1919,9 +1776,18 @@ function bfInsertSelectFood(idx, name) {
   if (giSpan && food && food.gi) {
     giSpan.textContent = 'GI ' + food.gi;
     giSpan.style.color = food.gi>=70?'#c0392b':food.gi>=55?'#b07820':'#1d9e72';
-  } else if (window._bfInsertItems && window._bfInsertItems[idx] && window._bfInsertItems[idx].name) {
-    // Library match but no GI stored — look it up
-    _bfLookupGIForInsert(idx, window._bfInsertItems[idx].name);
+  } else if (food && !food.gi && typeof window.addCustomFood === 'function') {
+    // Library match but no GI — open the overlay so the user can fill it in
+    // (this saves the GI back to the library entry too)
+    giSpan && (giSpan.textContent = 'GI?');
+    window._foodAddCallback = function(savedFood) {
+      window._bfInsertItems[idx].gi = savedFood.gi;
+      if (giSpan && savedFood.gi) {
+        giSpan.textContent = 'GI ' + savedFood.gi;
+        giSpan.style.color = savedFood.gi>=70?'#c0392b':savedFood.gi>=55?'#b07820':'#1d9e72';
+      }
+    };
+    window.addCustomFood(food.name);
   }
   if (ac) ac.style.display = 'none';
 }
