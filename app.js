@@ -12281,15 +12281,9 @@ async function _saveTreatmentSettings(data) {
   _TREATMENT = data;
   try { localStorage.setItem('river_treatment', JSON.stringify(data)); } catch(e) {}
   if (!SUPABASE_READY) return;
+  // therapy_history is the sole Supabase target — append-only audit log.
+  // (settings table removed — _loadTreatmentSettings reads therapy_history instead)
   try {
-    // Also keep settings table current for backward compat (other devices loading latest)
-    await _sbFetch('settings?on_conflict=key', {
-      method: 'POST',
-      prefer: 'resolution=merge-duplicates,return=minimal',
-      body: [{ key: 'treatment', value: data, updated_at: new Date().toISOString() }],
-    });
-    // Append to therapy_history — append-only audit log, never overwritten
-    // This is what makes "porridge on old ratio vs new ratio" queries possible
     await _sbFetch('therapy_history', {
       method: 'POST',
       prefer: 'return=minimal',
@@ -12306,7 +12300,7 @@ async function _saveTreatmentSettings(data) {
         changed_by:     _deviceId,
       }],
     });
-  } catch(e) { console.warn('[treatment] Supabase save failed:', e.message); }
+  } catch(e) { console.warn('[treatment] therapy_history save failed:', e.message); }
 }
 
 function openTreatmentPanel() {
