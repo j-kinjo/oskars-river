@@ -7165,7 +7165,7 @@ async function handleFoodPhoto(inputEl) {
       body: JSON.stringify({
         model: 'claude-sonnet-4-5',
         max_tokens: 500,
-        system: 'You extract nutritional information from food photos. Return ONLY a JSON object, no markdown, no explanation.\n\nFor NUTRITION LABEL photos: read the label directly.\nFor WHOLE FOOD photos (fruit, vegetables, bread, plate of food, etc.): estimate from known nutritional values. Use visual cues (hand for scale, plate size, reference objects) to estimate weight. Set weight_estimated:true.\n\nFields: {"name":"product or food name","c100":carbs_per_100g_as_number,"gi":estimated_gi_as_number,"g_serv":serving_size_grams_as_number_or_null,"sugar":sugars_per_100g_as_number_or_null,"weight_estimated":false,"cat":"bread|cereal|pasta|fruit|dairy|protein|snack|hypo|drink|main|custom","note":"brief context e.g. medium apple estimated 140g"}.\n\nUse "Carbohydrate" row for c100 (not sugars). Estimate GI from food type: white bread~75, wholemeal~55, pasta~48, biscuits~70, oats~55, fruit~45, jelly sweets~95, glucose tablets~100, milk~35, potato~78.\n\nIf image is completely unreadable: return {"error":"cannot read"}.',
+        system: 'You extract nutritional information from food photos. Return ONLY a JSON object, no markdown, no explanation.\n\nFor NUTRITION LABEL photos: read the label directly.\nFor WHOLE FOOD photos (fruit, vegetables, bread, plate of food, etc.): estimate from known nutritional values. Use visual cues (hand for scale, plate size, reference objects) to estimate weight. Set weight_estimated:true.\n\nFields: {"name":"product or food name","c100":carbs_per_100g_as_number,"gi":estimated_gi_as_number,"g_serv":serving_size_grams_as_number_or_null,"sugar":sugars_per_100g_as_number_or_null,"weight_estimated":false,"cat":"bread|cereal|pasta|fruit|vegetable|dairy|protein|snack|hypo|drink|main|custom","note":"brief context e.g. medium apple estimated 140g"}.\n\nUse "Carbohydrate" row for c100 (not sugars). Estimate GI from food type: white bread~75, wholemeal~55, pasta~48, biscuits~70, oats~55, fruit~45, jelly sweets~95, glucose tablets~100, milk~35, potato~78.\n\nIf image is completely unreadable: return {"error":"cannot read"}.',
         messages: [{
           role: 'user',
           content: [
@@ -7501,6 +7501,7 @@ function _categoryFromName(nameLower) {
   if (/potato|chips|fries|parsnip|sweet.potato/.test(nameLower)) return 'main';
   if (/oat|porridge/.test(nameLower)) return 'cereal';
   if (/apple|pear|banana|orange|mango|grape|berry|fruit/.test(nameLower)) return 'fruit';
+  if (/carrot|broccoli|cauliflower|spinach|kale|courgette|zucchini|pepper|pea|bean|lentil|tomato|cucumber|lettuce|celery|cabbage|leek|onion|garlic|beetroot|asparagus|mushroom|corn|sweetcorn|veggie|vegetable|veg\b/.test(nameLower)) return 'vegetable';
   if (/milk|yoghurt|yogurt|cheese|dairy|cream/.test(nameLower)) return 'dairy';
   if (/chicken|beef|pork|fish|egg|meat|bacon|ham|salmon|tuna/.test(nameLower)) return 'protein';
   if (/biscuit|cookie|cake|chocolate|crisp|quaver|snack|bar/.test(nameLower)) return 'snack';
@@ -7512,17 +7513,18 @@ function _categoryFromName(nameLower) {
 // GI estimate by category — returns {gi, basis} for the estimate label
 function _giFromCategory(cat, nameLower) {
   var map = {
-    bread:   {gi: 65, basis: 'starchy bread'},
-    cereal:  {gi: 70, basis: 'refined grain cereal'},
-    pasta:   {gi: 48, basis: 'pasta (slow starch)'},
-    fruit:   {gi: 45, basis: 'typical fruit'},
-    protein: {gi: 15, basis: 'protein — minimal carbs'},
-    dairy:   {gi: 35, basis: 'dairy'},
-    snack:   {gi: 72, basis: 'processed snack'},
-    hypo:    {gi: 95, basis: 'fast sugar — hypo treatment'},
-    drink:   {gi: 65, basis: 'sugary drink'},
-    main:    {gi: 60, basis: 'mixed meal'},
-    custom:  {gi: 55, basis: 'estimate — confirm if known'},
+    bread:     {gi: 65, basis: 'starchy bread'},
+    cereal:    {gi: 70, basis: 'refined grain cereal'},
+    pasta:     {gi: 48, basis: 'pasta (slow starch)'},
+    fruit:     {gi: 45, basis: 'typical fruit'},
+    vegetable: {gi: 20, basis: 'non-starchy vegetable'},
+    protein:   {gi: 15, basis: 'protein — minimal carbs'},
+    dairy:     {gi: 35, basis: 'dairy'},
+    snack:     {gi: 72, basis: 'processed snack'},
+    hypo:      {gi: 95, basis: 'fast sugar — hypo treatment'},
+    drink:     {gi: 65, basis: 'sugary drink'},
+    main:      {gi: 60, basis: 'mixed meal'},
+    custom:    {gi: 55, basis: 'estimate — confirm if known'},
   };
   // Override for known specific foods
   if (/oat|porridge/.test(nameLower))       return {gi: 55, basis: 'oats (slow release)'};
@@ -7675,7 +7677,7 @@ function addCustomFood(name) {
   var catRow = document.createElement('div');
   catRow.style.cssText = 'margin-bottom:16px';
   catRow.appendChild(lbl('category'));
-  var catCats = ['bread','cereal','pasta','fruit','dairy','protein','snack','hypo','drink','main','custom'];
+  var catCats = ['bread','cereal','pasta','fruit','vegetable','dairy','protein','snack','hypo','drink','main','custom'];
   var _selCat = autoCat;
   var catChips = document.createElement('div');
   catChips.style.cssText = 'display:flex;flex-wrap:wrap;gap:5px';
