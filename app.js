@@ -7628,20 +7628,28 @@ function addCustomFood(name) {
   }
   var btn100  = makeToggleBtn('per 100g', 'per100');
   var btnServ = makeToggleBtn('per serving', 'perServing');
+  var btnDirect = makeToggleBtn('just the carbs', 'direct');
   toggleWrap.appendChild(btn100);
   toggleWrap.appendChild(btnServ);
+  toggleWrap.appendChild(btnDirect);
   wrap.appendChild(toggleWrap);
 
   function updateToggleState() {
-    var is100 = _addFoodMode === 'per100';
-    btn100.style.background  = is100  ? 'rgba(62,180,120,0.18)' : 'transparent';
-    btn100.style.color       = is100  ? 'rgba(100,220,160,0.95)' : 'rgba(180,200,220,0.45)';
-    btnServ.style.background = !is100 ? 'rgba(62,180,120,0.18)' : 'transparent';
-    btnServ.style.color      = !is100 ? 'rgba(100,220,160,0.95)' : 'rgba(180,200,220,0.45)';
-    var c100Row = document.getElementById('new-food-c100-row');
-    var cServRow = document.getElementById('new-food-cserv-row');
-    if (c100Row)  c100Row.style.display  = is100 ? '' : 'none';
-    if (cServRow) cServRow.style.display = !is100 ? '' : 'none';
+    var is100    = _addFoodMode === 'per100';
+    var isServ   = _addFoodMode === 'perServing';
+    var isDirect = _addFoodMode === 'direct';
+    btn100.style.background    = is100    ? 'rgba(62,180,120,0.18)' : 'transparent';
+    btn100.style.color         = is100    ? 'rgba(100,220,160,0.95)' : 'rgba(180,200,220,0.45)';
+    btnServ.style.background   = isServ   ? 'rgba(62,180,120,0.18)' : 'transparent';
+    btnServ.style.color        = isServ   ? 'rgba(100,220,160,0.95)' : 'rgba(180,200,220,0.45)';
+    btnDirect.style.background = isDirect ? 'rgba(62,180,120,0.18)' : 'transparent';
+    btnDirect.style.color      = isDirect ? 'rgba(100,220,160,0.95)' : 'rgba(180,200,220,0.45)';
+    var c100Row    = document.getElementById('new-food-c100-row');
+    var cServRow   = document.getElementById('new-food-cserv-row');
+    var cDirectRow = document.getElementById('new-food-cdirect-row');
+    if (c100Row)    c100Row.style.display    = is100    ? '' : 'none';
+    if (cServRow)   cServRow.style.display   = isServ   ? '' : 'none';
+    if (cDirectRow) cDirectRow.style.display = isDirect ? '' : 'none';
   }
 
   // Carbs per 100g input
@@ -7662,7 +7670,18 @@ function addCustomFood(name) {
   cServRow.appendChild(cServInp);
   wrap.appendChild(cServRow);
 
-  // ── Typical serving (consolidated — replaces g_serv + g_each) ────
+  // Direct carbs input — "I just know this portion has Xg carbs"
+  var cDirectRow = document.createElement('div');
+  cDirectRow.id = 'new-food-cdirect-row';
+  cDirectRow.style.cssText = 'margin-bottom:14px;display:none';
+  cDirectRow.appendChild(lbl('carbs in this portion (g)', '· e.g. 35g for a pizza slice'));
+  var cDirectInp = inp('new-food-cdirect', 'number', 'e.g. 35', 0, 500, '0.1', null, 'border-color:rgba(62,180,120,0.5);color:rgba(100,220,160,0.95);background:rgba(62,180,120,0.08)');
+  cDirectRow.appendChild(cDirectInp);
+  var cDirectNote = document.createElement('div');
+  cDirectNote.style.cssText = 'font-family:monospace;font-size:8px;color:rgba(62,180,120,0.4);margin-top:4px';
+  cDirectNote.textContent = 'stored as-is — enter portion weight below if you know it';
+  cDirectRow.appendChild(cDirectNote);
+  wrap.appendChild(cDirectRow);
   var servRow = document.createElement('div');
   servRow.style.cssText = 'margin-bottom:14px';
   servRow.appendChild(lbl('typical serving', '· weighed portion (g)'));
@@ -7805,15 +7824,21 @@ function addCustomFood(name) {
   saveBtn.style.cssText = "flex:1;padding:13px;border-radius:10px;border:1px solid rgba(62,180,120,0.4);background:rgba(62,180,120,0.12);font-family:'Fraunces',serif;font-style:italic;font-weight:200;font-size:17px;color:rgba(100,220,160,0.95);cursor:pointer";
   saveBtn.textContent = 'save + add';
   saveBtn.onclick = function() {
-    var c100val = parseFloat((document.getElementById('new-food-c100')||{}).value);
+    var mode    = _addFoodMode || 'per100';
     var cat     = (document.getElementById('new-food-cat')||{}).value || 'custom';
-    if ((!c100val || c100val <= 0) && cat !== 'protein') {
-      var ci = document.getElementById('new-food-c100');
-      if (ci) { ci.style.borderColor='rgba(220,80,60,0.7)'; setTimeout(function(){ ci.style.borderColor='rgba(62,180,120,0.5)'; },1500); }
-      if (typeof showToast === 'function') showToast('enter carbs per 100g first');
+    var c100val = parseFloat((document.getElementById('new-food-c100')||{}).value);
+    var cServVal   = parseFloat((document.getElementById('new-food-cserv')||{}).value);
+    var cDirectVal = parseFloat((document.getElementById('new-food-cdirect')||{}).value);
+    // At least one carb value must be present (unless protein category)
+    var hasCarbs = (c100val > 0) || (cServVal > 0) || (cDirectVal > 0);
+    if (!hasCarbs && cat !== 'protein') {
+      var focusEl = mode === 'direct' ? document.getElementById('new-food-cdirect')
+                  : mode === 'perServing' ? document.getElementById('new-food-cserv')
+                  : document.getElementById('new-food-c100');
+      if (focusEl) { focusEl.style.borderColor='rgba(220,80,60,0.7)'; setTimeout(function(){ focusEl.style.borderColor='rgba(62,180,120,0.5)'; },1500); }
+      if (typeof showToast === 'function') showToast('enter the carbs first');
       return;
     }
-    // Read the editable name field
     var nameEl = document.getElementById('new-food-name');
     var finalName = nameEl ? nameEl.value.trim() : name;
     if (!finalName) { if (typeof showToast === 'function') showToast('enter a food name'); return; }
@@ -7830,7 +7855,6 @@ function addCustomFood(name) {
   wrap.appendChild(btnRow);
 
   el.appendChild(wrap);
-  el.addEventListener('click', function(e){ if(e.target===el) { window._foodAddCallback = null; el.remove(); } });
   el.addEventListener('keydown', function(e){ if(e.key==='Escape') { window._foodAddCallback = null; el.remove(); } });
   document.body.appendChild(el);
   requestAnimationFrame(function(){ el.style.opacity='1'; });
@@ -7929,11 +7953,19 @@ function updateAddFoodPreview() {
     c100 = parseFloat((document.getElementById('new-food-c100')||{}).value)||0;
     var cServEl = document.getElementById('new-food-cserv');
     if (cServEl) cServEl.value = (gServ > 0 && c100 > 0) ? (c100 * gServ / 100).toFixed(1) : '';
-  } else {
+  } else if (mode === 'perServing') {
     var cServ = parseFloat((document.getElementById('new-food-cserv')||{}).value)||0;
-    c100 = (gServ > 0 && cServ > 0) ? (cServ / gServ * 100) : 0;
+    // Compute c100 only if we have a weight; otherwise use cServ as a nominal c100
+    c100 = (gServ > 0 && cServ > 0) ? (cServ / gServ * 100) : cServ;
     var c100El = document.getElementById('new-food-c100');
-    if (c100El) c100El.value = c100 > 0 ? c100.toFixed(1) : '';
+    if (c100El && gServ > 0) c100El.value = c100 > 0 ? c100.toFixed(1) : '';
+  } else {
+    // direct mode — user entered carbs for a known portion
+    var cDirect = parseFloat((document.getElementById('new-food-cdirect')||{}).value)||0;
+    // Use cDirect as c100 proxy (will be overridden if gServ is known)
+    c100 = (gServ > 0 && cDirect > 0) ? (cDirect / gServ * 100) : cDirect;
+    var c100ElD = document.getElementById('new-food-c100');
+    if (c100ElD && gServ > 0) c100ElD.value = c100 > 0 ? c100.toFixed(1) : '';
   }
 
   // ── GI: re-estimate from category + c100 unless user has confirmed manually ──
@@ -7995,15 +8027,30 @@ function updateAddFoodPreview() {
 
 function saveCustomFood(encodedName) {
   var name  = decodeURIComponent(encodedName);
-  // Always read c100 — updateAddFoodPreview keeps it in sync regardless of toggle mode
-  var carbs = parseFloat((document.getElementById('new-food-c100')||{}).value) || 0;
+  var mode  = _addFoodMode || 'per100';
   var gi    = parseInt((document.getElementById('new-food-gi')||{}).value) || 0;
   var gServ = parseFloat((document.getElementById('new-food-g_serv')||{}).value) || null;
   var cat   = (document.getElementById('new-food-cat')||{}).value || 'custom';
-  var el    = document.getElementById('food-add-overlay');
+
+  // Resolve c100 from whichever mode was active
+  var carbs;
+  if (mode === 'per100') {
+    carbs = parseFloat((document.getElementById('new-food-c100')||{}).value) || 0;
+  } else if (mode === 'perServing') {
+    var cServ = parseFloat((document.getElementById('new-food-cserv')||{}).value) || 0;
+    carbs = (gServ && gServ > 0 && cServ > 0) ? Math.round(cServ / gServ * 1000) / 10 : cServ;
+    if (!gServ && cServ > 0) gServ = null; // no weight known
+  } else {
+    // direct mode — carbs for one portion; store as c100 (best we can do without weight)
+    var cDirect = parseFloat((document.getElementById('new-food-cdirect')||{}).value) || 0;
+    carbs = (gServ && gServ > 0 && cDirect > 0) ? Math.round(cDirect / gServ * 1000) / 10 : cDirect;
+    if (!gServ && cDirect > 0) gServ = null;
+  }
+
+  var el = document.getElementById('food-add-overlay');
   if (el) el.remove();
   var f = {name:name, c100:carbs, gi:gi, cat:cat};
-  if (gServ) { f.g_serv = gServ; f.g_each = gServ; } // mirror to g_each for compatibility
+  if (gServ) { f.g_serv = gServ; f.g_each = gServ; }
 
   // Save to library
   var lname = name.toLowerCase();
