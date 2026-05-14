@@ -81,7 +81,7 @@ async function bfLoadQueue(filter) {
   if (_bfDateFrom) params.push('date=gte.' + _bfDateFrom);
   if (_bfDateTo)   params.push('date=lte.' + _bfDateTo);
 
-  params.push('order=date.asc', 'order=time.asc');
+  params.push('order=date.asc,time.asc');
 
   var rows = await _bfFetch('backfill_queue?' + params.join('&'), { method: 'GET' });
   var result = Array.isArray(rows) ? rows : [];
@@ -256,29 +256,157 @@ function bfRenderQueue() {
     body.innerHTML = '<div style="text-align:center;color:#1d9e72;padding:60px 20px;font-size:14px">✓ All ' + _bfFilter + ' events reviewed</div>';
     return;
   }
+  // Detect split bolus pairs before rendering
+  var splitPairs = _bfFindSplitPairs(_bfQueue);
+  var splitPairMap = {}; // idxA → {a,b}
+  splitPairs.forEach(function(p){ splitPairMap[p.a] = p; });
+
   // Render cards with insert-event affordance between each pair
   var parts = [];
   _bfQueue.forEach(function(ev, i) {
     parts.push(bfCardHTML(ev, i));
-    // Slim insert row — shows "+" between cards
+
     if (i < _bfQueue.length - 1) {
-      var midT = Math.round((ev.t + _bfQueue[i+1].t) / 2);
-      var midDate = new Date(midT);
-      var pad = function(n){ return String(n).padStart(2,'0'); };
-      var midVal = midDate.getFullYear()+'-'+pad(midDate.getMonth()+1)+'-'+pad(midDate.getDate())+'T'+pad(midDate.getHours())+':'+pad(midDate.getMinutes());
-      parts.push(
-        '<div class="bf-insert" style="display:flex;align-items:center;gap:6px;padding:0 4px;margin:-4px 0;height:18px;cursor:pointer;opacity:0.35" ' +
-          'onmouseover="this.style.opacity=\'1\'" onmouseout="this.style.opacity=\'0.35\'" ' +
-          'onclick="bfExpandInsert(this,\'' + midVal + '\')">' +
-          '<div style="flex:1;height:1px;background:#26262f"></div>' +
-          '<span style="font-size:10px;color:#555;padding:0 4px">+</span>' +
-          '<div style="flex:1;height:1px;background:#26262f"></div>' +
-        '</div>'
-      );
+      // Split bolus banner — replaces the thin insert row when a pair is detected
+      if (splitPairMap[i]) {
+        var p = splitPairMap[i];
+        var eA = _bfQueue[p.a], eB = _bfQueue[p.b];
+        var combinedC = ((parseFloat(eA.carbs_device)||0) + (parseFloat(eB.carbs_device)||0)).toFixed(1);
+        var combinedU = ((parseFloat(eA.units)||0)        + (parseFloat(eB.units)||0)).toFixed(1);
+        parts.push(
+          '<div style="margin:-6px 0;padding:6px 10px;background:#0d180d;border:1px solid #40a87055;border-radius:6px;display:flex;align-items:center;gap:8px;flex-wrap:wrap">',
+            '<span style="font-size:10px;color:#40a870;font-weight:600">⟂ split bolus detected</span>',
+            '<span style="font-size:10px;color:#555">' + eA.time + ' + ' + eB.time + ' · ' + eA.carbs_device + 'g + ' + eB.carbs_device + 'g = ' + combinedC + 'g total · ' + combinedU + 'U total</span>',
+            '<button onclick="bfMergeSplitBolus(' + p.a + ',' + p.b + ')" ',
+              'style="font-family:inherit;font-size:11px;padding:4px 12px;border:1px solid #40a870;border-radius:5px;background:transparent;color:#40a870;cursor:pointer;font-weight:600;margin-left:auto">',
+              'merge &amp; approve →',
+            '</button>',
+            '<button onclick="bfDismissSplitHint(' + p.a + ',' + p.b + ')" ',
+              'style="font-family:inherit;font-size:10px;padding:4px 8px;border:1px solid #26262f;border-radius:5px;background:transparent;color:#555;cursor:pointer">',
+              'not a split',
+            '</button>',
+          '</div>'
+        );
+      } else {
+        // Normal slim insert row
+        var midT = Math.round((ev.t + _bfQueue[i+1].t) / 2);
+        var midDate = new Date(midT);
+        var pad = function(n){ return String(n).padStart(2,'0'); };
+        var midVal = midDate.getFullYear()+'-'+pad(midDate.getMonth()+1)+'-'+pad(midDate.getDate())+'T'+pad(midDate.getHours())+':'+pad(midDate.getMinutes());
+        parts.push(
+          '<div class="bf-insert" style="display:flex;align-items:center;gap:6px;padding:0 4px;margin:-4px 0;height:18px;cursor:pointer;opacity:0.35" ' +
+            'onmouseover="this.style.opacity=\'1\'" onmouseout="this.style.opacity=\'0.35\'" ' +
+            'onclick="bfExpandInsert(this,\'' + midVal + '\')">' +
+            '<div style="flex:1;height:1px;background:#26262f"></div>' +
+            '<span style="font-size:10px;color:#555;padding:0 4px">+</span>' +
+            '<div style="flex:1;height:1px;background:#26262f"></div>' +
+          '</div>'
+        );
+      }
     }
   });
   body.innerHTML = parts.join('');
 }
+
+// ── Split bolus detection ──────────────────────────────────────
+// Identifies adjacent queue rows that look like halves of an Omnipod-style
+// split bolus: same calendar date, within 90 minutes, both carbs entries,
+// carbs within 5g of each other (Omnipod re-enters half the carbs for each dose).
+// Returns array of {a: idxA, b: idxB} pairs.
+function _bfFindSplitPairs(queue) {
+  var pairs = [];
+  var seen  = {};
+  for (var i = 0; i < queue.length - 1; i++) {
+    if (seen[i]) continue;
+    var ea = queue[i];
+    var eb = queue[i + 1];
+    if (!ea || !eb) continue;
+    // Skip if dismissed this session
+    if (ea._splitDismissed || eb._splitDismissed) continue;
+    // Both must have carbs > 0
+    if (!ea.carbs_device || !eb.carbs_device) continue;
+    // Within 90 minutes
+    var dtMs = Math.abs((eb.t || 0) - (ea.t || 0));
+    if (dtMs > 90 * 60000) continue;
+    // Carbs close to each other (Omnipod enters each half separately)
+    var carbDiff = Math.abs(parseFloat(ea.carbs_device) - parseFloat(eb.carbs_device));
+    if (carbDiff > 5) continue;
+    // At least one must still be pending
+    if (ea.status === 'approved' && eb.status === 'approved') continue;
+    pairs.push({ a: i, b: i + 1 });
+    seen[i] = true;
+    seen[i + 1] = true;
+  }
+  return pairs;
+}
+
+// ── Merge two split bolus cards into one meal_history row ──────
+async function bfMergeSplitBolus(idxA, idxB) {
+  var ea = _bfQueue[idxA];
+  var eb = _bfQueue[idxB];
+  if (!ea || !eb) return;
+
+  // Combine: total carbs = ea.carbs_device + eb.carbs_device (the real full meal)
+  // Items from ea (first entry has the food) — eb typically has same items as ea
+  // Total insulin = ea.units + eb.units
+  var totalCarbs = (parseFloat(ea.carbs_device) || 0) + (parseFloat(eb.carbs_device) || 0);
+  var totalUnits = (parseFloat(ea.units)         || 0) + (parseFloat(eb.units)         || 0);
+
+  // Use first event's items as the food list (they should be identical or near-identical)
+  var items = (ea.items && ea.items.length) ? ea.items : (eb.items || []);
+
+  // Merge notes
+  var combinedNotes = [ea.notes, eb.notes].filter(function(n){ return n && ['bolus','correction','free','hypo','snack'].indexOf(n) < 0; }).join(' | ') || '';
+  combinedNotes = ('split bolus ' + (ea.time||'') + '+' + (eb.time||'') + (combinedNotes ? ' — ' + combinedNotes : '')).trim();
+
+  // Update ea in-memory with merged values
+  ea.carbs_device = totalCarbs;
+  ea.units        = totalUnits;
+  ea.items        = items;
+  ea.notes        = combinedNotes;
+
+  // Update the card UI before approving — re-render it
+  var cardEl = document.getElementById('bfc-' + idxA);
+  if (cardEl) {
+    var tmp = document.createElement('div');
+    tmp.innerHTML = bfCardHTML(ea, idxA);
+    cardEl.replaceWith(tmp.firstElementChild);
+  }
+
+  // Mark the second event as skipped in Supabase (it's the phantom second log)
+  try {
+    await _bfFetch('backfill_queue?t=eq.' + eb.t, {
+      method: 'PATCH', prefer: 'return=minimal',
+      body: { status: 'skipped', notes: 'merged into split bolus at t=' + ea.t }
+    });
+    eb.status = 'skipped';
+    // Remove second card from UI
+    var card2 = document.getElementById('bfc-' + idxB);
+    if (card2) {
+      card2.style.transition = 'opacity 0.2s';
+      card2.style.opacity = '0';
+      setTimeout(function(){ if(card2.parentNode) card2.remove(); }, 200);
+    }
+  } catch(e) {
+    if (typeof __debugLog === 'function') __debugLog('backfill merge skip error: ' + e.message);
+  }
+
+  if (typeof __debugLog === 'function') __debugLog('backfill: merged split bolus idxA=' + idxA + ' idxB=' + idxB + ' totalCarbs=' + totalCarbs + 'g totalU=' + totalUnits + 'U');
+
+  // Now approve the merged first event
+  await bfApprove(idxA);
+}
+window.bfMergeSplitBolus = bfMergeSplitBolus;
+
+// ── Dismiss split hint without merging ────────────────────────
+function bfDismissSplitHint(idxA, idxB) {
+  // Mark both events so they won't be paired again this session
+  if (_bfQueue[idxA]) _bfQueue[idxA]._splitDismissed = true;
+  if (_bfQueue[idxB]) _bfQueue[idxB]._splitDismissed = true;
+  // Re-render — detection will skip dismissed pairs
+  bfRenderQueue();
+}
+window.bfDismissSplitHint = bfDismissSplitHint;
 
 // ── Card HTML ──────────────────────────────────────────────────
 function bfCardHTML(ev, idx) {
@@ -1482,8 +1610,6 @@ function bfInsertTypeSelect(btn, type) {
     ].join('');
 
     setTimeout(function(){ var i=document.getElementById('bfins-name-0'); if(i)i.focus(); }, 30);
-
-  } else if (type === 'note') {
 
   } else if (type === 'note') {
     fields.innerHTML =
