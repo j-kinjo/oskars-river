@@ -6724,7 +6724,7 @@ function searchFood(q) {
             '<input id="inline-new-gi" type="number" min="0" max="100" step="1" inputmode="decimal" value="' + estGI + '"' +
               ' style="width:100%;padding:7px 10px;border-radius:8px;border:1px solid rgba(200,160,60,0.3);background:rgba(200,160,60,0.05);font-family:monospace;font-size:13px;color:rgba(220,180,80,0.9);text-align:center;outline:none;box-sizing:border-box"' +
               ' oninput="_updateInlinePreview()" onkeydown="return _numericOnly(event)">' +
-            '<div style="font-family:\'DM Mono\',monospace;font-size:6.5px;color:rgba(200,160,60,0.4);margin-top:2px">est. — ' + estGIObj.basis + '</div>' +
+            '<div id="inline-gi-basis" style="font-family:\'DM Mono\',monospace;font-size:6.5px;color:rgba(200,160,60,0.4);margin-top:2px">est. — ' + estGIObj.basis + '</div>' +
           '</div>' +
           '<div style="flex:1">' +
             '<div style="font-family:\'DM Mono\',monospace;font-size:7px;text-transform:uppercase;color:rgba(200,160,60,0.5);margin-bottom:3px;cursor:help" title="Glycaemic Load — GI × carbs in this portion ÷ 100. Combines speed and quantity. Under 10 = low impact, 10–20 = medium, 20+ = high.">' +
@@ -6753,6 +6753,10 @@ function searchFood(q) {
             'style="padding:7px 12px;border-radius:8px;border:1px solid rgba(255,255,255,0.06);background:transparent;font-family:monospace;font-size:11px;color:rgba(140,160,180,0.35);cursor:pointer;touch-action:manipulation">✕</button>' +
         '</div>' +
       '</div>';
+
+    // Fire Claude GI lookup for this food name — updates the GI field async
+    // without blocking the user; they can keep typing or override the estimate
+    suggestGI(q, document.getElementById('inline-new-gi'));
 
     // Don't auto-focus — let user keep typing in the search box if they want
     return;
@@ -9387,19 +9391,42 @@ function getHypoTreatments() {
 
 async function suggestGI(foodName, inputEl) {
   if (!foodName || foodName.length < 2) return 55;
-  if (inputEl) inputEl.placeholder = '...';
+  // Show loading state on the input and any adjacent basis div
+  if (inputEl) {
+    inputEl.placeholder = '⏳';
+    inputEl.style.opacity = '0.5';
+  }
+  var basisEl = document.getElementById('inline-gi-basis');
+  if (basisEl) basisEl.textContent = 'looking up GI…';
+
   try {
     var resp = await fetch('https://orange-surf-6f98.john-king-uk.workers.dev/claude', {
       method:'POST', headers:{'Content-Type':'application/json','anthropic-version':'2023-06-01'},
-      body: JSON.stringify({model:'claude-sonnet-4-5', max_tokens:60,
-        messages:[{role:'user', content:'Single integer only: glycaemic index for "'+foodName+'". Just the number 1-100.'}]})
+      body: JSON.stringify({model:'claude-sonnet-4-5', max_tokens:80,
+        system: 'Return ONLY a JSON object: {"gi":<integer 1-100>,"note":"<one phrase e.g. white bread equivalent>"}. If primarily fat/protein with negligible carbs return gi:5. Never return null for gi.',
+        messages:[{role:'user', content:'Glycaemic index for: "'+foodName+'"'}]})
     });
     var d = await resp.json();
-    var gi = parseInt(((d.content||[])[0]||{}).text||'55');
-    gi = Math.max(1, Math.min(100, gi||55));
-    if (inputEl) { inputEl.value = gi; inputEl.placeholder = 'GI'; }
+    var raw = ((d.content||[])[0]||{}).text || '{}';
+    var result = {};
+    try { result = JSON.parse(raw.replace(/```json|```/g,'').trim()); } catch(e) {}
+    var gi = Math.max(1, Math.min(100, parseInt(result.gi)||55));
+    if (inputEl) {
+      inputEl.value = gi;
+      inputEl.placeholder = 'GI';
+      inputEl.style.opacity = '';
+      // Colour-code the field by GI band
+      inputEl.style.color = gi >= 70 ? 'rgba(210,80,40,0.9)' : gi >= 55 ? 'rgba(220,180,80,0.9)' : 'rgba(100,220,160,0.9)';
+    }
+    if (basisEl) basisEl.textContent = result.note ? 'AI · ' + result.note : 'AI estimate';
+    // Also trigger preview update if the inline form is visible
+    if (typeof _updateInlinePreview === 'function') _updateInlinePreview();
     return gi;
-  } catch(e) { if (inputEl) inputEl.placeholder = 'GI'; return 55; }
+  } catch(e) {
+    if (inputEl) { inputEl.placeholder = 'GI'; inputEl.style.opacity = ''; }
+    if (basisEl) basisEl.textContent = 'est. from category';
+    return 55;
+  }
 }
 
 // ── TIME INPUT HELPERS ────────────────────────────────────────────────
