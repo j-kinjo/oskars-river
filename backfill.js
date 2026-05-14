@@ -89,10 +89,12 @@ async function bfLoadQueue(filter) {
   // Type filter applied client-side (notes field holds type)
   if (_bfTypeFilter && _bfTypeFilter !== 'all') {
     result = result.filter(function(ev) {
-      var t = ev.notes && ['bolus','correction','free'].indexOf(ev.notes) >= 0
+      var t = ev.notes && ['bolus','correction','free','hypo','snack'].indexOf(ev.notes) >= 0
         ? ev.notes
         : (ev.units > 0 && ev.carbs_device > 0 ? 'bolus'
-          : ev.units > 0 ? 'correction' : 'free');
+          : ev.units > 0 ? 'correction' : 'snack');
+      // 'snack' filter also catches legacy 'free' records
+      if (_bfTypeFilter === 'snack') return t === 'snack' || t === 'free';
       return t === _bfTypeFilter;
     });
   }
@@ -137,7 +139,7 @@ async function openBackfillReview() {
 
       // Type filters
       '<div style="display:flex;gap:4px">',
-        [['all','all'],['bolus','meal'],['correction','corr'],['free','free']].map(function(p) {
+        [['all','all'],['bolus','meal'],['correction','corr'],['hypo','hypo'],['snack','snack']].map(function(p) {
           var active = p[0] === 'all';
           return '<button onclick="bfSetTypeFilter(\'' + p[0] + '\')" id="bftf-' + p[0] + '" style="font-family:inherit;font-size:10px;padding:3px 9px;border:1px solid ' + (active?'#40a870':'#26262f') + ';border-radius:4px;background:' + (active?'#0d180d':'transparent') + ';color:' + (active?'#40a870':'#555') + ';cursor:pointer">' + p[1] + '</button>';
         }).join(''),
@@ -198,7 +200,7 @@ window.bfSetFilter = bfSetFilter;
 
 async function bfSetTypeFilter(f) {
   _bfTypeFilter = f;
-  ['all','bolus','correction','free'].forEach(function(t) {
+  ['all','bolus','correction','hypo','snack'].forEach(function(t) {
     var el = document.getElementById('bftf-' + t);
     if (!el) return;
     var active = t === f;
@@ -295,15 +297,18 @@ function bfCardHTML(ev, idx) {
   var pbg    = parts[0], pco = parts[1];
 
   // Event type — stored in notes field from new seeder, fallback to inferring
-  var evType = ev.notes && ['bolus','correction','free'].indexOf(ev.notes) >= 0
+  var evType = ev.notes && ['bolus','correction','free','hypo','snack'].indexOf(ev.notes) >= 0
     ? ev.notes
     : (ev.units > 0 && ev.carbs_device > 0 ? 'bolus'
       : ev.units > 0 ? 'correction' : 'free');
+  // Migrate legacy 'free' → show as 'free' (still handled below); new entries use 'hypo' or 'snack'
 
   var TYPE_LABELS = {
     bolus:      {label:'meal',        col:'#4a8fd4', bg:'#0d1820'},
     correction: {label:'correction',  col:'#b07820', bg:'#1a1008'},
-    free:       {label:'free / hypo', col:'#906090', bg:'#180d1a'},
+    hypo:       {label:'hypo',        col:'#c0392b', bg:'#1a0808'},
+    snack:      {label:'snack',       col:'#906090', bg:'#180d1a'},
+    free:       {label:'no insulin',  col:'#906090', bg:'#180d1a'},  // legacy
   };
   var tInfo = TYPE_LABELS[evType] || TYPE_LABELS.bolus;
 
@@ -350,10 +355,14 @@ function bfCardHTML(ev, idx) {
       '</div>',
     ].join('');
   } else {
-    // bolus or free — show food items
-    var itemsLabel = evType === 'free'
-      ? 'items eaten (no insulin given)' + (diffWarning ? ' ' + diffWarning : '')
-      : 'food items · carbs per item' + (diffWarning ? ' ' + diffWarning : '');
+    // bolus, hypo, snack, or legacy free — show food items
+    var isHypo  = evType === 'hypo';
+    var isSnack = evType === 'snack' || evType === 'free';
+    var itemsLabel = isHypo
+      ? '<span style="color:#c0392b">⚡ hypo treatment</span>' + (diffWarning ? ' ' + diffWarning : '')
+      : isSnack
+      ? 'snack items · no insulin given' + (diffWarning ? ' ' + diffWarning : '')
+      : 'food items · carbs per item'   + (diffWarning ? ' ' + diffWarning : '');
     leftPanel = [
       '<div style="font-size:10px;color:#555;text-transform:uppercase;letter-spacing:0.08em;margin-bottom:6px">' + itemsLabel + '</div>',
       '<div id="bfi-' + idx + '">',
@@ -370,8 +379,8 @@ function bfCardHTML(ev, idx) {
         '</div>',
       ].join('') : '',
 
-      '<textarea id="bfn-' + idx + '" placeholder="notes, unknowns, context…" onchange="bfUpdateNotes(' + idx + ',this.value)" ',
-        'style="font-family:inherit;font-size:12px;width:100%;margin-top:8px;border:1px solid #26262f;border-radius:4px;padding:5px 8px;background:#0c0c0f;color:#e8e4dc;resize:vertical;min-height:44px;box-sizing:border-box">' + (ev.notes&&['bolus','correction','free'].indexOf(ev.notes)<0?ev.notes:'') + '</textarea>',
+      '<textarea id="bfn-' + idx + '" placeholder="' + (isHypo ? 'symptoms, cause, recovery time\u2026' : 'notes, unknowns, context\u2026') + '" onchange="bfUpdateNotes(' + idx + ',this.value)" ',
+        'style="font-family:inherit;font-size:12px;width:100%;margin-top:8px;border:1px solid #26262f;border-radius:4px;padding:5px 8px;background:#0c0c0f;color:#e8e4dc;resize:vertical;min-height:44px;box-sizing:border-box">' + (ev.notes&&['bolus','correction','free','hypo','snack'].indexOf(ev.notes)<0?ev.notes:'') + '</textarea>',
 
       '<div style="display:flex;gap:8px;margin-top:8px;flex-wrap:wrap">',
         '<button onclick="bfApprove(' + idx + ')" style="font-family:inherit;font-size:12px;padding:6px 14px;border:1px solid #1d9e72;border-radius:5px;background:transparent;color:#1d9e72;cursor:pointer;font-weight:600">approve</button>',
@@ -797,13 +806,19 @@ function bfNameInput(cardIdx, itemIdx, input) {
       '</div>';
     }).join('');
 
-    // "→ alias for…" at the bottom — for when typed name should map to an existing entry
+    // "→ alias for…" at the bottom
     var aliasRow = '<div onclick="bfShowAliasFor(\'' + cardIdx + '\',\'' + itemIdx + '\',\'' + q.replace(/'/g,"\\'") + '\')" ' +
       'style="padding:5px 8px;cursor:pointer;border-top:1px solid #26262f;font-size:10px;color:#555;font-style:italic" ' +
       'onmouseover="this.style.color=\'#4a8fd4\'" onmouseout="this.style.color=\'#555\'">' +
       '→ \u201c' + q + '\u201d is an alias for\u2026</div>';
 
-    ac.innerHTML = matchHtml + aliasRow;
+    // "Add as new" at the very bottom — always present so user can add "Butter" even when "Peanut butter" matched
+    var addNewRow = '<div onclick="bfShowInlineNew(\'' + cardIdx + '\',\'' + itemIdx + '\',\'' + q.replace(/'/g,"\\'") + '\')" ' +
+      'style="padding:5px 8px;cursor:pointer;border-top:1px solid #1a1a1e;font-size:10px;color:#40a870;display:flex;align-items:center;gap:5px" ' +
+      'onmouseover="this.style.background=\'#0d180d\'" onmouseout="this.style.background=\'\'">' +
+      '<span style="font-size:11px">+</span> add \u201c' + q + '\u201d as new library item</div>';
+
+    ac.innerHTML = matchHtml + aliasRow + addNewRow;
     ac.style.top    = '100%';
     ac.style.bottom = 'auto';
     ac.style.display = 'block';
@@ -1215,9 +1230,9 @@ async function bfApprove(idx) {
   if (!ev) return;
 
   // Determine event type
-  var evType = ev.notes && ['bolus','correction','free'].indexOf(ev.notes) >= 0
+  var evType = ev.notes && ['bolus','correction','free','hypo','snack'].indexOf(ev.notes) >= 0
     ? ev.notes
-    : (ev.units > 0 && ev.carbs_device > 0 ? 'bolus' : ev.units > 0 ? 'correction' : 'free');
+    : (ev.units > 0 && ev.carbs_device > 0 ? 'bolus' : ev.units > 0 ? 'correction' : 'snack');
 
   // Pre-flight: correction cards skip item check — no food to log
   var missing = evType === 'correction' ? [] : (ev.items||[]).reduce(function(acc, item, ii) {
@@ -1453,7 +1468,8 @@ function bfExpandInsert(el, defaultDt) {
       '<div style="font-size:8px;color:#555;text-transform:uppercase;letter-spacing:0.06em;margin-bottom:4px">type</div>',
       '<div style="display:flex;gap:4px">',
         [['prick','◆ blood prick','#4a8fd4','#0d1820'],
-         ['free','free snack / pre-hypo','#906090','#180d1a'],
+         ['hypo','⚡ hypo treatment','#c0392b','#1a0808'],
+         ['snack','◇ snack','#906090','#180d1a'],
          ['split','⟂ split bolus','#40a870','#0d180d'],
          ['note','✎ note','#555','#1a1a1a']].map(function(t) {
           return '<button onclick="bfInsertTypeSelect(this,\'' + t[0] + '\')" data-itype="' + t[0] + '" ' +
@@ -1496,9 +1512,9 @@ function bfInsertTypeSelect(btn, type) {
     b.style.color = '#555';
     b.style.background = 'transparent';
   });
-  btn.style.borderColor = type==='prick'?'#4a8fd4':type==='free'?'#906090':type==='split'?'#40a870':'#555';
-  btn.style.color       = type==='prick'?'#4a8fd4':type==='free'?'#906090':type==='split'?'#40a870':'#aaa';
-  btn.style.background  = type==='prick'?'#0d1820':type==='free'?'#180d1a':type==='split'?'#0d180d':'#1a1a1a';
+  btn.style.borderColor = type==='prick'?'#4a8fd4':type==='hypo'?'#c0392b':type==='snack'?'#906090':type==='split'?'#40a870':'#555';
+  btn.style.color       = type==='prick'?'#4a8fd4':type==='hypo'?'#c0392b':type==='snack'?'#906090':type==='split'?'#40a870':'#aaa';
+  btn.style.background  = type==='prick'?'#0d1820':type==='hypo'?'#1a0808':type==='snack'?'#180d1a':type==='split'?'#0d180d':'#1a1a1a';
   btn.dataset.active = '1';
 
   var fields = document.getElementById('bfins-fields');
@@ -1525,14 +1541,26 @@ function bfInsertTypeSelect(btn, type) {
       '<div style="font-size:9px;color:#555">The prick will anchor to the nearest CGM reading on the River (±5 min). If you also enter the CGM value it will be stored alongside for calibration comparison.</div>';
     setTimeout(function(){ var i=document.getElementById('bfins-bg'); if(i)i.focus(); }, 30);
 
-  } else if (type === 'free') {
-    // Full item-row mechanism — same structure as main meal items
-    // We build a mini food-item list using the same bfItemRow UI
+  } else if (type === 'hypo') {
+    // Hypo treatment — clinical, known carb amount (e.g. Dextro tabs, juice)
     if (!window._bfInsertItems) window._bfInsertItems = [];
     window._bfInsertItems = [{name:'',carbs:null,c100:null}];
 
     fields.innerHTML =
-      '<div style="font-size:8px;color:#555;text-transform:uppercase;letter-spacing:0.06em;margin-bottom:6px">food items eaten</div>' +
+      '<div style="font-size:9px;color:#c0392b;margin-bottom:8px;padding:5px 8px;background:#1a080855;border:1px solid #c0392b33;border-radius:4px">⚡ Hypo treatment — log what was eaten to raise BG. No insulin given.</div>' +
+      '<div style="font-size:8px;color:#555;text-transform:uppercase;letter-spacing:0.06em;margin-bottom:6px">treatment items</div>' +
+      '<div id="bfins-items">' + bfInsertItemRow(0, window._bfInsertItems[0]) + '</div>' +
+      '<button onclick="bfInsertAddItem()" style="font-family:inherit;font-size:11px;color:#555;border:1px dashed #26262f;border-radius:4px;padding:3px 8px;cursor:pointer;background:none;margin-top:4px;width:100%;text-align:left">+ add item</button>';
+
+    setTimeout(function(){ var i=document.getElementById('bfins-name-0'); if(i)i.focus(); }, 30);
+
+  } else if (type === 'snack') {
+    // Snack — no insulin, discretionary or clinical but not a hypo
+    if (!window._bfInsertItems) window._bfInsertItems = [];
+    window._bfInsertItems = [{name:'',carbs:null,c100:null}];
+
+    fields.innerHTML =
+      '<div style="font-size:8px;color:#555;text-transform:uppercase;letter-spacing:0.06em;margin-bottom:6px">snack items — no insulin given</div>' +
       '<div id="bfins-items">' + bfInsertItemRow(0, window._bfInsertItems[0]) + '</div>' +
       '<button onclick="bfInsertAddItem()" style="font-family:inherit;font-size:11px;color:#555;border:1px dashed #26262f;border-radius:4px;padding:3px 8px;cursor:pointer;background:none;margin-top:4px;width:100%;text-align:left">+ add item</button>';
 
@@ -1636,18 +1664,18 @@ async function bfSaveInsert() {
         _savePricks();
       }
 
-    } else if (type === 'free') {
+    } else if (type === 'hypo' || type === 'snack') {
       var freeItems = (window._bfInsertItems || []).filter(function(it){ return (it.name||'').trim() || it.carbs; });
       var totalCarbs = freeItems.reduce(function(s,it){ return s+(parseFloat(it.carbs)||0); }, 0);
 
       // Sync any new foods to the library
       _bfSyncNewFoodsToLibrary(freeItems);
 
-      // Write to events as approved free snack (matches main app food log format)
+      // Write to events — note field identifies the clinical context
       await _sbFetch('events?on_conflict=t', {
         method: 'POST', prefer: 'resolution=merge-duplicates,return=minimal',
         body: [{ t: t, c: totalCarbs, u: 0, gi: null,
-                 note: 'carbs',
+                 note: type === 'hypo' ? 'hypo_treatment' : 'carbs',
                  items: freeItems.map(function(it){ return {name:it.name||'',carbs:it.carbs,gi:it.gi||null}; }),
                  device_id: typeof _deviceId !== 'undefined' ? _deviceId : 'backfill',
                  updated_at: new Date().toISOString() }],
@@ -1705,9 +1733,9 @@ async function bfSaveInsert() {
     // Replace form with slim confirmed row
     var pad = function(n){ return String(n).padStart(2,'0'); };
     var timeStr = pad(dt.getHours()) + ':' + pad(dt.getMinutes());
-    var typeLabels = {prick: '◆ prick', free: 'free snack', split: '⟂ split bolus', note: '✎ note'};
-    var typeDetail = (type === 'free' || type === 'split') && (window._bfInsertItems||[]).length
-      ? type + ' · ' + window._bfInsertItems.filter(function(it){return it.name;}).map(function(it){return it.name;}).join(', ')
+    var typeLabels = {prick: '◆ prick', hypo: '⚡ hypo', snack: 'snack', split: '⟂ split bolus', note: '✎ note'};
+    var typeDetail = (['hypo','snack','split'].indexOf(type) >= 0) && (window._bfInsertItems||[]).length
+      ? (typeLabels[type]||type) + ' · ' + window._bfInsertItems.filter(function(it){return it.name;}).map(function(it){return it.name;}).join(', ')
       : (typeLabels[type]||type);
     var confirmed = document.createElement('div');
     confirmed.style.cssText = 'display:flex;align-items:center;gap:8px;padding:3px 4px;margin:2px 0;border-left:2px solid #1d9e72;background:rgba(29,158,114,0.05);border-radius:0 4px 4px 0';
