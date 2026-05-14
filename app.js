@@ -12499,69 +12499,200 @@ async function openTherapyHistory() {
   el.id = 'therapy-hist-overlay';
   el.style.cssText = 'position:fixed;inset:0;z-index:80;background:rgba(3,5,20,0.97);' +
     'backdrop-filter:blur(16px);overflow-y:auto;display:flex;flex-direction:column;' +
-    'align-items:center;padding:48px 20px 60px;font-family:\'DM Mono\',monospace';
-  el.innerHTML = '<div style="max-width:360px;width:100%">' +
-    '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:20px">' +
+    'align-items:center;padding:env(safe-area-inset-top,48px) 20px 60px;font-family:\'DM Mono\',monospace';
+  el.innerHTML = '<div style="max-width:380px;width:100%">' +
+    '<div style="display:flex;justify-content:space-between;align-items:center;padding:20px 0 16px">' +
       '<div style="font-family:\'Fraunces\',serif;font-style:italic;font-weight:200;font-size:20px;' +
         'color:rgba(180,220,200,0.8)">therapy history</div>' +
       '<button onclick="document.getElementById(\'therapy-hist-overlay\').remove()" ' +
         'style="background:none;border:none;cursor:pointer;font-size:22px;color:rgba(200,220,240,0.4)">×</button>' +
     '</div>' +
-    '<div style="font-size:10px;color:rgba(140,160,180,0.4);text-align:center">loading…</div>' +
+    '<div style="font-size:10px;color:rgba(140,160,180,0.4);text-align:center;padding:20px 0">loading…</div>' +
     '</div>';
   document.body.appendChild(el);
 
   try {
+    // Fetch most-recent-first; we reverse to do oldest→newest for diffing, then re-reverse for display
     var rows = await _sbFetch(
-      'therapy_history?order=t.desc&limit=40&select=t,basal_dose,basal_type,bolus_type,basal_time,hypo_threshold,hypo_carbs,ratios,dia,changed_by',
+      'therapy_history?order=t.asc&limit=60&select=t,basal_dose,basal_type,bolus_type,basal_time,hypo_threshold,hypo_carbs,ratios,dia,changed_by',
       {}
     );
     if (!rows || !rows.length) {
-      el.querySelector('div').innerHTML += '<div style="font-size:11px;color:rgba(200,220,240,0.3);text-align:center">no history yet</div>';
+      el.querySelector('div').innerHTML = el.querySelector('div').innerHTML.replace(
+        'loading…', 'no history yet');
       return;
     }
-    var html = '<div style="max-width:360px;width:100%">' +
-      '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:20px">' +
+
+    // ── diff helpers ─────────────────────────────────────────────────────────
+    function _diffRows(prev, curr) {
+      // Returns array of {label, from, to} for every field that changed
+      var diffs = [];
+      function chk(label, a, b) {
+        if (a === null || a === undefined) a = '—';
+        if (b === null || b === undefined) b = '—';
+        if (String(a) !== String(b)) diffs.push({label: label, from: String(a), to: String(b)});
+      }
+      if (!prev) return null; // first row — no diff, show as baseline
+
+      chk('basal dose', prev.basal_dose, curr.basal_dose);
+      chk('basal type', prev.basal_type, curr.basal_type);
+      chk('basal time', prev.basal_time, curr.basal_time);
+      chk('bolus type', prev.bolus_type, curr.bolus_type);
+      chk('hypo threshold', prev.hypo_threshold, curr.hypo_threshold);
+      chk('hypo treatment', prev.hypo_carbs, curr.hypo_carbs);
+      chk('DIA', prev.dia, curr.dia);
+
+      // Ratio diffs — match segments by index (same structure assumed)
+      var pr = prev.ratios || [], cr = curr.ratios || [];
+      var len = Math.max(pr.length, cr.length);
+      for (var i = 0; i < len; i++) {
+        var ps = pr[i], cs = cr[i];
+        if (!ps && cs) { diffs.push({label: (cs.start||cs.period||'seg '+i), from: '—', to: 'added'}); continue; }
+        if (ps && !cs) { diffs.push({label: (ps.start||ps.period||'seg '+i), from: 'present', to: 'removed'}); continue; }
+        var segLabel = (cs.start && cs.end) ? cs.start + '–' + cs.end : (cs.period || 'seg ' + i);
+        if (String(ps.ic) !== String(cs.ic))  diffs.push({label: segLabel + ' I:C', from: '1:'+ps.ic, to: '1:'+cs.ic});
+        if (String(ps.isf) !== String(cs.isf)) diffs.push({label: segLabel + ' ISF', from: String(ps.isf), to: String(cs.isf)});
+        if (String(ps.start) !== String(cs.start) || String(ps.end) !== String(cs.end))
+          diffs.push({label: 'seg ' + i + ' times', from: (ps.start||'')+'–'+(ps.end||''), to: (cs.start||'')+'–'+(cs.end||'')});
+      }
+      return diffs;
+    }
+
+    function _whoLabel(changed_by, isMe) {
+      if (changed_by === 'backfill') return { text: 'backfill import', col: 'rgba(160,140,200,0.5)' };
+      if (!changed_by)              return { text: 'unknown',         col: 'rgba(140,160,180,0.3)' };
+      var shortId = changed_by.replace('dev_','').slice(0,8);
+      if (isMe) return { text: 'this device (' + shortId + ')', col: 'rgba(100,200,160,0.6)' };
+      return       { text: shortId,                              col: 'rgba(140,180,220,0.5)' };
+    }
+
+    // Build display newest-first; diffs reference the row that came before
+    var displayRows = rows.slice().reverse(); // newest first
+    var srcRows     = rows;                   // oldest first — index i in displayRows = srcRows[rows.length-1-i]
+
+    var html = '<div style="max-width:380px;width:100%">' +
+      '<div style="display:flex;justify-content:space-between;align-items:center;padding:20px 0 4px">' +
         '<div style="font-family:\'Fraunces\',serif;font-style:italic;font-weight:200;font-size:20px;' +
           'color:rgba(180,220,200,0.8)">therapy history</div>' +
         '<button onclick="document.getElementById(\'therapy-hist-overlay\').remove()" ' +
           'style="background:none;border:none;cursor:pointer;font-size:22px;color:rgba(200,220,240,0.4)">×</button>' +
+      '</div>' +
+      '<div style="font-size:9px;color:rgba(140,160,180,0.35);margin-bottom:18px;letter-spacing:0.5px">' +
+        displayRows.length + ' entries · newest first · highlighted = changed from previous' +
       '</div>';
 
-    rows.forEach(function(r) {
-      var d = new Date(r.t);
-      var dateStr = d.toLocaleDateString('en-GB',{day:'numeric',month:'short',year:'numeric'}) +
-        ' ' + d.toLocaleTimeString('en-GB',{hour:'2-digit',minute:'2-digit'});
-      var ratioList = (r.ratios||[]).map(function(seg) {
-        var label = (seg.start && seg.end) ? seg.start + '–' + seg.end : (seg.period||'');
-        return '<div style="display:flex;justify-content:space-between;font-size:9px;' +
-          'color:rgba(200,220,240,0.5);padding:2px 0">' +
-          '<span>' + label + '</span>' +
-          '<span style="color:rgba(255,150,50,0.7)">1:' + (seg.ic||'—') + '</span>' +
-          '<span style="color:rgba(80,140,220,0.6)">ISF ' + (seg.isf||'—') + '</span>' +
-          '</div>';
-      }).join('');
-      var who = r.changed_by === 'backfill' ? 'backfill import'
-        : r.changed_by ? 'device ' + r.changed_by.slice(0,8) : 'unknown';
+    displayRows.forEach(function(r, di) {
+      var srcIdx  = srcRows.length - 1 - di;
+      var prev    = srcIdx > 0 ? srcRows[srcIdx - 1] : null;
+      var diffs   = _diffRows(prev, r);
+      var isFirst = !prev;
+      var isMe    = r.changed_by === _deviceId;
+      var who     = _whoLabel(r.changed_by, isMe);
 
-      html += '<div style="border:1px solid rgba(255,255,255,0.07);border-radius:10px;' +
-        'padding:12px 14px;margin-bottom:10px;background:rgba(255,255,255,0.02)">' +
-        '<div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:8px">' +
-          '<span style="font-size:10px;color:rgba(180,220,200,0.7)">' + dateStr + '</span>' +
-          '<span style="font-size:9px;color:rgba(140,160,180,0.4)">' + who + '</span>' +
+      var d = new Date(r.t);
+      var dateStr = d.toLocaleDateString('en-GB',{day:'numeric',month:'short',year:'numeric'});
+      var timeStr = d.toLocaleTimeString('en-GB',{hour:'2-digit',minute:'2-digit'});
+
+      // Card border: amber if has diffs (user-initiated change), muted if backfill/baseline
+      var isBackfill = r.changed_by === 'backfill';
+      var hasDiffs   = diffs && diffs.length > 0;
+      var borderCol  = isBackfill  ? 'rgba(160,140,200,0.15)'
+                     : hasDiffs    ? 'rgba(255,180,60,0.25)'
+                     : 'rgba(255,255,255,0.06)';
+      var bgCol      = isBackfill  ? 'rgba(160,140,200,0.03)'
+                     : hasDiffs    ? 'rgba(255,180,60,0.04)'
+                     : 'rgba(255,255,255,0.02)';
+
+      html += '<div style="border:1px solid ' + borderCol + ';border-radius:10px;' +
+        'padding:12px 14px;margin-bottom:10px;background:' + bgCol + '">';
+
+      // ── card header ────────────────────────────────────────────────────────
+      html += '<div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:6px">' +
+        '<div>' +
+          '<span style="font-size:11px;color:rgba(180,220,200,0.8);font-weight:500">' + dateStr + '</span>' +
+          '<span style="font-size:10px;color:rgba(140,180,160,0.5);margin-left:6px">' + timeStr + '</span>' +
         '</div>' +
-        '<div style="font-size:9px;color:rgba(140,180,220,0.5);margin-bottom:6px">' +
-          (r.basal_type||'') + (r.basal_dose ? ' · ' + r.basal_dose + 'U' : '') +
-          (r.basal_time ? ' · ' + r.basal_time : '') +
-          (r.bolus_type ? ' · ' + r.bolus_type : '') +
-        '</div>' +
-        ratioList +
-        '</div>';
+        '<span style="font-size:9px;color:' + who.col + ';text-align:right">' + who.text + '</span>' +
+      '</div>';
+
+      // ── baseline vs diff summary ───────────────────────────────────────────
+      // Helper: render full ratio table (used for first row and expand toggles)
+      function _fullRatioTable(ratios, opacity) {
+        var op = opacity || '0.45';
+        return (ratios||[]).map(function(seg) {
+          var label = (seg.start && seg.end) ? seg.start + '–' + seg.end : (seg.period||'');
+          return '<div style="display:grid;grid-template-columns:100px 1fr 1fr;' +
+            'font-size:9px;color:rgba(200,220,240,' + op + ');padding:2px 0;gap:4px">' +
+            '<span>' + label + '</span>' +
+            '<span style="color:rgba(255,150,50,0.6)">I:C 1:' + (seg.ic||'—') + '</span>' +
+            '<span style="color:rgba(80,140,220,0.55)">ISF ' + (seg.isf||'—') + '</span>' +
+            '</div>';
+        }).join('');
+      }
+
+      // Helper: render diff lines
+      function _diffLines(diffs) {
+        return diffs.map(function(diff) {
+          return '<div style="display:flex;align-items:center;gap:6px;' +
+            'padding:4px 8px;margin-bottom:3px;border-radius:6px;' +
+            'background:rgba(255,180,60,0.06);border:1px solid rgba(255,180,60,0.12)">' +
+            '<span style="font-size:9px;color:rgba(200,220,240,0.4);min-width:110px;flex-shrink:0">' +
+              diff.label + '</span>' +
+            '<span style="font-size:10px;color:rgba(255,120,80,0.7);text-decoration:line-through;' +
+              'white-space:nowrap">' + diff.from + '</span>' +
+            '<span style="font-size:10px;color:rgba(140,160,180,0.4);flex-shrink:0">→</span>' +
+            '<span style="font-size:10px;color:rgba(100,200,150,0.9);font-weight:500;' +
+              'white-space:nowrap">' + diff.to + '</span>' +
+            '</div>';
+        }).join('');
+      }
+
+      var toggleId = 'th-expand-' + di;
+
+      if (isFirst) {
+        // Very first (oldest) row — always show full table as baseline
+        html += '<div style="font-size:9px;color:rgba(100,180,140,0.5);margin-bottom:6px">baseline snapshot</div>';
+        html += '<div style="font-size:9px;color:rgba(140,180,220,0.5);margin-bottom:6px">' +
+          (r.basal_type||'') + (r.basal_dose ? ' · ' + r.basal_dose + 'U/day' : '') +
+          (r.basal_time ? ' · inj ' + r.basal_time : '') +
+          (r.bolus_type ? ' · ' + r.bolus_type : '') + '</div>';
+        html += _fullRatioTable(r.ratios);
+
+      } else if (hasDiffs) {
+        // Has changes — show diffs, with expand toggle for full table
+        html += '<div style="margin-top:2px">' + _diffLines(diffs) + '</div>';
+        // Always offer the full table as a toggle below the diffs
+        html += '<button onclick="var s=document.getElementById(\''+toggleId+'\');' +
+          's.style.display=s.style.display===\'none\'?\'block\':\'none\';' +
+          'this.textContent=s.style.display===\'none\'?\'show full settings ▾\':\'hide ▴\'" ' +
+          'style="background:none;border:none;cursor:pointer;font-size:9px;' +
+          'color:rgba(140,160,180,0.3);padding:2px 0;margin-top:4px">show full settings ▾</button>';
+        html += '<div id="' + toggleId + '" style="display:none;margin-top:6px;' +
+          'padding-top:6px;border-top:1px solid rgba(255,255,255,0.05)">' +
+          _fullRatioTable(r.ratios) + '</div>';
+
+      } else {
+        // No changes from previous (e.g. re-save without edits)
+        html += '<div style="font-size:9px;color:rgba(140,160,180,0.3);font-style:italic">no changes from previous</div>';
+        html += '<button onclick="var s=document.getElementById(\''+toggleId+'\');' +
+          's.style.display=s.style.display===\'none\'?\'block\':\'none\';' +
+          'this.textContent=s.style.display===\'none\'?\'show settings ▾\':\'hide ▴\'" ' +
+          'style="background:none;border:none;cursor:pointer;font-size:9px;' +
+          'color:rgba(140,160,180,0.25);padding:2px 0;margin-top:4px">show settings ▾</button>';
+        html += '<div id="' + toggleId + '" style="display:none;margin-top:6px">' +
+          _fullRatioTable(r.ratios) + '</div>';
+      }
+
+      html += '</div>'; // end card
     });
+
     html += '</div>';
     el.innerHTML = html;
   } catch(e) {
-    el.querySelector('div div:last-child').textContent = 'failed to load: ' + e.message;
+    console.error('[therapyHistory]', e);
+    var inner = el.querySelector('div');
+    if (inner) inner.innerHTML = inner.innerHTML.replace('loading…',
+      '<span style="color:rgba(255,100,80,0.7)">failed to load: ' + e.message + '</span>');
   }
 }
 
