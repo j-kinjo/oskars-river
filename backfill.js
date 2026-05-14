@@ -1130,6 +1130,15 @@ async function bfApprove(idx) {
       ? items.reduce(function(s,i){ return s+((i.carbs||0)*(i.gi||50)); }, 0) / totalCarbs
       : null;
 
+    // Look up historical therapy settings for this event's timestamp
+    var historicalTherapy = null;
+    if (typeof getTherapyAt === 'function') {
+      try { historicalTherapy = await getTherapyAt(ev.t); } catch(e) {}
+    }
+    var histRatios = historicalTherapy && historicalTherapy.ratios || null;
+    var evIC  = typeof getIC  === 'function' ? getIC(ev.t,  histRatios) : null;
+    var evISF = typeof getISF === 'function' ? getISF(ev.t, histRatios) : null;
+
     var evRow = {
       t:         ev.t,
       c:         totalCarbs || ev.carbs_device,
@@ -1138,6 +1147,8 @@ async function bfApprove(idx) {
       note:      'carbs',
       items:     items,
       pre_bg:    ev.pre_bg,
+      ic_ratio:  evIC  ? +evIC.toFixed(2)  : null,
+      isf:       evISF ? +evISF.toFixed(2) : null,
       logged_by: 'backfill',
       device_id: ev.src || 'backfill'
     };
