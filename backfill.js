@@ -346,18 +346,28 @@ async function bfMergeSplitBolus(idxA, idxB) {
   var eb = _bfQueue[idxB];
   if (!ea || !eb) return;
 
-  // Combine: total carbs = ea.carbs_device + eb.carbs_device (the real full meal)
-  // Items from ea (first entry has the food) — eb typically has same items as ea
-  // Total insulin = ea.units + eb.units
+  var u1         = parseFloat(ea.units) || 0;
+  var u2         = parseFloat(eb.units) || 0;
   var totalCarbs = (parseFloat(ea.carbs_device) || 0) + (parseFloat(eb.carbs_device) || 0);
-  var totalUnits = (parseFloat(ea.units)         || 0) + (parseFloat(eb.units)         || 0);
+  var totalUnits = u1 + u2;
+  var delayMins  = Math.round(Math.abs((eb.t || 0) - (ea.t || 0)) / 60000);
 
-  // Use first event's items as the food list (they should be identical or near-identical)
+  // Use first event's items as the food list
   var items = (ea.items && ea.items.length) ? ea.items : (eb.items || []);
 
-  // Merge notes
-  var combinedNotes = [ea.notes, eb.notes].filter(function(n){ return n && ['bolus','correction','free','hypo','snack'].indexOf(n) < 0; }).join(' | ') || '';
-  combinedNotes = ('split bolus ' + (ea.time||'') + '+' + (eb.time||'') + (combinedNotes ? ' — ' + combinedNotes : '')).trim();
+  // Preserve non-type notes from both sides
+  var combinedNotes = [ea.notes, eb.notes]
+    .filter(function(n){ return n && ['bolus','correction','free','hypo','snack'].indexOf(n) < 0; })
+    .join(' | ') || '';
+
+  // Store split bolus metadata on the first event — used by bfApprove and bfCardHTML
+  ea.split_bolus = {
+    t2:         eb.t,
+    time2:      eb.time || '',
+    u1:         u1,
+    u2:         u2,
+    delay_mins: delayMins,
+  };
 
   // Update ea in-memory with merged values
   ea.carbs_device = totalCarbs;
@@ -365,36 +375,42 @@ async function bfMergeSplitBolus(idxA, idxB) {
   ea.items        = items;
   ea.notes        = combinedNotes;
 
-  // Update the card UI before approving — re-render it
-  var cardEl = document.getElementById('bfc-' + idxA);
-  if (cardEl) {
-    var tmp = document.createElement('div');
-    tmp.innerHTML = bfCardHTML(ea, idxA);
-    cardEl.replaceWith(tmp.firstElementChild);
-  }
-
-  // Mark the second event as skipped in Supabase (it's the phantom second log)
+  // Mark the second event as skipped in Supabase immediately
   try {
     await _bfFetch('backfill_queue?t=eq.' + eb.t, {
       method: 'PATCH', prefer: 'return=minimal',
       body: { status: 'skipped', notes: 'merged into split bolus at t=' + ea.t }
     });
     eb.status = 'skipped';
-    // Remove second card from UI
+    // Fade and remove second card
     var card2 = document.getElementById('bfc-' + idxB);
     if (card2) {
       card2.style.transition = 'opacity 0.2s';
       card2.style.opacity = '0';
       setTimeout(function(){ if(card2.parentNode) card2.remove(); }, 200);
     }
+    // Also remove the split banner between them
+    var banner = document.getElementById('bfc-' + idxA) &&
+      document.getElementById('bfc-' + idxA).nextElementSibling;
+    if (banner && banner.style && banner.style.background === '#0d180d') banner.remove();
   } catch(e) {
     if (typeof __debugLog === 'function') __debugLog('backfill merge skip error: ' + e.message);
   }
 
-  if (typeof __debugLog === 'function') __debugLog('backfill: merged split bolus idxA=' + idxA + ' idxB=' + idxB + ' totalCarbs=' + totalCarbs + 'g totalU=' + totalUnits + 'U');
+  // Re-render first card with split_bolus metadata (shows the ⟂ pill, updated totals)
+  var cardEl = document.getElementById('bfc-' + idxA);
+  if (cardEl) {
+    var tmp = document.createElement('div');
+    tmp.innerHTML = bfCardHTML(ea, idxA);
+    var newCard = tmp.firstElementChild;
+    cardEl.replaceWith(newCard);
+    // Auto-expand so reviewer can add food items immediately
+    setTimeout(function(){
+      bfToggle(idxA);
+    }, 50);
+  }
 
-  // Now approve the merged first event
-  await bfApprove(idxA);
+  if (typeof __debugLog === 'function') __debugLog('backfill: merged split bolus ' + ea.time + '+' + eb.time + ' ' + totalCarbs + 'g ' + totalUnits + 'U delay=' + delayMins + 'm');
 }
 window.bfMergeSplitBolus = bfMergeSplitBolus;
 
@@ -518,14 +534,29 @@ function bfCardHTML(ev, idx) {
     ].join('');
   }
 
+  // Split bolus pill — shown when ev.split_bolus is set (after merge)
+  var splitPill = ev.split_bolus
+    ? '<span title="Split bolus: ' + ev.split_bolus.u1 + 'U at ' + (ev.time||'') + ' + ' + ev.split_bolus.u2 + 'U at ' + ev.split_bolus.time2 + '" ' +
+        'style="font-size:9px;font-weight:700;padding:2px 7px;border-radius:3px;background:#0d180d;color:#40a870;border:1px solid #40a87055;letter-spacing:0.04em;white-space:nowrap">' +
+        '⟂ +' + ev.split_bolus.delay_mins + 'm' +
+      '</span>'
+    : '';
+
+  // Split bolus dose rows for the right-panel meta grid
+  var splitMetaRows = ev.split_bolus ? [
+    ['1st dose', ev.split_bolus.u1 + 'U @ ' + (ev.time||'—')],
+    ['2nd dose', ev.split_bolus.u2 + 'U @ ' + ev.split_bolus.time2 + ' (+' + ev.split_bolus.delay_mins + 'm)'],
+  ] : [];
+
   return [
-    '<div id="bfc-' + idx + '" style="background:#141418;border:1px solid #26262f;border-radius:8px;margin-bottom:10px;overflow:hidden;' + borderLeft + '">',
+    '<div id="bfc-' + idx + '" style="background:#141418;border:1px solid ' + (ev.split_bolus ? '#40a87044' : '#26262f') + ';border-radius:8px;margin-bottom:10px;overflow:hidden;' + borderLeft + '">',
 
       // Header — tap to expand
       '<div onclick="bfToggle(' + idx + ')" style="display:flex;align-items:center;gap:8px;padding:10px 12px;cursor:pointer">',
         '<span style="font-size:11px;color:#555;min-width:76px">' + ev.date + '</span>',
         '<span style="font-size:11px;color:#555;min-width:40px">' + (ev.time||'?') + '</span>',
         '<span style="font-size:9px;font-weight:700;padding:2px 6px;border-radius:3px;background:' + tInfo.bg + ';color:' + tInfo.col + ';min-width:52px;text-align:center;text-transform:uppercase;letter-spacing:0.05em">' + tInfo.label + '</span>',
+        splitPill,
         // Period selector — dropdown select; hide for correction
         evType !== 'correction' ? (function(){
           var selOpts = _BF_PERIODS_LIST.map(function(p){
@@ -559,10 +590,10 @@ function bfCardHTML(ev, idx) {
                 ['peak at',ev.peak_mins ? '+'+ev.peak_mins+'m' : '—'],
                 ['I:C',    ev.ic_ratio  ? '1:'+ev.ic_ratio    : '—'],
                 ['src',    ev.src       || '—'],
-              ].map(function(row) {
+              ].concat(splitMetaRows).map(function(row) {
                 return '<div style="display:flex;justify-content:space-between;padding:2px 0;border-bottom:1px solid #1a1a1e;font-size:11px">' +
                   '<span style="color:#555">' + row[0] + '</span>' +
-                  '<span style="font-weight:500;color:#e8e4dc">' + row[1] + '</span></div>';
+                  '<span style="font-weight:500;color:' + (row[2]||'#e8e4dc') + '">' + row[1] + '</span></div>';
               }).join(''),
             '</div>',
           '</div>',
@@ -1296,17 +1327,18 @@ async function bfApprove(idx) {
     var evISF = typeof getISF === 'function' ? getISF(ev.t, histRatios) : null;
 
     var evRow = {
-      t:         ev.t,
-      c:         totalCarbs || ev.carbs_device,
-      u:         ev.units,
-      gi:        weightedGI ? +weightedGI.toFixed(1) : null,
-      note:      'carbs',
-      items:     items,
-      pre_bg:    ev.pre_bg,
-      ic_ratio:  evIC  ? +evIC.toFixed(2)  : null,
-      isf:       evISF ? +evISF.toFixed(2) : null,
-      logged_by: 'backfill',
-      device_id: ev.src || 'backfill'
+      t:           ev.t,
+      c:           totalCarbs || ev.carbs_device,
+      u:           ev.units,
+      gi:          weightedGI ? +weightedGI.toFixed(1) : null,
+      note:        ev.split_bolus ? 'split_bolus_1st' : 'carbs',
+      items:       items,
+      pre_bg:      ev.pre_bg,
+      ic_ratio:    evIC  ? +evIC.toFixed(2)  : null,
+      isf:         evISF ? +evISF.toFixed(2) : null,
+      logged_by:   'backfill',
+      device_id:   ev.src || 'backfill',
+      split_bolus: ev.split_bolus || null,
     };
 
     var cgm     = ev.cgm_curve || [];
@@ -1325,6 +1357,7 @@ async function bfApprove(idx) {
       peak_t:       peakPt ? ev.t + peakPt.m*60000 : null,
       actual_curve: cgm.map(function(p){ return {mins:p.m, actual_bg:p.bg}; }),
       source:       'backfill',
+      split_bolus:  ev.split_bolus || null,
     };
 
     // POST to worker
@@ -1354,7 +1387,8 @@ async function bfApprove(idx) {
           reviewed_by: typeof DEVICE_ID !== 'undefined' ? DEVICE_ID : (typeof _deviceId !== 'undefined' ? _deviceId : 'unknown'),
           items:       ev.items,
           wait_mins:   ev.wait_mins,
-          notes:       ev.notes
+          notes:       ev.notes,
+          split_bolus: ev.split_bolus || null,
         }
       }
     );
