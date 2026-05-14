@@ -389,8 +389,16 @@ function bfCardHTML(ev, idx) {
         '<span style="font-size:11px;color:#555;min-width:76px">' + ev.date + '</span>',
         '<span style="font-size:11px;color:#555;min-width:40px">' + (ev.time||'?') + '</span>',
         '<span style="font-size:9px;font-weight:700;padding:2px 6px;border-radius:3px;background:' + tInfo.bg + ';color:' + tInfo.col + ';min-width:52px;text-align:center;text-transform:uppercase;letter-spacing:0.05em">' + tInfo.label + '</span>',
-        // Period badge — editable, tap to cycle; hide for correction
-        evType !== 'correction' ? '<span id="bfperiod-' + idx + '" onclick="bfCyclePeriod(' + idx + ')" title="tap to change meal type" style="font-size:9px;font-weight:600;padding:2px 6px;border-radius:3px;background:' + pbg + ';color:' + pco + ';text-transform:uppercase;letter-spacing:0.04em;cursor:pointer;user-select:none">' + (ev.period||'?') + '</span>' : '',
+        // Period selector — dropdown select; hide for correction
+        evType !== 'correction' ? (function(){
+          var selOpts = _BF_PERIODS_LIST.map(function(p){
+            var s = _BF_PERIOD_STYLES[p] || {bg:'#1a1a1a',col:'#666'};
+            return '<option value="' + p + '"' + (p===(ev.period||'Unknown')?' selected':'') + '>' + p + '</option>';
+          }).join('');
+          return '<select id="bfperiod-' + idx + '" onchange="bfSetPeriod(' + idx + ',this.value)" onclick="event.stopPropagation()" ' +
+            'style="font-family:inherit;font-size:9px;font-weight:600;padding:2px 4px;border-radius:3px;background:' + pbg + ';color:' + pco + ';border:1px solid ' + pco + '33;text-transform:uppercase;letter-spacing:0.04em;cursor:pointer;outline:none;appearance:none;-webkit-appearance:none;min-width:80px">' +
+            selOpts + '</select>';
+        })() : '',
         headerCarbs,
         headerUnits,
         ev.peak_bg ? '<span style="font-size:11px;color:' + (ev.peak_bg>12?'#c0392b':ev.peak_bg>10?'#b07820':'#1d9e72') + '">↑' + ev.peak_bg + ' +' + ev.peak_mins + 'm</span>' : '',
@@ -474,7 +482,9 @@ function bfItemRow(cardIdx, itemIdx, item) {
   if (name && !inLibrary) {
     var enc = encodeURIComponent(name);
     subRow = '<div style="display:flex;align-items:center;gap:8px;padding:0 0 4px 4px">' +
-      '<span style="font-size:9px;color:#40a870">+lib</span>' +
+      '<span onclick="bfOpenAddToLib(\'' + cardIdx + '\',\'' + itemIdx + '\',decodeURIComponent(\'' + enc + '\'))" ' +
+        'style="font-size:9px;color:#40a870;cursor:pointer;text-decoration:underline;text-decoration-color:#40a87055;white-space:nowrap" ' +
+        'onmouseover="this.style.color=\'#5ed09a\'" onmouseout="this.style.color=\'#40a870\'">+ add to library</span>' +
       '<span style="font-size:9px;color:#333">\u00b7</span>' +
       '<span onclick="bfShowAliasFor(\'' + cardIdx + '\',\'' + itemIdx + '\',decodeURIComponent(\'' + enc + '\'))" ' +
         'style="font-size:9px;color:#555;cursor:pointer;font-style:italic;text-decoration:underline;text-decoration-color:#333" ' +
@@ -637,7 +647,7 @@ function bfToggle(idx) {
 }
 window.bfToggle = bfToggle;
 
-// ── Cycle period / meal type label (editable per-card) ────────
+// ── Period constants ───────────────────────────────────────────
 var _BF_PERIODS_LIST = ['Breakfast','Morning snack','Lunch','Afternoon snack','Dinner','Evening snack','Bedtime snack','Overnight','Unknown'];
 var _BF_PERIOD_STYLES = {
   'Breakfast':        {bg:'#0d1820',col:'#4a8fd4'},
@@ -650,27 +660,26 @@ var _BF_PERIOD_STYLES = {
   'Overnight':        {bg:'#0d0d1a',col:'#6060a0'},
   'Unknown':          {bg:'#1a1a1a',col:'#666'},
 };
-function bfCyclePeriod(idx) {
+
+// ── Set period / meal type label from dropdown ─────────────────
+function bfSetPeriod(idx, period) {
   var ev = _bfQueue[idx];
   if (!ev) return;
-  var current = ev.period || 'Unknown';
-  var i = _BF_PERIODS_LIST.indexOf(current);
-  var next = _BF_PERIODS_LIST[(i + 1) % _BF_PERIODS_LIST.length];
-  ev.period = next;
-  // Update just the badge on this card — no full re-render
-  var badge = document.getElementById('bfperiod-' + idx);
-  if (badge) {
-    var style = _BF_PERIOD_STYLES[next] || _BF_PERIOD_STYLES.Unknown;
-    badge.textContent = next;
-    badge.style.background = style.bg;
-    badge.style.color = style.col;
+  ev.period = period;
+  // Update select styling to match chosen period colour
+  var sel = document.getElementById('bfperiod-' + idx);
+  if (sel) {
+    var style = _BF_PERIOD_STYLES[period] || _BF_PERIOD_STYLES.Unknown;
+    sel.style.background = style.bg;
+    sel.style.color = style.col;
+    sel.style.borderColor = style.col + '33';
   }
   // Persist immediately — PATCH backfill_queue
   _bfFetch('backfill_queue?t=eq.' + ev.t, {
-    method: 'PATCH', prefer: 'return=minimal', body: { period: next }
+    method: 'PATCH', prefer: 'return=minimal', body: { period: period }
   }).catch(function(e){ if (typeof __debugLog === 'function') __debugLog('backfill period update error: ' + e.message); });
 }
-window.bfCyclePeriod = bfCyclePeriod;
+window.bfSetPeriod = bfSetPeriod;
 
 // ── CGM sparkline ──────────────────────────────────────────────
 function bfDrawCGM(idx, cgm) {
@@ -926,6 +935,19 @@ function bfShowInlineNew(cardIdx, itemIdx, q, ac) {
   }, 30);
 }
 window.bfShowInlineNew = bfShowInlineNew;
+
+// ── Open "add to library" inline form from the sub-row link ───
+// Reuses bfShowInlineNew — shows the c100/GI form anchored to the item's ac div.
+// The ac div may be hidden; ensure it's visible and positioned before calling.
+function bfOpenAddToLib(cardIdx, itemIdx, name) {
+  // Make sure item name is saved
+  bfUpdateItem(cardIdx, itemIdx, 'name', name);
+  var ac = document.getElementById('bfac-' + cardIdx + '-' + itemIdx);
+  if (!ac) return;
+  // Show the inline new-food form (same as no-match debounce path)
+  bfShowInlineNew(cardIdx, itemIdx, name, ac);
+}
+window.bfOpenAddToLib = bfOpenAddToLib;
 
 function bfInlineMode(cardIdx, itemIdx, mode) {
   _bfInlineModes[cardIdx + '-' + itemIdx] = mode;
@@ -1432,6 +1454,7 @@ function bfExpandInsert(el, defaultDt) {
       '<div style="display:flex;gap:4px">',
         [['prick','◆ blood prick','#4a8fd4','#0d1820'],
          ['free','free snack / pre-hypo','#906090','#180d1a'],
+         ['split','⟂ split bolus','#40a870','#0d180d'],
          ['note','✎ note','#555','#1a1a1a']].map(function(t) {
           return '<button onclick="bfInsertTypeSelect(this,\'' + t[0] + '\')" data-itype="' + t[0] + '" ' +
             'style="font-family:inherit;font-size:10px;padding:4px 8px;border:1px solid #26262f;border-radius:4px;background:transparent;color:#555;cursor:pointer">' + t[1] + '</button>';
@@ -1473,9 +1496,9 @@ function bfInsertTypeSelect(btn, type) {
     b.style.color = '#555';
     b.style.background = 'transparent';
   });
-  btn.style.borderColor = type==='prick'?'#4a8fd4':type==='free'?'#906090':'#555';
-  btn.style.color       = type==='prick'?'#4a8fd4':type==='free'?'#906090':'#aaa';
-  btn.style.background  = type==='prick'?'#0d1820':type==='free'?'#180d1a':'#1a1a1a';
+  btn.style.borderColor = type==='prick'?'#4a8fd4':type==='free'?'#906090':type==='split'?'#40a870':'#555';
+  btn.style.color       = type==='prick'?'#4a8fd4':type==='free'?'#906090':type==='split'?'#40a870':'#aaa';
+  btn.style.background  = type==='prick'?'#0d1820':type==='free'?'#180d1a':type==='split'?'#0d180d':'#1a1a1a';
   btn.dataset.active = '1';
 
   var fields = document.getElementById('bfins-fields');
@@ -1483,11 +1506,23 @@ function bfInsertTypeSelect(btn, type) {
 
   if (type === 'prick') {
     fields.innerHTML =
-      '<div style="font-size:8px;color:#555;text-transform:uppercase;letter-spacing:0.06em;margin-bottom:3px">BG value (mmol/L)</div>' +
-      '<input id="bfins-bg" type="number" step="0.1" min="1" max="30" inputmode="decimal" placeholder="e.g. 6.2" ' +
-        'style="font-family:inherit;font-size:18px;width:100%;padding:6px 8px;border:1px solid rgba(74,143,212,0.4);border-radius:5px;background:rgba(74,143,212,0.06);color:#4a8fd4;outline:none;text-align:center;font-weight:600;box-sizing:border-box" ' +
-        'onkeydown="if(event.key===\'Enter\')bfSaveInsert()">' +
-      '<div style="font-size:9px;color:#555;margin-top:5px">Will attach to nearest CGM reading within ±5 min on the River. Enter the time the prick was taken.</div>';
+      '<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:6px">' +
+        '<div>' +
+          '<div style="font-size:8px;color:#555;text-transform:uppercase;letter-spacing:0.06em;margin-bottom:3px">Blood Prick (mmol/L)</div>' +
+          '<input id="bfins-bg" type="number" step="0.1" min="1" max="30" inputmode="decimal" placeholder="e.g. 6.2" ' +
+            'style="font-family:inherit;font-size:18px;width:100%;padding:6px 8px;border:1px solid rgba(74,143,212,0.4);border-radius:5px;background:rgba(74,143,212,0.06);color:#4a8fd4;outline:none;text-align:center;font-weight:600;box-sizing:border-box" ' +
+            'onkeydown="if(event.key===\'Enter\')bfSaveInsert()">' +
+          '<div style="font-size:8px;color:#555;margin-top:3px">fingerstick result</div>' +
+        '</div>' +
+        '<div>' +
+          '<div style="font-size:8px;color:#555;text-transform:uppercase;letter-spacing:0.06em;margin-bottom:3px">CGM Reading (mmol/L)</div>' +
+          '<input id="bfins-cgm" type="number" step="0.1" min="1" max="30" inputmode="decimal" placeholder="optional" ' +
+            'style="font-family:inherit;font-size:18px;width:100%;padding:6px 8px;border:1px solid rgba(100,160,90,0.35);border-radius:5px;background:rgba(100,160,90,0.05);color:#6aaa60;outline:none;text-align:center;font-weight:600;box-sizing:border-box" ' +
+            'onkeydown="if(event.key===\'Enter\')bfSaveInsert()">' +
+          '<div style="font-size:8px;color:#555;margin-top:3px">sensor value at same time</div>' +
+        '</div>' +
+      '</div>' +
+      '<div style="font-size:9px;color:#555">The prick will anchor to the nearest CGM reading on the River (±5 min). If you also enter the CGM value it will be stored alongside for calibration comparison.</div>';
     setTimeout(function(){ var i=document.getElementById('bfins-bg'); if(i)i.focus(); }, 30);
 
   } else if (type === 'free') {
@@ -1503,15 +1538,52 @@ function bfInsertTypeSelect(btn, type) {
 
     setTimeout(function(){ var i=document.getElementById('bfins-name-0'); if(i)i.focus(); }, 30);
 
-  } else {
+  } else if (type === 'split') {
+    // Split bolus: meal carbs + initial insulin + delayed insulin (no extra carbs)
+    if (!window._bfInsertItems) window._bfInsertItems = [];
+    window._bfInsertItems = [{name:'',carbs:null,c100:null}];
+
+    fields.innerHTML = [
+      '<div style="font-size:9px;color:#40a870;margin-bottom:8px;line-height:1.4">',
+        'Split bolus: log the meal with the first insulin dose, then log the second dose below (insulin only, no extra carbs).',
+      '</div>',
+      // Food items — same as free/meal
+      '<div style="font-size:8px;color:#555;text-transform:uppercase;letter-spacing:0.06em;margin-bottom:6px">food items eaten</div>',
+      '<div id="bfins-items">' + bfInsertItemRow(0, window._bfInsertItems[0]) + '</div>',
+      '<button onclick="bfInsertAddItem()" style="font-family:inherit;font-size:11px;color:#555;border:1px dashed #26262f;border-radius:4px;padding:3px 8px;cursor:pointer;background:none;margin-top:4px;width:100%;text-align:left">+ add item</button>',
+      '<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:10px">',
+        '<div>',
+          '<div style="font-size:8px;color:#555;text-transform:uppercase;letter-spacing:0.06em;margin-bottom:3px">1st insulin (U)</div>',
+          '<input id="bfins-u1" type="number" step="0.1" min="0" inputmode="decimal" placeholder="e.g. 4" ' +
+            'style="font-family:inherit;font-size:16px;width:100%;padding:5px 8px;border:1px solid rgba(74,143,212,0.4);border-radius:5px;background:rgba(74,143,212,0.06);color:#4a8fd4;outline:none;text-align:center;font-weight:600;box-sizing:border-box">',
+          '<div style="font-size:8px;color:#555;margin-top:2px">given with meal</div>',
+        '</div>',
+        '<div>',
+          '<div style="font-size:8px;color:#555;text-transform:uppercase;letter-spacing:0.06em;margin-bottom:3px">2nd insulin (U)</div>',
+          '<input id="bfins-u2" type="number" step="0.1" min="0" inputmode="decimal" placeholder="e.g. 2" ' +
+            'style="font-family:inherit;font-size:16px;width:100%;padding:5px 8px;border:1px solid rgba(192,128,64,0.4);border-radius:5px;background:rgba(192,128,64,0.06);color:#c08040;outline:none;text-align:center;font-weight:600;box-sizing:border-box">',
+          '<div style="font-size:8px;color:#555;margin-top:2px">delayed dose (insulin only)</div>',
+        '</div>',
+      '</div>',
+      '<div style="margin-top:8px">',
+        '<div style="font-size:8px;color:#555;text-transform:uppercase;letter-spacing:0.06em;margin-bottom:3px">delay (mins)</div>',
+        '<input id="bfins-split-delay" type="number" step="5" min="0" max="120" value="20" placeholder="e.g. 20" ' +
+          'style="font-family:inherit;font-size:14px;width:80px;padding:4px 8px;border:1px solid #26262f;border-radius:5px;background:#0c0c0f;color:#e8e4dc;outline:none;text-align:center;box-sizing:border-box">',
+        '<span style="font-size:9px;color:#555;margin-left:6px">minutes after 1st dose that the 2nd dose was given</span>',
+      '</div>',
+    ].join('');
+
+    setTimeout(function(){ var i=document.getElementById('bfins-name-0'); if(i)i.focus(); }, 30);
+
+  } else if (type === 'note') {
+
+  } else if (type === 'note') {
     fields.innerHTML =
       '<div style="font-size:8px;color:#555;text-transform:uppercase;letter-spacing:0.06em;margin-bottom:3px">note</div>' +
       '<textarea id="bfins-note" placeholder="context, observation…" ' +
         'style="font-family:inherit;font-size:12px;width:100%;padding:5px 8px;border:1px solid #26262f;border-radius:4px;background:#0c0c0f;color:#e8e4dc;resize:vertical;min-height:52px;outline:none;box-sizing:border-box"></textarea>';
     setTimeout(function(){ var i=document.getElementById('bfins-note'); if(i)i.focus(); }, 30);
   }
-
-  // Store type on form
   var form = fields.closest('.bf-insert-form');
   if (form) form.dataset.itype = type;
 }
@@ -1533,6 +1605,7 @@ async function bfSaveInsert() {
     if (type === 'prick') {
       var bg = parseFloat((document.getElementById('bfins-bg')||{}).value);
       if (isNaN(bg) || bg < 1) { var i=document.getElementById('bfins-bg'); if(i){i.style.borderColor='#c0392b';i.focus();} return; }
+      var cgmReading = parseFloat((document.getElementById('bfins-cgm')||{}).value) || null;
 
       // Find nearest CGM reading to anchor the prick to the river rendering
       var cgmAnchorT = t; // fallback: exact time entered
@@ -1546,15 +1619,19 @@ async function bfSaveInsert() {
         if (bestDiff > 5 * 60000) cgmAnchorT = t;
       }
 
+      // Build prick event — gi field holds the fingerstick BG; cgm_reading is the sensor value at that moment
+      var prickBody = { t: cgmAnchorT, c: 0, u: 0, gi: bg, note: 'prick',
+               device_id: typeof _deviceId !== 'undefined' ? _deviceId : 'backfill',
+               updated_at: new Date().toISOString() };
+      if (cgmReading !== null) prickBody.cgm_reading = cgmReading;
+
       await _sbFetch('events?on_conflict=t', {
         method: 'POST', prefer: 'resolution=merge-duplicates,return=minimal',
-        body: [{ t: cgmAnchorT, c: 0, u: 0, gi: bg, note: 'prick',
-                 device_id: typeof _deviceId !== 'undefined' ? _deviceId : 'backfill',
-                 updated_at: new Date().toISOString() }],
+        body: [prickBody],
       });
 
       if (typeof BLOOD_PRICKS !== 'undefined' && typeof _savePricks === 'function') {
-        BLOOD_PRICKS.push({ t: cgmAnchorT, bg: bg, logged_by: 'backfill' });
+        BLOOD_PRICKS.push({ t: cgmAnchorT, bg: bg, cgm_reading: cgmReading, logged_by: 'backfill' });
         BLOOD_PRICKS.sort(function(a,b){ return a.t-b.t; });
         _savePricks();
       }
@@ -1577,8 +1654,43 @@ async function bfSaveInsert() {
       });
       window._bfInsertItems = [];
 
+    } else if (type === 'split') {
+      var splitItems = (window._bfInsertItems || []).filter(function(it){ return (it.name||'').trim() || it.carbs; });
+      var splitCarbs = splitItems.reduce(function(s,it){ return s+(parseFloat(it.carbs)||0); }, 0);
+      var u1 = parseFloat((document.getElementById('bfins-u1')||{}).value) || 0;
+      var u2 = parseFloat((document.getElementById('bfins-u2')||{}).value) || 0;
+      var delay = parseInt((document.getElementById('bfins-split-delay')||{}).value) || 20;
+
+      if (!u1 && !u2) { var uel=document.getElementById('bfins-u1'); if(uel){uel.style.borderColor='#c0392b';uel.focus();} return; }
+
+      _bfSyncNewFoodsToLibrary(splitItems);
+
+      // 1st event: meal + first bolus at logged time
+      await _sbFetch('events?on_conflict=t', {
+        method: 'POST', prefer: 'resolution=merge-duplicates,return=minimal',
+        body: [{ t: t, c: splitCarbs, u: u1, gi: null,
+                 note: 'carbs',
+                 items: splitItems.map(function(it){ return {name:it.name||'',carbs:it.carbs,gi:it.gi||null}; }),
+                 device_id: typeof _deviceId !== 'undefined' ? _deviceId : 'backfill',
+                 updated_at: new Date().toISOString() }],
+      });
+
+      // 2nd event: insulin-only correction at t + delay — no carbs
+      if (u2 > 0) {
+        var t2 = t + delay * 60000;
+        await _sbFetch('events?on_conflict=t', {
+          method: 'POST', prefer: 'resolution=merge-duplicates,return=minimal',
+          body: [{ t: t2, c: 0, u: u2, gi: null,
+                   note: 'split_bolus_2nd',
+                   items: [],
+                   device_id: typeof _deviceId !== 'undefined' ? _deviceId : 'backfill',
+                   updated_at: new Date().toISOString() }],
+        });
+      }
+
+      window._bfInsertItems = [];
+
     } else {
-      // note — store in backfill_queue as approved note event
       var noteText = ((document.getElementById('bfins-note')||{}).value || '').trim();
       if (!noteText) { var ni=document.getElementById('bfins-note'); if(ni){ni.style.borderColor='#c0392b';ni.focus();} return; }
 
@@ -1593,9 +1705,9 @@ async function bfSaveInsert() {
     // Replace form with slim confirmed row
     var pad = function(n){ return String(n).padStart(2,'0'); };
     var timeStr = pad(dt.getHours()) + ':' + pad(dt.getMinutes());
-    var typeLabels = {prick: '◆ prick', free: 'free snack', note: '✎ note'};
-    var typeDetail = type === 'free' && (window._bfInsertItems||[]).length
-      ? 'free · ' + window._bfInsertItems.filter(function(it){return it.name;}).map(function(it){return it.name;}).join(', ')
+    var typeLabels = {prick: '◆ prick', free: 'free snack', split: '⟂ split bolus', note: '✎ note'};
+    var typeDetail = (type === 'free' || type === 'split') && (window._bfInsertItems||[]).length
+      ? type + ' · ' + window._bfInsertItems.filter(function(it){return it.name;}).map(function(it){return it.name;}).join(', ')
       : (typeLabels[type]||type);
     var confirmed = document.createElement('div');
     confirmed.style.cssText = 'display:flex;align-items:center;gap:8px;padding:3px 4px;margin:2px 0;border-left:2px solid #1d9e72;background:rgba(29,158,114,0.05);border-radius:0 4px 4px 0';
