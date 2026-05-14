@@ -424,6 +424,7 @@ async function syncNow(silent) {
     await syncPullPricks();
     await syncFoodLibraryFromSupabase();
     await syncMealHistoryFromSupabase();
+    await _bootstrapPatternLibrary(); // seed pattern library on first sync after session 7
     await loadObservedISF(); // refresh adaptive ISF from bolus_outcomes
 
     _lastSyncT  = Date.now();
@@ -2754,7 +2755,7 @@ function showRiverPebble(msg, type) {
       'z-index:25',
       'padding:6px 16px',
       'border-radius:20px',
-      "font-family:'DM Mono',monospace",
+      "font-family:DM Mono,monospace",
       'font-size:10px',
       'color:rgba(200,220,240,0.9)',
       'letter-spacing:.4px',
@@ -2810,7 +2811,7 @@ function updateNudgeChipVisibility() {
         'z-index:24',
         'padding:5px 14px',
         'border-radius:20px',
-        "font-family:'DM Mono',monospace",
+        "font-family:DM Mono,monospace",
         'font-size:9px',
         'letter-spacing:.4px',
         'color:rgba(140,170,200,0.4)',
@@ -3767,7 +3768,7 @@ function frame(ts) {
       'border:1px solid rgba(62,180,120,0.35)',
       'background:rgba(3,8,22,0.82)',
       'backdrop-filter:blur(8px)',
-      "font-family:'DM Mono',monospace",
+      "font-family:DM Mono,monospace",
       'font-size:10px',
       'letter-spacing:0.5px',
       'color:rgba(62,200,140,0.85)',
@@ -3788,6 +3789,10 @@ function frame(ts) {
   drawHypoPulse(pal);
   updateHUD(d, pal);
   updateNudgeChipVisibility();
+  _maybeDetectGhostEvent(); // throttled to 5min — write to ghost_events
+  if (!window._ghostPebbleCards) window._ghostPebbleCards = [];
+  window._ghostPebbleCards = [];
+  drawGhostPebbles(pal);
   _maybeDetectUnannouncedMeal(); // throttled to 15min intervals internally
 
   requestAnimationFrame(frame);
@@ -4117,6 +4122,16 @@ CV.addEventListener('click', function(e) {
   var mx = e.clientX - rect.left;
   var my = e.clientY - rect.top;
 
+  // Check ghost pebbles
+  if (window._ghostPebbleCards && _ghostPebbleCards.length > 0) {
+    for (var _gi2 = 0; _gi2 < _ghostPebbleCards.length; _gi2++) {
+      var _gc = _ghostPebbleCards[_gi2];
+      if (Math.abs(mx - _gc.x) < 14 && Math.abs(my - _gc.y) < 14) {
+        openGhostSheet(_gc.ghost);
+        return;
+      }
+    }
+  }
   // Check prick diamonds first
   if (window._prickCards && _prickCards.length > 0) {
     for (var pi = 0; pi < _prickCards.length; pi++) {
@@ -4163,7 +4178,7 @@ function renderSavedMeals() {
   chips.innerHTML = SAVED_MEALS.slice(0,8).map((m,i) =>
     `<button onclick="loadSavedMeal(${i})" style="padding:5px 10px;border-radius:8px;
       border:1px solid rgba(40,55,50,0.12);background:rgba(40,55,50,0.05);
-      font-family:'DM Mono',monospace;font-size:10px;color:rgba(40,55,50,0.55);
+      font-family:DM Mono,monospace;font-size:10px;color:rgba(40,55,50,0.55);
       cursor:pointer">${m.name} (${m.carbs}g)</button>`
   ).join('');
 }
@@ -4929,6 +4944,286 @@ async function _evaluateUnannouncedMeal(run, preBG) {
   } catch(e) {
     console.warn('[unannouncedMeal save]', e.message);
   }
+}
+
+// ── FEATURE 2: GHOST EVENT DETECTOR ─────────────────────────────────────
+// Throttled to min 5min between runs. Writes to ghost_events table.
+// Does NOT surface in UI yet — collect first. Pebbles added separately.
+
+var _lastGhostCheck = 0;
+var _ghostPebbles = []; // [{t, ghost_type, implied_units, implied_carbs, confidence, sheet_shown}]
+
+function _ghostCarerContext(t) {
+  var d = new Date(t);
+  var h = d.getHours();
+  var day = d.getDay(); // 0=Sun, 6=Sat
+  var isWeekday = day >= 1 && day <= 5;
+  if (isWeekday && h >= 9 && h < 15) return 'school_hours';
+  if (h >= 0 && h < 6) return 'night';
+  return 'daytime_family';
+}
+
+async function _maybeDetectGhostEvent() {
+  var now = Date.now();
+  if (now - _lastGhostCheck < 5 * 60000) return; // throttle 5min
+  _lastGhostCheck = now;
+  if (!SUPABASE_READY) return;
+
+  try {
+    var STEP = 5 * 60000; // 5-min steps
+    var isf = getISF(now);
+
+    // (a) unlogged_correction: BG dropping >0.25 mmol/min sustained 20+ min, IOB insufficient
+    (function detectUnloggedCorrection() {
+      try {
+        var DROP_RATE = 0.25; // mmol/min threshold
+        var MIN_DURATION_MS = 20 * 60000;
+        var WINDOW_MS = 90 * 60000;
+        var run = [];
+        for (var i = 0; i <= WINDOW_MS / STEP; i++) {
+          var t = now - WINDOW_MS + i * STEP;
+          var d1 = dataAt(t);
+          var d2 = dataAt(t - STEP);
+          if (!d1 || !d2 || !d1.bg || !d2.bg) { run = []; continue; }
+          var rate = (d1.bg - d2.bg) / 5; // mmol/min
+          if (rate < -DROP_RATE) {
+            run.push({ t: t, rate: rate, bg: d1.bg, iob: d1.iob });
+          } else {
+            if (run.length >= 4) { // 20+ min
+              var evalRun = run.slice();
+              (async function(runSlice) {
+                var startT2 = runSlice[0].t;
+                var endT    = runSlice[runSlice.length - 1].t;
+                var bgDrop  = runSlice[0].bg - runSlice[runSlice.length - 1].bg;
+                var avgIOB  = runSlice.reduce(function(s,p){return s+p.iob;},0)/runSlice.length;
+                var predictedIobEffect = avgIOB * isf * 0.3;
+                if (bgDrop <= predictedIobEffect * 1.4) return; // IOB explains it
+                // Check no logged correction nearby
+                var nearby = LOGGED_EVENTS.find(function(e){
+                  return e.u > 0 && Math.abs(e.t - startT2) < 30 * 60000;
+                });
+                if (nearby) return;
+                var impliedUnits = +(bgDrop / isf).toFixed(2);
+                var ctx = _ghostCarerContext(startT2);
+                await _writeGhostEvent({
+                  t: startT2, ghost_type: 'unlogged_correction',
+                  bg_at_detect: +runSlice[0].bg.toFixed(2),
+                  residual_curve: runSlice.map(function(p){return {t:p.t,bg:p.bg};}),
+                  implied_units: impliedUnits, implied_carbs: null,
+                  confidence: ctx === 'school_hours' ? 0.55 : 0.72,
+                  period: new Date(startT2).getHours() < 10 ? 'Breakfast' :
+                          new Date(startT2).getHours() < 14 ? 'Lunch' :
+                          new Date(startT2).getHours() < 18 ? 'Afternoon' :
+                          new Date(startT2).getHours() < 22 ? 'Evening' : 'Overnight',
+                  carer_context: ctx,
+                });
+              })(evalRun);
+            }
+            run = [];
+          }
+        }
+      } catch(e) { console.warn('[ghost corr]', e.message); }
+    })();
+
+    // (b) unexplained_stabilisation: was trending high, now flat in target
+    (function detectUnexplainedStabilisation() {
+      try {
+        var was_high_start = now - 35 * 60000;
+        var was_high_end   = now - 20 * 60000;
+        var d_was = dataAt(was_high_start);
+        var d_mid = dataAt(was_high_end);
+        if (!d_was || !d_mid || d_was.bg < 10 || !d_was.bg) return;
+        var rise_rate = (d_mid.bg - d_was.bg) / 15;
+        if (rise_rate < 0.08) return; // wasn't trending high enough
+        // Now check flat in target
+        var flatCount = 0;
+        for (var fi = 0; fi < 4; fi++) {
+          var ft = now - fi * STEP;
+          var fd = dataAt(ft);
+          if (fd && fd.bg >= 3.9 && fd.bg <= 10 && Math.abs(
+            (dataAt(ft) && dataAt(ft - STEP) ? dataAt(ft).bg - dataAt(ft - STEP).bg : 1) / 5
+          ) < 0.05) flatCount++;
+        }
+        if (flatCount < 3) return;
+        // Check no correction/bolus nearby
+        var nearbyCorr = LOGGED_EVENTS.find(function(e){
+          return (e.u > 0 || e.c > 0) && Math.abs(e.t - now) < 20 * 60000;
+        });
+        if (nearbyCorr) return;
+        var d_now = dataAt(now);
+        (async function() {
+          await _writeGhostEvent({
+            t: now - 20 * 60000, ghost_type: 'unexplained_stabilisation',
+            bg_at_detect: d_now ? +d_now.bg.toFixed(2) : null,
+            residual_curve: null, implied_units: null, implied_carbs: null,
+            confidence: 0.45, period: null, carer_context: _ghostCarerContext(now),
+          });
+        })();
+      } catch(e) { console.warn('[ghost stab]', e.message); }
+    })();
+
+    // (c) unlogged_bolus (school/night): like correction but lower confidence
+    (function detectUnloggedBolusContext() {
+      try {
+        var ctx = _ghostCarerContext(now);
+        if (ctx !== 'school_hours' && ctx !== 'night') return;
+        // Similar to correction detector but lower confidence threshold
+        // Already covered by (a) with carer context = school_hours / night
+        // This hook is for future specialisation — skip duplicate detection
+      } catch(e) {}
+    })();
+
+    // (d) unexplained_rise: link to unannounced_meals if both detected for same window
+    // Already handled by _maybeDetectUnannouncedMeal + ghost_events linkage below
+
+  } catch(e) {
+    console.warn('[ghostDetector]', e.message);
+  }
+}
+
+var _ghostWrittenTs = new Set(); // avoid re-writing same event
+
+async function _writeGhostEvent(data) {
+  if (!SUPABASE_READY || !data.t) return;
+  // Avoid duplicate writes for same window
+  for (var gt of _ghostWrittenTs) {
+    if (Math.abs(gt - data.t) < 25 * 60000) return;
+  }
+  try {
+    var row = Object.assign({
+      confirmed: null,
+      confirmed_note: null,
+      model_version: (window['__BUILD'+'_ID__'] || 'dev'),
+    }, data);
+    await _sbFetch('ghost_events?on_conflict=t', {
+      method: 'POST',
+      prefer: 'resolution=merge-duplicates,return=minimal',
+      body: [row],
+    });
+    _ghostWrittenTs.add(data.t);
+    // Add pebble to history scroll
+    _ghostPebbles.push({
+      t: data.t,
+      ghost_type: data.ghost_type,
+      implied_units: data.implied_units,
+      implied_carbs: data.implied_carbs,
+      confidence: data.confidence,
+      confirmed: null,
+    });
+    console.log('[ghost] wrote', data.ghost_type, 'at', new Date(data.t).toLocaleTimeString('en-GB',{hour:'2-digit',minute:'2-digit'}));
+  } catch(e) {
+    console.warn('[ghost write]', e.message);
+  }
+}
+
+// ── Ghost pebble rendering in history scroll ──────────────────────────────
+// Called from drawBolusMarkers / event drawing section.
+// Soft grey, '?' icon. Tap → bottom sheet.
+function drawGhostPebbles(pal) {
+  if (!_ghostPebbles || _ghostPebbles.length === 0) return;
+  var now = Date.now();
+  _ghostPebbles.forEach(function(g) {
+    if (g.confirmed === 'dismissed') return;
+    var x = tX(g.t);
+    if (x < -20 || x > W + 20) return;
+    var y = H * 0.18; // top area
+    var alpha = 0.55;
+    CX.save();
+    CX.globalAlpha = alpha;
+    CX.fillStyle = 'rgba(160,170,180,0.18)';
+    CX.strokeStyle = 'rgba(160,170,190,' + alpha + ')';
+    CX.lineWidth = 1;
+    CX.beginPath();
+    CX.arc(x, y, 9, 0, Math.PI * 2);
+    CX.fill();
+    CX.stroke();
+    CX.globalAlpha = alpha * 0.9;
+    CX.fillStyle = 'rgba(200,210,220,0.9)';
+    CX.font = "bold 10px 'DM Mono',monospace";
+    CX.textAlign = 'center';
+    CX.textBaseline = 'middle';
+    CX.fillText('?', x, y);
+    CX.globalAlpha = 1;
+    CX.restore();
+    // Register hit target
+    if (!window._ghostPebbleCards) window._ghostPebbleCards = [];
+    window._ghostPebbleCards.push({ x: x, y: y, ghost: g });
+  });
+}
+
+function openGhostSheet(ghost) {
+  var ex = document.getElementById('ghost-sheet');
+  if (ex) ex.remove();
+  var el = document.createElement('div');
+  el.id = 'ghost-sheet';
+  el.style.cssText = 'position:fixed;inset:0;z-index:80;background:rgba(3,5,20,0.92);' +
+    'backdrop-filter:blur(16px);display:flex;flex-direction:column;align-items:center;' +
+    'justify-content:flex-end;padding:0;pointer-events:auto;touch-action:pan-y';
+  el.addEventListener('click', function(e){ if(e.target===el) el.remove(); });
+
+  var t = ghost.t;
+  var timeStr = new Date(t).toLocaleTimeString('en-GB',{hour:'2-digit',minute:'2-digit'});
+  var dateStr = new Date(t).toLocaleDateString('en-GB',{weekday:'short',day:'numeric',month:'short'});
+
+  var inner = document.createElement('div');
+  inner.style.cssText = 'width:100%;max-width:400px;background:rgba(10,14,30,0.98);' +
+    'border-top-left-radius:18px;border-top-right-radius:18px;' +
+    'padding:24px 20px 40px;box-sizing:border-box;' +
+    'font-family:"DM Mono",monospace';
+
+  inner.innerHTML =
+    '<div style="text-align:center;font-size:28px;margin-bottom:8px">?</div>' +
+    '<div style="font-style:italic;font-size:18px;color:rgba(180,200,220,0.85);text-align:center;margin-bottom:6px">we noticed something unexplained</div>' +
+    '<div style="font-size:9px;letter-spacing:1px;text-transform:uppercase;color:rgba(160,180,200,0.4);text-align:center;margin-bottom:20px">' + dateStr + ' · ' + timeStr + ' · ' + (ghost.ghost_type||'').replace(/_/g,' ') + '</div>' +
+    (ghost.implied_units ? '<div style="font-size:11px;color:rgba(100,160,240,0.7);text-align:center;margin-bottom:16px">implied correction ≈ ' + ghost.implied_units + 'U</div>' : '') +
+    (ghost.implied_carbs ? '<div style="font-size:11px;color:rgba(240,160,60,0.7);text-align:center;margin-bottom:16px">implied carbs ≈ ' + ghost.implied_carbs + 'g</div>' : '') +
+    '<div style="display:flex;flex-direction:column;gap:10px;margin-top:8px">' +
+      '<button id="ghost-yes-btn" style="width:100%;padding:14px;border-radius:10px;border:1px solid rgba(62,180,120,0.4);background:rgba(62,180,120,0.08);font-style:italic;font-size:16px;color:rgba(62,200,140,0.9);cursor:pointer">yes — add it</button>' +
+      '<button id="ghost-explain-btn" style="width:100%;padding:12px;border-radius:10px;border:1px solid rgba(180,200,220,0.2);background:transparent;font-size:10px;letter-spacing:0.5px;color:rgba(180,200,220,0.5);cursor:pointer">no — explain</button>' +
+      '<button id="ghost-dismiss-btn" style="width:100%;padding:10px;border-radius:10px;border:none;background:transparent;font-size:9px;color:rgba(140,160,180,0.3);cursor:pointer">dismiss</button>' +
+    '</div>';
+
+  el.appendChild(inner);
+  document.body.appendChild(el);
+
+  var _ghostT = t;
+  document.getElementById('ghost-yes-btn').addEventListener('click', function(){ window._ghostYes(_ghostT); });
+  document.getElementById('ghost-explain-btn').addEventListener('click', function(){ window._ghostExplain(_ghostT); });
+  document.getElementById('ghost-dismiss-btn').addEventListener('click', function(){ window._ghostDismiss(_ghostT); });
+  window._ghostYes = function(ts) {
+    el.remove();
+    var g2 = _ghostPebbles.find(function(p){ return p.t == ts; });
+    // Open log entry pre-filled
+    if (g2 && g2.ghost_type === 'unlogged_correction') {
+      openCorrectionLog();
+    } else {
+      openSheet();
+    }
+  };
+  window._ghostExplain = function(ts) {
+    var note = prompt('What was happening at ' + timeStr + '?');
+    if (!note) return;
+    var g2 = _ghostPebbles.find(function(p){ return p.t == ts; });
+    if (g2) g2.confirmed = 'no_explained';
+    if (SUPABASE_READY) {
+      _sbFetch('ghost_events?t=eq.' + ts, {
+        method: 'PATCH', prefer: 'return=minimal',
+        body: { confirmed: false, confirmed_note: note }
+      }).catch(function(){});
+    }
+    el.remove();
+  };
+  window._ghostDismiss = function(ts) {
+    var g2 = _ghostPebbles.find(function(p){ return p.t == ts; });
+    if (g2) g2.confirmed = 'dismissed';
+    if (SUPABASE_READY) {
+      _sbFetch('ghost_events?t=eq.' + ts, {
+        method: 'PATCH', prefer: 'return=minimal',
+        body: { confirmed: false, confirmed_note: 'dismissed' }
+      }).catch(function(){});
+    }
+    el.remove();
+  };
 }
 
 // ── 4. DAILY MODEL ACCURACY ROLLUP ───────────────────────────────────
@@ -6201,6 +6496,48 @@ function calcBolus(totalCarbs, currentBG, entryTime) {
 
 // Suggested eat time: bolus wait based on BG level
 // High BG → wait longer; low → eat sooner
+// ── FEATURE 1: BOLUS OVERRIDE CLASSIFIER ─────────────────────────────────
+// Pen doses are 0.5U increments. Classifies whether a user override was
+// a forced rounding, a directional choice, or a deliberate true override.
+function classifyBolusOverride(suggested, delivered) {
+  if (typeof suggested !== 'number' || typeof delivered !== 'number') return null;
+  var diff = delivered - suggested;
+  var absDiff = Math.abs(diff);
+  var direction = diff > 0 ? 'up' : 'down';
+  var type;
+  if (absDiff <= 0.25) {
+    type = 'forced'; // no meaningful choice — nearest 0.5 from suggested is delivered
+  } else if (absDiff <= 0.55) {
+    type = 'direction'; // chose which way to round
+  } else {
+    type = 'true'; // deliberate override beyond rounding
+  }
+  return { type: type, direction: direction, magnitude: +absDiff.toFixed(2) };
+}
+
+// ── BOLUS OVERRIDE STORE ─────────────────────────────────────────────────
+// Called after a bolus event is logged. Stores override classification to Supabase events.
+async function _storeBolusOverride(bolusT, suggestedUnits, deliveredUnits) {
+  if (!SUPABASE_READY || !suggestedUnits || !deliveredUnits) return;
+  var cls = classifyBolusOverride(suggestedUnits, deliveredUnits);
+  if (!cls) return;
+  try {
+    await _sbFetch('events?t=eq.' + bolusT, {
+      method: 'PATCH',
+      prefer: 'return=minimal',
+      body: {
+        override_type: cls.type,
+        override_dir:  cls.direction,
+        override_mag:  cls.magnitude,
+        suggested_units: +suggestedUnits.toFixed(2),
+        updated_at: new Date().toISOString(),
+      }
+    });
+  } catch(e) {
+    console.warn('[bolusOverride]', e.message);
+  }
+}
+
 function suggestEatWait(bg, avgGI) {
   // Nudge not preach — soft suggestions, team max is 20min
   // GI-adjusted: high GI foods absorb fast so less wait needed
@@ -7584,7 +7921,7 @@ function addCustomFood(name) {
   var headerRow = document.createElement('div');
   headerRow.style.cssText = 'display:flex;align-items:center;justify-content:space-between;margin-bottom:6px';
   var titleEl = document.createElement('div');
-  titleEl.style.cssText = "font-family:'Fraunces',serif;font-style:italic;font-weight:200;font-size:14px;color:rgba(180,220,200,0.5)";
+  titleEl.style.cssText = "font-family:Fraunces,serif;font-style:italic;font-weight:200;font-size:14px;color:rgba(180,220,200,0.5)";
   titleEl.textContent = 'add food';
   var closeBtn2 = document.createElement('button');
   closeBtn2.style.cssText = 'background:none;border:none;cursor:pointer;font-size:22px;color:rgba(180,200,220,0.4);padding:0;line-height:1;touch-action:manipulation';
@@ -7600,7 +7937,7 @@ function addCustomFood(name) {
   nameInpEl.type = 'text';
   nameInpEl.value = name;
   nameInpEl.autocomplete = 'off';
-  nameInpEl.style.cssText = "width:100%;padding:10px 0;border:none;border-bottom:1px solid rgba(62,180,120,0.3);background:transparent;font-family:'Fraunces',serif;font-style:italic;font-weight:300;font-size:26px;color:rgba(220,240,230,0.95);outline:none;box-sizing:border-box;margin-bottom:18px";
+  nameInpEl.style.cssText = "width:100%;padding:10px 0;border:none;border-bottom:1px solid rgba(62,180,120,0.3);background:transparent;font-family:Fraunces,serif;font-style:italic;font-weight:300;font-size:26px;color:rgba(220,240,230,0.95);outline:none;box-sizing:border-box;margin-bottom:18px";
   wrap.appendChild(nameInpEl);
 
   // ── Camera — first action ────────────────────────────────────────
@@ -7821,7 +8158,7 @@ function addCustomFood(name) {
   btnRow.style.cssText = 'display:flex;gap:8px';
 
   var saveBtn = document.createElement('button');
-  saveBtn.style.cssText = "flex:1;padding:13px;border-radius:10px;border:1px solid rgba(62,180,120,0.4);background:rgba(62,180,120,0.12);font-family:'Fraunces',serif;font-style:italic;font-weight:200;font-size:17px;color:rgba(100,220,160,0.95);cursor:pointer";
+  saveBtn.style.cssText = "flex:1;padding:13px;border-radius:10px;border:1px solid rgba(62,180,120,0.4);background:rgba(62,180,120,0.12);font-family:Fraunces,serif;font-style:italic;font-weight:200;font-size:17px;color:rgba(100,220,160,0.95);cursor:pointer";
   saveBtn.textContent = 'save + add';
   saveBtn.onclick = function() {
     var mode    = _addFoodMode || 'per100';
@@ -9858,14 +10195,14 @@ function buildSetupScreen() {
   position:fixed;inset:0;z-index:200;
   background:rgba(240,238,228,0.98);
   display:flex;flex-direction:column;align-items:center;justify-content:center;
-  font-family:'DM Sans',sans-serif;padding:24px;overflow-y:auto;
+  font-family:DM Sans,sans-serif;padding:24px;overflow-y:auto;
 ">
   <div style="max-width:440px;width:100%">
     <!-- Logo -->
     <div style="text-align:center;margin-bottom:28px">
-      <div style="font-family:'Fraunces',serif;font-style:italic;font-weight:200;
+      <div style="font-family:Fraunces,serif;font-style:italic;font-weight:200;
         font-size:32px;color:rgba(40,55,50,0.75);letter-spacing:-1px">Oskar's River</div>
-      <div style="font-family:'DM Mono',monospace;font-size:9px;color:rgba(40,55,50,0.3);
+      <div style="font-family:DM Mono,monospace;font-size:9px;color:rgba(40,55,50,0.3);
         letter-spacing:2px;text-transform:uppercase;margin-top:4px">connect your cgm</div>
     </div>
 
@@ -9875,7 +10212,7 @@ function buildSetupScreen() {
         <button onclick="selectSource('${id}')"
           id="stab-${id}"
           style="flex:1;padding:10px 6px;border-radius:10px;cursor:pointer;
-            font-family:'DM Sans',sans-serif;font-size:11px;text-align:center;
+            font-family:DM Sans,sans-serif;font-size:11px;text-align:center;
             border:1.5px solid ${id===selId?'rgba(40,55,50,0.4)':'rgba(40,55,50,0.12)'};
             background:${id===selId?'rgba(40,55,50,0.08)':'transparent'};
             color:${id===selId?'rgba(40,55,50,0.8)':'rgba(40,55,50,0.4)'};
@@ -9898,14 +10235,14 @@ function buildSetupScreen() {
 
     <!-- Status / error -->
     <div id="setup-status" style="font-size:11px;color:rgba(40,55,50,0.4);
-      text-align:center;margin-bottom:12px;min-height:18px;font-family:'DM Mono',monospace"></div>
+      text-align:center;margin-bottom:12px;min-height:18px;font-family:DM Mono,monospace"></div>
 
     <!-- Connect button -->
     <button onclick="connectCGM()" id="connect-btn"
       style="width:100%;padding:14px;border-radius:10px;
         border:1px solid rgba(40,55,50,0.2);
         background:rgba(40,55,50,0.08);
-        color:rgba(40,55,50,0.7);font-family:'Fraunces',serif;
+        color:rgba(40,55,50,0.7);font-family:Fraunces,serif;
         font-style:italic;font-weight:200;font-size:17px;
         cursor:pointer;transition:all .12s;letter-spacing:-.2px">
       begin the flow
@@ -9915,7 +10252,7 @@ function buildSetupScreen() {
     <div style="text-align:center;margin-top:12px">
       <button onclick="skipSetup()"
         style="background:none;border:none;cursor:pointer;
-          font-family:'DM Mono',monospace;font-size:9px;letter-spacing:1px;
+          font-family:DM Mono,monospace;font-size:9px;letter-spacing:1px;
           text-transform:uppercase;color:rgba(40,55,50,0.25);padding:4px">
         skip for now — use demo data
       </button>
@@ -9930,7 +10267,7 @@ function buildSetupScreen() {
         never to any third party. This app has no backend.
       </div>
     </div>
-    <div style="text-align:center;margin-top:10px;font-family:'DM Mono',monospace;font-size:8px;color:rgba(40,55,50,0.15);letter-spacing:1px">__BUILD_ID__</div>
+    <div style="text-align:center;margin-top:10px;font-family:DM Mono,monospace;font-size:8px;color:rgba(40,55,50,0.15);letter-spacing:1px">__BUILD_ID__</div>
   </div>
 </div>`;
 }
@@ -9967,25 +10304,25 @@ function renderSourceFields(id) {
   container.innerHTML = src.fields.map(f => {
     if (f.type === 'select') {
       return `<div>
-        <label style="font-family:'DM Mono',monospace;font-size:9px;letter-spacing:1px;
+        <label style="font-family:DM Mono,monospace;font-size:9px;letter-spacing:1px;
           text-transform:uppercase;color:rgba(40,55,50,0.4);display:block;margin-bottom:5px">${f.label}</label>
         <select id="sf-${f.key}"
           style="width:100%;padding:10px 12px;border-radius:8px;
             border:1px solid rgba(40,55,50,0.15);background:rgba(255,255,255,0.7);
-            font-family:'DM Sans',sans-serif;font-size:14px;color:rgba(40,55,50,0.8);
+            font-family:DM Sans,sans-serif;font-size:14px;color:rgba(40,55,50,0.8);
             outline:none;-webkit-appearance:none">
           ${f.options.map(o => `<option value="${o.value}" ${(saved[f.key]||'ous')===o.value?'selected':''}>${o.label}</option>`).join('')}
         </select>
       </div>`;
     }
     return `<div>
-      <label style="font-family:'DM Mono',monospace;font-size:9px;letter-spacing:1px;
+      <label style="font-family:DM Mono,monospace;font-size:9px;letter-spacing:1px;
         text-transform:uppercase;color:rgba(40,55,50,0.4);display:block;margin-bottom:5px">${f.label}</label>
       <input id="sf-${f.key}" type="${f.type}" placeholder="${f.placeholder}"
         value="${saved[f.key]||''}"
         style="width:100%;padding:11px 14px;border-radius:8px;
           border:1px solid rgba(40,55,50,0.15);background:rgba(255,255,255,0.7);
-          font-family:'DM Mono',monospace;font-size:13px;color:rgba(40,55,50,0.8);
+          font-family:DM Mono,monospace;font-size:13px;color:rgba(40,55,50,0.8);
           outline:none;box-sizing:border-box"
         autocomplete="${f.type==='password'?'current-password':'off'}"
         autocapitalize="none" autocorrect="off" spellcheck="false">
@@ -10795,7 +11132,7 @@ function openOrbRadialMenu(pressX) {
     'top:'  + (cy - 10) + 'px',
     'width:160px',
     'text-align:center',
-    "font-family:'DM Mono',monospace",
+    "font-family:DM Mono,monospace",
     'font-size:9px',
     'letter-spacing:1px',
     'text-transform:uppercase',
@@ -11164,6 +11501,343 @@ async function nukeSupabaseEvents() {
   }
 }
 
+// ═══════════════════════════════════════════════════════════════════════
+//  FEATURE 3: DAILY COMPLETENESS SCORE
+// ═══════════════════════════════════════════════════════════════════════
+function _computeDayCompleteness(dateStr) {
+  // dateStr: 'YYYY-MM-DD'
+  var dayStart = new Date(dateStr).getTime();
+  var dayEnd   = dayStart + 86400000;
+
+  // CGM readings that day
+  var dayReadings = HISTORY_RAW.filter(function(r){ return r.t >= dayStart && r.t < dayEnd && r.bg > 0; });
+  if (dayReadings.length === 0) {
+    return { score: 0, label: '○', components: { data_source: 'none' } };
+  }
+
+  // Meal history that day
+  var dayMeals = (MEAL_HISTORY||[]).filter(function(m){ return m.t >= dayStart && m.t < dayEnd; });
+  // Estimated meal occasions: breakfast(1) + lunch(1) + dinner(1) = 3 default
+  var estMealOccasions = 3;
+  var meal_coverage = dayMeals.length / Math.max(1, estMealOccasions);
+
+  // Bolus events that day
+  var dayBoluses = LOGGED_EVENTS.filter(function(e){ return e.t >= dayStart && e.t < dayEnd && e.u > 0; });
+  // Ghost corrections that day (for denominator)
+  var dayGhosts = _ghostPebbles.filter(function(g){ return g.t >= dayStart && g.t < dayEnd; });
+  var resolvedGhosts = dayGhosts.filter(function(g){ return g.confirmed !== null; });
+  var bolus_coverage = dayBoluses.length / Math.max(1, dayMeals.length || 1);
+  var ghost_rate = dayGhosts.length > 0 ? resolvedGhosts.length / dayGhosts.length : 1;
+
+  var data_source = dayMeals.length > 0 ? 'full' : dayBoluses.length > 0 ? 'raw' : 'cgm_only';
+
+  var score;
+  if (dayMeals.length > 0 && bolus_coverage > 0.8 && dayGhosts.filter(function(g){return g.confirmed===null;}).length === 0) {
+    score = 3;
+  } else if (dayMeals.length > 0 || dayBoluses.length > 0) {
+    score = 2;
+  } else if (dayReadings.length > 0) {
+    score = 1;
+  } else {
+    score = 0;
+  }
+  var labels = ['○','★','★★','★★★'];
+  return {
+    score: score,
+    label: labels[score],
+    components: { meal_coverage: +meal_coverage.toFixed(2), bolus_coverage: +bolus_coverage.toFixed(2), ghost_rate: +ghost_rate.toFixed(2), data_source: data_source }
+  };
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+//  FEATURE 4: ISF DRIFT CHART
+// ═══════════════════════════════════════════════════════════════════════
+function drawISFDriftChart(canvas, data) {
+  // data: { outcomes: [{t, period, observed_isf, therapy_snapshot}], therapyHistory: [{t, ratios}] }
+  if (!canvas) return;
+  var ctx = canvas.getContext('2d');
+  var CW = canvas.width, CH = canvas.height;
+  ctx.clearRect(0, 0, CW, CH);
+
+  if (!data || !data.outcomes || data.outcomes.length === 0) {
+    ctx.fillStyle = 'rgba(160,180,200,0.3)';
+    ctx.font = "9px 'DM Mono',monospace";
+    ctx.textAlign = 'center';
+    ctx.fillText('no bolus outcome data yet', CW / 2, CH / 2);
+    return;
+  }
+
+  var outcomes = data.outcomes;
+  var PAD = { t: 12, b: 24, l: 32, r: 10 };
+  var W2 = CW - PAD.l - PAD.r;
+  var H2 = CH - PAD.t - PAD.b;
+
+  var tMin = Math.min.apply(null, outcomes.map(function(o){return o.t;}));
+  var tMax = Math.max.apply(null, outcomes.map(function(o){return o.t;})) || (tMin + 1);
+  var yMin = 0, yMax = 12;
+
+  function xOf(t) { return PAD.l + ((t - tMin) / (tMax - tMin || 1)) * W2; }
+  function yOf(v) { return PAD.t + (1 - (v - yMin) / (yMax - yMin)) * H2; }
+
+  // Target zone
+  ctx.fillStyle = 'rgba(62,180,120,0.06)';
+  ctx.fillRect(PAD.l, yOf(8), W2, yOf(5) - yOf(8));
+
+  var PERIOD_COLOURS = {
+    Breakfast:  [0,  210, 200],
+    Lunch:      [60, 200,  80],
+    Afternoon:  [200,160,  40],
+    Evening:    [120, 90, 220],
+    Overnight:  [140,160,180],
+  };
+
+  var byPeriod = {};
+  outcomes.forEach(function(o) {
+    if (!o.period || !o.observed_isf) return;
+    if (!byPeriod[o.period]) byPeriod[o.period] = [];
+    byPeriod[o.period].push({ t: o.t, isf: o.observed_isf });
+  });
+
+  var highlighted = data.highlightedPeriod || null;
+  Object.keys(PERIOD_COLOURS).forEach(function(period) {
+    var pts = byPeriod[period];
+    if (!pts || pts.length === 0) return;
+    pts.sort(function(a,b){return a.t-b.t;});
+
+    var col = PERIOD_COLOURS[period];
+    var dimmed = highlighted && highlighted !== period;
+    var baseAlpha = dimmed ? 0.15 : 1.0;
+
+    // N-based alpha for individual points
+    ctx.save();
+    pts.forEach(function(pt) {
+      var n = pts.length;
+      var ptAlpha = n < 5 ? 0.4 : n < 10 ? 0.75 : 1.0;
+      ptAlpha *= baseAlpha;
+      ctx.globalAlpha = ptAlpha;
+      ctx.fillStyle = 'rgba(' + col[0] + ',' + col[1] + ',' + col[2] + ',1)';
+      ctx.beginPath();
+      ctx.arc(xOf(pt.t), yOf(pt.isf), 3, 0, Math.PI * 2);
+      ctx.fill();
+    });
+
+    // Polyline
+    ctx.globalAlpha = baseAlpha * 0.6;
+    ctx.strokeStyle = 'rgba(' + col[0] + ',' + col[1] + ',' + col[2] + ',1)';
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    pts.forEach(function(pt, i) {
+      i === 0 ? ctx.moveTo(xOf(pt.t), yOf(pt.isf)) : ctx.lineTo(xOf(pt.t), yOf(pt.isf));
+    });
+    ctx.stroke();
+    ctx.restore();
+
+    // Period label at last point
+    if (!dimmed) {
+      ctx.save();
+      ctx.globalAlpha = 0.7;
+      ctx.fillStyle = 'rgba(' + col[0] + ',' + col[1] + ',' + col[2] + ',1)';
+      ctx.font = "8px 'DM Mono',monospace";
+      ctx.textAlign = 'left';
+      var last = pts[pts.length - 1];
+      ctx.fillText(period.slice(0, 3), xOf(last.t) + 4, yOf(last.isf) + 3);
+      ctx.restore();
+    }
+  });
+
+  // Programmed ISF dashed line
+  if (data.therapyHistory && data.therapyHistory.length > 0) {
+    ctx.save();
+    ctx.globalAlpha = 0.35;
+    ctx.strokeStyle = 'rgba(180,200,220,1)';
+    ctx.lineWidth = 1;
+    ctx.setLineDash([3, 6]);
+    data.therapyHistory.forEach(function(th, i) {
+      if (!th.ratios || !th.ratios.length) return;
+      var ratioISF = th.ratios[0].isf || 6.5;
+      var startX = xOf(th.t);
+      var endX = i < data.therapyHistory.length - 1 ? xOf(data.therapyHistory[i+1].t) : CW - PAD.r;
+      ctx.beginPath();
+      ctx.moveTo(startX, yOf(ratioISF));
+      ctx.lineTo(endX, yOf(ratioISF));
+      ctx.stroke();
+    });
+    ctx.setLineDash([]);
+    ctx.restore();
+  }
+
+  // Y-axis labels
+  ctx.fillStyle = 'rgba(160,180,200,0.4)';
+  ctx.font = "8px 'DM Mono',monospace";
+  ctx.textAlign = 'right';
+  [2, 4, 6, 8, 10, 12].forEach(function(v) {
+    ctx.fillText(v, PAD.l - 3, yOf(v) + 3);
+    ctx.beginPath();
+    ctx.strokeStyle = 'rgba(255,255,255,0.04)';
+    ctx.lineWidth = 0.5;
+    ctx.moveTo(PAD.l, yOf(v)); ctx.lineTo(CW - PAD.r, yOf(v));
+    ctx.stroke();
+  });
+}
+
+async function _loadISFDriftData() {
+  if (!SUPABASE_READY) return { outcomes: [], therapyHistory: [] };
+  try {
+    var rows = await _sbFetch(
+      'bolus_outcomes?select=t,period,observed_isf,therapy_snapshot&observed_isf=not.is.null&order=t.asc&limit=300',
+      { method: 'GET' }
+    );
+    var th = await _sbFetch('therapy_history?order=t.asc&select=t,ratios', { method: 'GET' });
+    return {
+      outcomes: Array.isArray(rows) ? rows : [],
+      therapyHistory: Array.isArray(th) ? th : [],
+    };
+  } catch(e) { return { outcomes: [], therapyHistory: [] }; }
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+//  FEATURE 5: PATTERN LIBRARY BOOTSTRAP
+// ═══════════════════════════════════════════════════════════════════════
+var _patternLibraryBootstrapped = false;
+
+async function _bootstrapPatternLibrary() {
+  if (_patternLibraryBootstrapped) return;
+  _patternLibraryBootstrapped = true;
+  if (!SUPABASE_READY) return;
+  try {
+    // Guard: only runs if pattern_library is empty
+    var countRows = await _sbFetch('pattern_library?select=id&limit=1', { method: 'GET' });
+    if (Array.isArray(countRows) && countRows.length > 0) return; // already seeded
+
+    var now = new Date().toISOString();
+    var newPatterns = [];
+
+    // (a) food_variance: foods appearing ≥3x with SD > 2.5 mmol
+    var meals = (MEAL_HISTORY || []).filter(function(m){ return m.items && m.peak_bg; });
+    var byFood = {};
+    meals.forEach(function(m) {
+      (m.items || []).forEach(function(item) {
+        var key = (item.name || '').toLowerCase();
+        if (!byFood[key]) byFood[key] = [];
+        if (m.peak_bg) byFood[key].push(m.peak_bg);
+      });
+    });
+    Object.keys(byFood).forEach(function(foodKey) {
+      var bgs = byFood[foodKey];
+      if (bgs.length < 3) return;
+      var mean = bgs.reduce(function(s,v){return s+v;},0) / bgs.length;
+      var sd = Math.sqrt(bgs.reduce(function(s,v){return s+Math.pow(v-mean,2);},0)/bgs.length);
+      if (sd > 2.5) {
+        newPatterns.push({
+          pattern_type: 'food_variance',
+          name: 'High BG variance for ' + foodKey,
+          description: 'Peak BG varies widely across instances of this food.',
+          food_key: foodKey,
+          parameters: { food_key: foodKey, mean_peak: +mean.toFixed(2), sd: +sd.toFixed(2), instances: bgs.length },
+          status: 'emerging',
+          model_version: (window['__BUILD'+'_ID__'] || 'dev'),
+          created_at: now, updated_at: now,
+        });
+      }
+    });
+
+    // (b) override_bias: periods with ≥5 direction overrides, ratio > 0.65
+    if (SUPABASE_READY) {
+      try {
+        var evRows = await _sbFetch(
+          'events?override_type=eq.direction&select=t,override_dir,period&limit=300',
+          { method: 'GET' }
+        );
+        if (Array.isArray(evRows)) {
+          var byPeriod2 = {};
+          evRows.forEach(function(ev) {
+            var h = new Date(ev.t).getHours();
+            var p = h >= 6 && h < 10 ? 'Breakfast' : h >= 10 && h < 14 ? 'Lunch' :
+                    h >= 14 && h < 18 ? 'Afternoon' : h >= 18 && h < 22 ? 'Evening' : 'Overnight';
+            if (!byPeriod2[p]) byPeriod2[p] = { up: 0, down: 0 };
+            if (ev.override_dir === 'up') byPeriod2[p].up++;
+            else byPeriod2[p].down++;
+          });
+          Object.keys(byPeriod2).forEach(function(period) {
+            var counts = byPeriod2[period];
+            var total2 = counts.up + counts.down;
+            if (total2 < 5) return;
+            var pctDown = counts.down / total2;
+            var pctUp   = counts.up   / total2;
+            if (pctDown > 0.65 || pctUp > 0.65) {
+              newPatterns.push({
+                pattern_type: 'override_bias',
+                name: 'Directional bias at ' + period,
+                description: 'Calculator may be slightly miscalibrated for this period.',
+                parameters: { period: period, pct_down: +pctDown.toFixed(2), pct_up: +pctUp.toFixed(2), n_instances: total2 },
+                status: 'emerging',
+                model_version: (window['__BUILD'+'_ID__'] || 'dev'),
+                created_at: now, updated_at: now,
+              });
+            }
+          });
+        }
+      } catch(e2) { console.warn('[patternLib override_bias]', e2.message); }
+    }
+
+    // (c) sequence_effect: meal after high predecessor
+    var seqGroups = {};
+    (MEAL_HISTORY || []).forEach(function(m) {
+      if (!m.peak_bg) return;
+      // Find meal 3h before
+      var before = (MEAL_HISTORY || []).find(function(prev) {
+        return prev.t < m.t && m.t - prev.t < 3 * 3600000 && prev.peak_bg > 12;
+      });
+      var key2 = (m.name || '').toLowerCase();
+      if (!seqGroups[key2]) seqGroups[key2] = { withHigh: [], withoutHigh: [] };
+      if (before) seqGroups[key2].withHigh.push(m.peak_bg);
+      else seqGroups[key2].withoutHigh.push(m.peak_bg);
+    });
+    Object.keys(seqGroups).forEach(function(k) {
+      var g = seqGroups[k];
+      if (g.withHigh.length < 3 || g.withoutHigh.length < 1) return;
+      var meanWith    = g.withHigh.reduce(function(s,v){return s+v;},0)/g.withHigh.length;
+      var meanWithout = g.withoutHigh.reduce(function(s,v){return s+v;},0)/g.withoutHigh.length;
+      var delta = meanWith - meanWithout;
+      if (Math.abs(delta) > 1.5) {
+        newPatterns.push({
+          pattern_type: 'sequence_effect',
+          name: 'High predecessor effect for ' + k,
+          description: 'This meal peaks higher when preceded by high BG.',
+          parameters: { prior_high_threshold: 12, mean_delta: +delta.toFixed(2), instances: g.withHigh.length },
+          status: 'emerging',
+          model_version: (window['__BUILD'+'_ID__'] || 'dev'),
+          created_at: now, updated_at: now,
+        });
+      }
+    });
+
+    if (newPatterns.length > 0) {
+      await _sbFetch('pattern_library', {
+        method: 'POST',
+        prefer: 'return=minimal',
+        body: newPatterns,
+      });
+      console.log('[patternLib] seeded', newPatterns.length, 'patterns');
+    } else {
+      console.log('[patternLib] no patterns to seed yet (not enough data)');
+    }
+  } catch(e) {
+    console.warn('[bootstrapPatternLibrary]', e.message);
+  }
+}
+
+async function _loadPatternLibrary() {
+  if (!SUPABASE_READY) return [];
+  try {
+    var rows = await _sbFetch(
+      'pattern_library?status=neq.superseded&order=updated_at.desc&limit=50',
+      { method: 'GET' }
+    );
+    return Array.isArray(rows) ? rows : [];
+  } catch(e) { return []; }
+}
+
 function openDebugPanel() {
   var p = document.getElementById('debug-panel');
   if (p) { p.remove(); return; }
@@ -11257,6 +11931,129 @@ function openDebugPanel() {
       '<div id="backlog-list" style="font-size:9px;line-height:1.6;color:rgba(180,200,180,0.7)">loading…</div>' +
     '</div>';
 
+  // ── Backfill Progress Bar ──────────────────────────────────────────────
+  var bpDiv = document.createElement('div');
+  bpDiv.style.cssText = 'margin-top:12px;padding-top:10px;border-top:1px solid rgba(255,255,255,0.08)';
+  bpDiv.innerHTML =
+    '<div style="font-size:8px;letter-spacing:1px;text-transform:uppercase;color:var(--rv-text-dim);margin-bottom:6px">backfill progress</div>' +
+    '<canvas id="backfill-bar-canvas" width="400" height="16" style="width:100%;height:16px;border-radius:4px;cursor:pointer"></canvas>' +
+    '<div id="backfill-bar-stats" style="font-size:8px;color:rgba(180,200,180,0.5);margin-top:4px"></div>' +
+    '<button onclick="_jumpToNextGap()" style="margin-top:6px;padding:3px 8px;border-radius:5px;border:1px solid rgba(80,160,220,0.3);background:rgba(80,160,220,0.06);color:rgba(80,160,220,0.7);font-family:monospace;font-size:8px;cursor:pointer">jump to next gap ○</button>';
+  el.appendChild(bpDiv);
+  _renderBackfillBar(bpDiv.querySelector('#backfill-bar-canvas'), bpDiv.querySelector('#backfill-bar-stats'));
+
+  // ── River Health Panel ───────────────────────────────────────────────────
+  var healthDiv = document.createElement('div');
+  healthDiv.style.cssText = 'margin-top:12px;padding-top:10px;border-top:1px solid rgba(255,255,255,0.08)';
+  var healthOpen = false;
+  var healthToggle = document.createElement('div');
+  healthToggle.style.cssText = 'display:flex;justify-content:space-between;align-items:center;cursor:pointer;user-select:none';
+  healthToggle.innerHTML =
+    '<div style="font-size:8px;letter-spacing:1px;text-transform:uppercase;color:rgba(62,207,160,0.7)">River Health</div>' +
+    '<span id="health-toggle-icon" style="font-size:10px;color:rgba(62,207,160,0.5)">▼</span>';
+  var healthBody = document.createElement('div');
+  healthBody.id = 'river-health-body';
+  healthBody.style.cssText = 'display:none;margin-top:10px';
+  healthToggle.addEventListener('click', function() {
+    healthOpen = !healthOpen;
+    healthBody.style.display = healthOpen ? 'block' : 'none';
+    document.getElementById('health-toggle-icon').textContent = healthOpen ? '▲' : '▼';
+    if (healthOpen && !healthBody.dataset.loaded) {
+      healthBody.dataset.loaded = '1';
+      _renderRiverHealth(healthBody);
+    }
+  });
+  healthDiv.appendChild(healthToggle);
+  healthDiv.appendChild(healthBody);
+  el.appendChild(healthDiv);
+
+  // ── ISF Drift Chart ──────────────────────────────────────────────────────
+  var isfDiv = document.createElement('div');
+  isfDiv.style.cssText = 'margin-top:12px;padding-top:10px;border-top:1px solid rgba(255,255,255,0.08)';
+  var isfOpen = false;
+  var isfToggle = document.createElement('div');
+  isfToggle.style.cssText = 'display:flex;justify-content:space-between;align-items:center;cursor:pointer;user-select:none';
+  isfToggle.innerHTML =
+    '<div style="font-size:8px;letter-spacing:1px;text-transform:uppercase;color:rgba(180,160,240,0.7)">ISF Drift</div>' +
+    '<span id="isf-toggle-icon" style="font-size:10px;color:rgba(180,160,240,0.5)">▼</span>';
+  var isfBody = document.createElement('div');
+  isfBody.id = 'isf-drift-body';
+  isfBody.style.display = 'none';
+  isfToggle.addEventListener('click', function() {
+    isfOpen = !isfOpen;
+    isfBody.style.display = isfOpen ? 'block' : 'none';
+    document.getElementById('isf-toggle-icon').textContent = isfOpen ? '▲' : '▼';
+    if (isfOpen && !isfBody.dataset.loaded) {
+      isfBody.dataset.loaded = '1';
+      _loadISFDriftData().then(function(data) {
+        var cv = document.createElement('canvas');
+        cv.width = 500; cv.height = 180;
+        cv.style.cssText = 'width:100%;height:auto;display:block;margin-top:8px;border-radius:6px;background:rgba(255,255,255,0.02)';
+        isfBody.appendChild(cv);
+        drawISFDriftChart(cv, data);
+        var legend = document.createElement('div');
+        legend.style.cssText = 'font-size:8px;color:rgba(180,200,220,0.4);margin-top:4px;line-height:1.8';
+        var PERIOD_COLS = {Breakfast:'rgb(0,210,200)',Lunch:'rgb(60,200,80)',Afternoon:'rgb(200,160,40)',Evening:'rgb(120,90,220)',Overnight:'rgb(140,160,180)'};
+        legend.innerHTML = Object.keys(PERIOD_COLS).map(function(p){
+          return '<span style="color:' + PERIOD_COLS[p] + ';cursor:pointer;margin-right:8px" data-period="' + p + '">' + p.slice(0,3) + '</span>';
+        }).join('');
+        isfBody.appendChild(legend);
+        legend.addEventListener('click', function(e){ var sp = e.target.closest('[data-period]'); if(sp) { data.highlightedPeriod = data.highlightedPeriod===sp.dataset.period?null:sp.dataset.period; drawISFDriftChart(cv,data); } });
+        window._isfHighlight = function(period) {
+          data.highlightedPeriod = data.highlightedPeriod === period ? null : period;
+          drawISFDriftChart(cv, data);
+        };
+        // Dashed = programmed ISF note
+        var note = document.createElement('div');
+        note.style.cssText = 'font-size:8px;color:rgba(180,200,220,0.3);margin-top:3px';
+        note.textContent = '--- programmed ISF · dots = observations';
+        isfBody.appendChild(note);
+      });
+    }
+  });
+  isfDiv.appendChild(isfToggle);
+  isfDiv.appendChild(isfBody);
+  el.appendChild(isfDiv);
+
+  // ── Patterns sub-section ────────────────────────────────────────────────
+  var patDiv = document.createElement('div');
+  patDiv.style.cssText = 'margin-top:12px;padding-top:10px;border-top:1px solid rgba(255,255,255,0.08)';
+  var patOpen = false;
+  var patToggle = document.createElement('div');
+  patToggle.style.cssText = 'display:flex;justify-content:space-between;align-items:center;cursor:pointer;user-select:none';
+  patToggle.innerHTML =
+    '<div style="font-size:8px;letter-spacing:1px;text-transform:uppercase;color:rgba(255,180,80,0.7)">Patterns</div>' +
+    '<span id="pat-toggle-icon" style="font-size:10px;color:rgba(255,180,80,0.4)">▼</span>';
+  var patBody = document.createElement('div');
+  patBody.id = 'pattern-lib-body';
+  patBody.style.display = 'none';
+  patToggle.addEventListener('click', function() {
+    patOpen = !patOpen;
+    patBody.style.display = patOpen ? 'block' : 'none';
+    document.getElementById('pat-toggle-icon').textContent = patOpen ? '▲' : '▼';
+    if (patOpen && !patBody.dataset.loaded) {
+      patBody.dataset.loaded = '1';
+      patBody.innerHTML = '<div style="font-size:9px;color:rgba(180,200,180,0.4);margin-top:6px">loading…</div>';
+      _loadPatternLibrary().then(function(patterns) {
+        if (!patterns.length) { patBody.innerHTML = '<div style="font-size:9px;color:rgba(180,200,180,0.3);margin-top:6px">no patterns yet — more data needed</div>'; return; }
+        var statusIcons = { emerging: '◌', confirmed: '●', superseded: '○' };
+        patBody.innerHTML = patterns.map(function(p) {
+          var icon = statusIcons[p.status] || '◌';
+          var col = p.status === 'confirmed' ? 'rgba(62,200,140,0.8)' : p.status === 'superseded' ? 'rgba(120,130,140,0.4)' : 'rgba(220,160,60,0.7)';
+          return '<div style="padding:6px 0;border-bottom:1px solid rgba(255,255,255,0.04);font-size:9px;line-height:1.6">' +
+            '<span style="color:' + col + ';margin-right:6px">' + icon + '</span>' +
+            '<span style="color:rgba(200,220,200,0.8)">' + (p.name||'') + '</span>' +
+            (p.clinical_note ? '<div style="color:rgba(180,200,180,0.4);font-size:8px;padding-left:16px">' + p.clinical_note + '</div>' : '') +
+            '<div style="color:rgba(140,160,140,0.3);font-size:7px;padding-left:16px">' + JSON.stringify(p.parameters||{}).slice(0,80) + '</div>' +
+          '</div>';
+        }).join('');
+      });
+    }
+  });
+  patDiv.appendChild(patToggle);
+  patDiv.appendChild(patBody);
+  el.appendChild(patDiv);
+
   document.body.appendChild(el);
   if (window.__updateDebugPanel) window.__updateDebugPanel();
   loadDebugBacklog('open');
@@ -11264,6 +12061,250 @@ function openDebugPanel() {
 
 
 
+
+// ── BACKFILL PROGRESS BAR ─────────────────────────────────────────────────
+var _backfillHighlightDate = null;
+function _renderBackfillBar(canvas, statsEl) {
+  if (!canvas) return;
+  var startDate = new Date('2026-01-10');
+  var today = new Date();
+  var totalDays = Math.floor((today - startDate) / 86400000) + 1;
+  var CW = canvas.width || 400;
+  var CH = canvas.height || 16;
+  var ctx = canvas.getContext('2d');
+  ctx.clearRect(0, 0, CW, CH);
+
+  var counts = { teal: 0, green: 0, grey: 0, dark: 0 };
+
+  for (var di = 0; di < totalDays; di++) {
+    var dayT = startDate.getTime() + di * 86400000;
+    var dateStr2 = new Date(dayT).toISOString().slice(0, 10);
+    var comp = _computeDayCompleteness(dateStr2);
+    var col;
+    if (comp.score >= 3) { col = '#0F766E'; counts.teal++; }
+    else if (comp.score >= 1) { col = '#22C55E'; counts.green++; }
+    else {
+      // Check if any CGM readings that day
+      var hasReadings = HISTORY_RAW.some(function(r){ return r.t >= dayT && r.t < dayT + 86400000; });
+      if (hasReadings) { col = '#CBD5E1'; counts.grey++; }
+      else { col = '#1E293B'; counts.dark++; }
+    }
+    var x = Math.round(di / totalDays * CW);
+    var w = Math.max(1, Math.round((di + 1) / totalDays * CW) - x);
+    ctx.fillStyle = col;
+    ctx.fillRect(x, 0, w, CH);
+  }
+
+  if (statsEl) {
+    statsEl.textContent = counts.teal + ' fully logged · ' + counts.green + ' partial · ' + counts.grey + ' CGM only · ' + counts.dark + ' gaps';
+  }
+
+  canvas.addEventListener('click', function(e) {
+    var rect = canvas.getBoundingClientRect();
+    var px = e.clientX - rect.left;
+    var frac = px / rect.width;
+    var dayIdx = Math.floor(frac * totalDays);
+    var dayT2 = startDate.getTime() + dayIdx * 86400000;
+    var dateStr3 = new Date(dayT2).toISOString().slice(0,10);
+    var comp2 = _computeDayCompleteness(dateStr3);
+    var dayReadings2 = HISTORY_RAW.filter(function(r){ return r.t >= dayT2 && r.t < dayT2 + 86400000; });
+    var dayGhosts2 = _ghostPebbles.filter(function(g){ return g.t >= dayT2 && g.t < dayT2 + 86400000; });
+    showToast(dateStr3 + '\n' + comp2.label + ' · ' + dayReadings2.length + ' readings · ' + dayGhosts2.length + ' ghosts');
+    // Jump to midday of that date
+    viewTime = dayT2 + 12 * 3600000;
+    _isAtNow = false;
+  });
+}
+
+function _jumpToNextGap() {
+  var startDate2 = new Date('2026-01-10');
+  var today2 = new Date();
+  var totalDays2 = Math.floor((today2 - startDate2) / 86400000) + 1;
+  for (var di2 = 0; di2 < totalDays2; di2++) {
+    var dayT3 = startDate2.getTime() + di2 * 86400000;
+    var hasReadings3 = HISTORY_RAW.some(function(r){ return r.t >= dayT3 && r.t < dayT3 + 86400000; });
+    if (!hasReadings3) {
+      viewTime = dayT3 + 12 * 3600000;
+      _isAtNow = false;
+      showToast('jumped to gap: ' + new Date(dayT3).toLocaleDateString('en-GB',{day:'numeric',month:'short',year:'numeric'}));
+      // Close debug panel
+      var dp = document.getElementById('debug-panel');
+      if (dp) dp.remove();
+      return;
+    }
+  }
+  showToast('no gaps found — great backfill!');
+}
+
+// ── RIVER HEALTH PANEL RENDERER ────────────────────────────────────────────
+async function _renderRiverHealth(container) {
+  container.innerHTML = '<div style="font-size:9px;color:rgba(180,200,180,0.4)">loading…</div>';
+  try {
+    var now = Date.now();
+    var day7 = now - 7 * 86400000;
+
+    // ── 4a Engagement ──────────────────────────────────────────────────────
+    var todayStr = new Date().toISOString().slice(0, 10);
+    var dayStart4 = new Date(todayStr).getTime();
+    var mealsToday = (MEAL_HISTORY||[]).filter(function(m){ return m.t >= dayStart4; }).length;
+    var meals7day  = (MEAL_HISTORY||[]).filter(function(m){ return m.t >= day7; }).length;
+    var mealsAll   = (MEAL_HISTORY||[]).length;
+
+    // Logging streak
+    var streak = 0;
+    var streakDate = new Date();
+    for (var sd = 0; sd < 90; sd++) {
+      var sDateStr = new Date(streakDate.getTime() - sd * 86400000).toISOString().slice(0,10);
+      var sDayStart = new Date(sDateStr).getTime();
+      var hasMeal = (MEAL_HISTORY||[]).some(function(m){ return m.t >= sDayStart && m.t < sDayStart + 86400000; });
+      if (hasMeal) streak++;
+      else break;
+    }
+
+    // Items per meal 7-day
+    var mealsWith7 = (MEAL_HISTORY||[]).filter(function(m){ return m.t >= day7 && m.items && m.items.length; });
+    var avgItems = mealsWith7.length > 0
+      ? (mealsWith7.reduce(function(s,m){return s+(m.items||[]).length;},0) / mealsWith7.length).toFixed(1)
+      : '—';
+
+    // Source split
+    var sources = {};
+    (MEAL_HISTORY||[]).filter(function(m){return m.t >= day7;}).forEach(function(m){
+      var src = m.source || 'manual';
+      sources[src] = (sources[src] || 0) + 1;
+    });
+    var totalSrc = Object.values(sources).reduce(function(s,v){return s+v;},0) || 1;
+
+    // ── 4b Model Maturity ──────────────────────────────────────────────────
+    var periods = ['Breakfast','Lunch','Afternoon','Evening','Overnight'];
+    var periodCounts = {};
+    var bolusOutRows = [];
+    try {
+      bolusOutRows = await _sbFetch('bolus_outcomes?select=period,observed_isf&order=t.desc&limit=500', { method: 'GET' });
+      if (!Array.isArray(bolusOutRows)) bolusOutRows = [];
+    } catch(e2) { bolusOutRows = []; }
+    bolusOutRows.forEach(function(r) {
+      if (!r.period) return;
+      periodCounts[r.period] = (periodCounts[r.period] || 0) + 1;
+    });
+
+    // RMSE trend
+    var rmse7 = null, rmse14 = null;
+    try {
+      var mRows = await _sbFetch('model_accuracy?date=gte.' + new Date(day7).toISOString().slice(0,10) + '&select=meal_rmse,date', { method: 'GET' });
+      if (Array.isArray(mRows) && mRows.length > 0) {
+        var rmsVals = mRows.map(function(r){return r.meal_rmse;}).filter(Boolean);
+        rmse7 = rmsVals.length ? +(rmsVals.reduce(function(s,v){return s+v;},0)/rmsVals.length).toFixed(3) : null;
+      }
+      var mRows14 = await _sbFetch('model_accuracy?date=gte.' + new Date(now - 14*86400000).toISOString().slice(0,10) + '&date=lt=' + new Date(day7).toISOString().slice(0,10) + '&select=meal_rmse', { method: 'GET' });
+      if (Array.isArray(mRows14) && mRows14.length > 0) {
+        var rmsVals14 = mRows14.map(function(r){return r.meal_rmse;}).filter(Boolean);
+        rmse14 = rmsVals14.length ? +(rmsVals14.reduce(function(s,v){return s+v;},0)/rmsVals14.length).toFixed(3) : null;
+      }
+    } catch(e3) {}
+
+    // ── 4c Override Analysis ──────────────────────────────────────────────
+    var overrideRows = [];
+    try {
+      overrideRows = await _sbFetch('events?override_type=in.(direction,true)&select=t,override_type,override_dir&limit=300', { method: 'GET' });
+      if (!Array.isArray(overrideRows)) overrideRows = [];
+    } catch(e4) {}
+    var overridePeriods = {};
+    overrideRows.forEach(function(ev) {
+      if (ev.override_type !== 'direction') return;
+      var h2 = new Date(ev.t).getHours();
+      var p2 = h2 >= 6 && h2 < 10 ? 'Breakfast' : h2 >= 10 && h2 < 14 ? 'Lunch' :
+               h2 >= 14 && h2 < 18 ? 'Afternoon' : h2 >= 18 && h2 < 22 ? 'Evening' : 'Overnight';
+      if (!overridePeriods[p2]) overridePeriods[p2] = { up: 0, down: 0 };
+      if (ev.override_dir === 'up') overridePeriods[p2].up++;
+      else overridePeriods[p2].down++;
+    });
+    var trueOverride30 = overrideRows.filter(function(ev){ return ev.override_type === 'true' && ev.t >= now - 30*86400000; }).length;
+
+    // ── Render ───────────────────────────────────────────────────────────────
+    var mono = "font-family:DM Mono,monospace;font-size:9px";
+    var dim  = "color:rgba(180,200,180,0.45)";
+    var bright = "color:rgba(200,220,200,0.85)";
+
+    function section4(title, content) {
+      return '<div style="margin-bottom:10px">' +
+        '<div style="' + mono + ';font-size:7px;letter-spacing:1px;text-transform:uppercase;color:rgba(62,207,160,0.5);margin-bottom:5px">' + title + '</div>' +
+        content + '</div>';
+    }
+
+    var srcBars = Object.keys(sources).map(function(k) {
+      var pct = Math.round(sources[k]/totalSrc*100);
+      return '<span style="' + mono + ';' + dim + ';margin-right:6px">' + k + ' ' + pct + '%</span>';
+    }).join('');
+
+    var engHtml = 
+      '<div style="' + mono + ';' + bright + '">meals: <b>' + mealsToday + '</b> today · <b>' + meals7day + '</b> 7d · <b>' + mealsAll + '</b> all</div>' +
+      '<div style="' + mono + ';' + dim + ';margin-top:2px">🔥 ' + streak + ' day streak · ' + avgItems + ' items/meal</div>' +
+      (srcBars ? '<div style="margin-top:3px">' + srcBars + '</div>' : '');
+
+    var matHtml = periods.map(function(p3) {
+      var n3 = periodCounts[p3] || 0;
+      var pct3 = Math.min(10, n3);
+      var bars = '■'.repeat(pct3) + '□'.repeat(Math.max(0, 10 - pct3));
+      var active = n3 >= MIN_OUTCOMES_FOR_ADAPTATION;
+      var colP = active ? 'rgba(62,200,140,0.8)' : 'rgba(200,180,60,0.6)';
+      return '<div style="' + mono + ';' + dim + ';margin-bottom:2px">' +
+        '<span style="min-width:70px;display:inline-block">' + p3 + '</span>' +
+        '<span style="color:' + colP + ';letter-spacing:0">' + bars + '</span>' +
+        ' ' + n3 + '/10' +
+        (active ? ' <span style="color:rgba(62,200,140,0.7)">ACTIVE</span>' : '') + '</div>';
+    }).join('');
+
+    // ISF divergence table
+    var isfObs = {};
+    var byPer3 = {};
+    bolusOutRows.forEach(function(r) { if (!r.period || !r.observed_isf) return; if (!byPer3[r.period]) byPer3[r.period] = []; byPer3[r.period].push(r.observed_isf); });
+    Object.keys(byPer3).forEach(function(p4) { var vals4 = byPer3[p4]; var m4 = vals4.reduce(function(s,v){return s+v;},0)/vals4.length; isfObs[p4] = { mean: +m4.toFixed(2), count: vals4.length }; });
+
+    var isfTable = periods.map(function(p5) {
+      var obs5 = isfObs[p5];
+      var obsStr = (obs5 && obs5.count >= 3) ? obs5.mean.toFixed(2) : '—';
+      var prog5 = getISF(new Date().setHours(['Breakfast','Lunch','Afternoon','Evening','Overnight'].indexOf(p5) < 3 ? 8 : p5==='Evening'?19:2, 0, 0, 0));
+      var delta5 = (obs5 && obs5.count >= 3) ? (obs5.mean - prog5).toFixed(2) : '—';
+      var deltaCol = delta5 !== '—' ? (parseFloat(delta5) > 0.5 ? 'rgba(240,150,60,0.8)' : 'rgba(62,200,140,0.6)') : dim;
+      return '<div style="display:grid;grid-template-columns:70px 40px 40px 40px;' + mono + ';' + dim + ';margin-bottom:2px">' +
+        '<span>' + p5.slice(0,3) + '</span>' +
+        '<span>' + prog5.toFixed(1) + '</span>' +
+        '<span>' + obsStr + '</span>' +
+        '<span style="color:' + deltaCol + '">' + (delta5 !== '—' ? (parseFloat(delta5)>0?'+':'') + delta5 : '—') + '</span>' +
+      '</div>';
+    }).join('');
+
+    var rmseArrow = (rmse7 && rmse14) ? (rmse7 < rmse14 ? ' ↓' : ' ↑') : '';
+    var rmseStr = rmse7 ? rmse7.toFixed(3) + rmseArrow : '—';
+    matHtml += '<div style="margin-top:6px;' + mono + ';' + dim + ';font-size:7px;letter-spacing:0.5px;text-transform:uppercase;margin-bottom:3px">ISF Period | Prog | Obs | Δ</div>' + isfTable;
+    matHtml += '<div style="margin-top:6px;' + mono + ';' + dim + '">7d RMSE: <b style="' + bright + '">' + rmseStr + '</b></div>';
+
+    var ovHtml = Object.keys(overridePeriods).map(function(p6) {
+      var oc = overridePeriods[p6];
+      var tot6 = oc.up + oc.down;
+      if (tot6 < 3) return '';
+      var pctDown6 = Math.round(oc.down / tot6 * 100);
+      var pctUp6   = Math.round(oc.up   / tot6 * 100);
+      var bias = pctDown6 > pctUp6 ? pctDown6 + '% ↓' : pctUp6 + '% ↑';
+      var flag = (pctDown6 > 65 || pctUp6 > 65)
+        ? '<div style="' + mono + ';font-size:7px;color:rgba(240,160,60,0.7);padding-left:8px">→ may reflect calculator miscalibration</div>'
+        : '';
+      return '<div style="' + mono + ';' + dim + ';margin-bottom:2px">' + p6 + ': <b>' + bias + '</b> at ' + p6 + '</div>' + flag;
+    }).filter(Boolean).join('');
+    ovHtml += '<div style="' + mono + ';' + dim + ';margin-top:4px">true overrides (30d): <b>' + trueOverride30 + '</b></div>';
+    if (!ovHtml.trim()) ovHtml = '<div style="' + dim + ';' + mono + '">no override data yet</div>';
+
+    container.innerHTML =
+      section4('Engagement', engHtml) +
+      section4('Model Maturity', matHtml) +
+      section4('Override Analysis', ovHtml);
+
+  } catch(e) {
+    container.innerHTML = '<div style="font-size:9px;color:rgba(220,80,60,0.6)">error loading health: ' + e.message.slice(0,60) + '</div>';
+    console.warn('[riverHealth]', e.message);
+  }
+}
 
 // ── BACKLOG — fetch and render backlog items in debug panel ──────────
 var _blqFilter = 'open';
@@ -11989,7 +13030,7 @@ function openSettingsTray() {
       'background:var(--rv-panel-bg)',
       'backdrop-filter:blur(14px)',
       'cursor:pointer',
-      "font-family:'DM Mono',monospace",
+      "font-family:DM Mono,monospace",
       'font-size:10px',
       'letter-spacing:0.5px',
       'text-transform:uppercase',
@@ -12040,7 +13081,7 @@ function openVisualSettings() {
   el.addEventListener('touchstart', function(e){ e.stopPropagation(); }, {passive:true});
 
   // ── helpers ──────────────────────────────────────────────────────
-  function mono(s) { return "font-family:'DM Mono',monospace;font-size:" + (s||10) + "px"; }
+  function mono(s) { return "font-family:DM Mono,monospace;font-size:" + (s||10) + "px"; }
 
   function hexToRgb(hex) {
     var r = parseInt(hex.slice(1,3),16), g = parseInt(hex.slice(3,5),16), b = parseInt(hex.slice(5,7),16);
