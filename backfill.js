@@ -888,7 +888,6 @@ function bfShowInlineNew(cardIdx, itemIdx, q, ac) {
           '<input id="bfin-c100-' + cardIdx + '-' + itemIdx + '" type="number" min="0" max="100" step="0.1" inputmode="decimal" placeholder="e.g. 47" ' +
             'onmousedown="event.stopPropagation()" ' +
             'oninput="bfInlinePreview(\'' + cardIdx + '\',\'' + itemIdx + '\')" ' +
-            'onblur="_bfLookupGI(\'' + q.replace(/'/g, "\\'") + '\',' + cardIdx + ',' + itemIdx + ')" ' +
             'style="width:100%;padding:5px 6px;border-radius:5px;border:1px solid rgba(62,180,120,0.4);background:rgba(62,180,120,0.07);font-family:inherit;font-size:14px;color:rgba(100,220,160,0.95);text-align:center;outline:none;box-sizing:border-box">' +
         '</div>' +
         '<div style="flex:1">' +
@@ -916,6 +915,10 @@ function bfShowInlineNew(cardIdx, itemIdx, q, ac) {
   } else {
     ac.style.top = '100%'; ac.style.bottom = 'auto';
   }
+
+  // Fire GI lookup immediately — food name is known; result arrives async
+  // and fills the GI field without blocking the c100 input focus
+  _bfLookupGI(q, cardIdx, itemIdx);
 
   setTimeout(function(){
     var inp = document.getElementById('bfin-c100-' + cardIdx + '-' + itemIdx);
@@ -1710,12 +1713,51 @@ function bfInsertItemNameBlur(idx, input) {
   setTimeout(function(){
     var ac = document.getElementById('bfinsac-' + idx);
     if (ac) ac.style.display = 'none';
+    var name = (input.value||'').trim();
     if (window._bfInsertItems && window._bfInsertItems[idx]) {
-      window._bfInsertItems[idx].name = (input.value||'').trim();
+      window._bfInsertItems[idx].name = name;
+    }
+    // If not already in library and name is meaningful, look up GI
+    if (name && name.length >= 2 && !_bfLibLookup(name)) {
+      _bfLookupGIForInsert(idx, name);
     }
   }, 150);
 }
 window.bfInsertItemNameBlur = bfInsertItemNameBlur;
+
+// GI lookup variant for the insert-form rows (different ID scheme)
+async function _bfLookupGIForInsert(idx, foodName) {
+  var giEl  = document.getElementById('bfinsgi-' + idx);
+  if (!giEl) return;
+  giEl.textContent = '⏳';
+  giEl.style.color = '#555';
+  try {
+    var resp = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        model: 'claude-sonnet-4-20250514',
+        max_tokens: 100,
+        system: 'Return ONLY a JSON object: {"gi":<integer 1-100>,"note":"<one short phrase>"}. If primarily fat/protein with negligible carbs return gi:5. Never return null for gi.',
+        messages: [{ role: 'user', content: 'Glycaemic index for: "' + foodName + '"' }]
+      })
+    });
+    var data = await resp.json();
+    var text = (data.content && data.content[0] && data.content[0].text) || '{}';
+    var result = {};
+    try { result = JSON.parse(text.replace(/```json|```/g,'').trim()); } catch(e){}
+    var gi = Math.max(1, Math.min(100, parseInt(result.gi)||55));
+    // Store on item
+    if (window._bfInsertItems && window._bfInsertItems[idx]) {
+      window._bfInsertItems[idx].gi = gi;
+    }
+    var col = gi >= 70 ? '#c0392b' : gi >= 55 ? '#b07820' : '#1d9e72';
+    if (giEl) { giEl.textContent = 'GI ' + gi; giEl.style.color = col; giEl.title = result.note || ''; }
+  } catch(e) {
+    if (giEl) { giEl.textContent = 'GI?'; giEl.style.color = '#333'; }
+  }
+}
+window._bfLookupGIForInsert = _bfLookupGIForInsert;
 
 function bfInsertSelectFood(idx, name) {
   var food = _bfLibLookup(name);
@@ -1737,6 +1779,9 @@ function bfInsertSelectFood(idx, name) {
   if (giSpan && food && food.gi) {
     giSpan.textContent = 'GI ' + food.gi;
     giSpan.style.color = food.gi>=70?'#c0392b':food.gi>=55?'#b07820':'#1d9e72';
+  } else if (window._bfInsertItems && window._bfInsertItems[idx] && window._bfInsertItems[idx].name) {
+    // Library match but no GI stored — look it up
+    _bfLookupGIForInsert(idx, window._bfInsertItems[idx].name);
   }
   if (ac) ac.style.display = 'none';
 }
