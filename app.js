@@ -12230,27 +12230,44 @@ var _TREATMENT = null; // cached in memory, loaded on open
 var _TREATMENT_DEFAULTS = {
   basalDose: 6,
   basalType: 'Degludec',
+  basalTime: '17:00',
+  bolusType: 'Novorapid',
   hypoThreshold: 3.9,
   hypoCarbs: 15,
   ratios: [
-    { period: 'Breakfast',  isf: 6.5, ic: 8.5  },
-    { period: 'Lunch',      isf: 7.0, ic: 12   },
-    { period: 'Afternoon',  isf: 7.0, ic: 15   },
-    { period: 'Evening',    isf: 7.0, ic: 10   },
-    { period: 'Overnight',  isf: 6.5, ic: null },
+    { start: '00:00', end: '06:30', ic: 20.0, isf: 6.0, target: 5.5 },
+    { start: '06:30', end: '09:30', ic:  6.0, isf: 6.0, target: 5.5 },
+    { start: '09:30', end: '11:30', ic: 15.0, isf: 6.0, target: 5.5 },
+    { start: '11:30', end: '15:00', ic: 11.5, isf: 6.0, target: 5.5 },
+    { start: '15:00', end: '16:30', ic: 15.0, isf: 6.0, target: 5.5 },
+    { start: '16:30', end: '19:30', ic: 11.0, isf: 6.0, target: 5.5 },
+    { start: '19:30', end: '24:00', ic: 16.0, isf: 6.0, target: 5.5 },
   ]
 };
 
 async function _loadTreatmentSettings() {
-  // Try Supabase first
+  // Primary: latest therapy_history row (written on every save, audit-safe)
   if (SUPABASE_READY) {
     try {
-      var res = await _sbFetch('settings?key=eq.treatment&select=value', {});
-      if (res && res.length > 0 && res[0].value) {
-        _TREATMENT = Object.assign({}, _TREATMENT_DEFAULTS, res[0].value);
+      var rows = await _sbFetch(
+        'therapy_history?order=t.desc&limit=1&select=ratios,basal_dose,basal_type,basal_time,bolus_type,hypo_threshold,hypo_carbs,dia',
+        {}
+      );
+      if (rows && rows.length > 0) {
+        var r = rows[0];
+        _TREATMENT = Object.assign({}, _TREATMENT_DEFAULTS, {
+          basalDose:     r.basal_dose,
+          basalType:     r.basal_type     || _TREATMENT_DEFAULTS.basalType,
+          basalTime:     r.basal_time     || _TREATMENT_DEFAULTS.basalTime,
+          bolusType:     r.bolus_type     || _TREATMENT_DEFAULTS.bolusType,
+          hypoThreshold: r.hypo_threshold || _TREATMENT_DEFAULTS.hypoThreshold,
+          hypoCarbs:     r.hypo_carbs     || _TREATMENT_DEFAULTS.hypoCarbs,
+          ratios:        r.ratios         || _TREATMENT_DEFAULTS.ratios,
+          dia:           r.dia            || 150,
+        });
         return;
       }
-    } catch(e) {}
+    } catch(e) { console.warn('[treatment] therapy_history load failed:', e.message); }
   }
   // Fall back to localStorage
   try {
@@ -12280,9 +12297,12 @@ async function _saveTreatmentSettings(data) {
         t:              Date.now(),
         basal_dose:     data.basalDose,
         basal_type:     data.basalType,
+        basal_time:     data.basalTime,
+        bolus_type:     data.bolusType,
         hypo_threshold: data.hypoThreshold,
         hypo_carbs:     data.hypoCarbs,
         ratios:         data.ratios,
+        dia:            data.dia || 150,
         changed_by:     _deviceId,
       }],
     });
@@ -12321,99 +12341,250 @@ function openTreatmentPanel() {
 
 function _renderTreatmentForm(el) {
   var t = _TREATMENT;
+
   var inp = function(id, val, opts) {
     opts = opts || {};
-    return '<input id="tr-' + id + '" type="number" value="' + val + '" ' +
-      'min="' + (opts.min||0) + '" max="' + (opts.max||99) + '" step="' + (opts.step||0.5) + '" ' +
-      'style="width:60px;padding:6px 8px;border-radius:7px;border:1px solid var(--rv-panel-border);' +
-      'background:var(--rv-input-bg);font-family:\'DM Mono\',monospace;font-size:13px;' +
+    return '<input id="tr-' + id + '" type="' + (opts.type||'number') + '" value="' + (val||'') + '" ' +
+      (opts.type !== 'time' ? 'min="' + (opts.min||0) + '" max="' + (opts.max||99) + '" step="' + (opts.step||0.5) + '" ' : '') +
+      'style="width:' + (opts.w||'60px') + ';padding:6px 8px;border-radius:7px;' +
+      'border:1px solid var(--rv-panel-border);background:var(--rv-input-bg);' +
+      'font-family:\'DM Mono\',monospace;font-size:13px;' +
       'color:rgba(200,220,240,0.9);text-align:center;outline:none">';
   };
 
-  var labelStyle = 'font-family:\'DM Mono\',monospace;font-size:8px;letter-spacing:1.5px;' +
-    'text-transform:uppercase;margin-bottom:10px;margin-top:20px';
-  var rowStyle = 'display:flex;align-items:center;justify-content:space-between;' +
+  var ls = 'font-family:\'DM Mono\',monospace;font-size:8px;letter-spacing:1.5px;' +
+    'text-transform:uppercase;margin-bottom:10px;margin-top:20px;';
+  var rs = 'display:flex;align-items:center;justify-content:space-between;' +
     'padding:10px 14px;border-radius:10px;background:var(--rv-input-bg);' +
     'border:1px solid var(--rv-panel-border);margin-bottom:8px;' +
-    'font-family:\'DM Mono\',monospace;font-size:11px';
+    'font-family:\'DM Mono\',monospace;font-size:11px;';
+  var lbl = function(c, tx) {
+    return '<span style="font-size:9px;color:' + c + ';min-width:34px;text-align:right">' + tx + '</span>';
+  };
 
-  var ratioRows = t.ratios.map(function(row, i) {
-    return '<div style="' + rowStyle + '">' +
-      '<span style="color:rgba(140,180,220,0.6);font-size:9px;text-transform:uppercase;letter-spacing:1px;width:90px">' + row.period + '</span>' +
+  // ── bolus type selector ──────────────────────────────────────────────────
+  var bolusOptions = ['Novorapid','Fiasp'].map(function(b) {
+    var sel = (t.bolusType || 'Novorapid') === b;
+    return '<button onclick="_setBolusType(\''+b+'\')" id="tr-bolus-'+b+'" style="' +
+      'padding:5px 12px;border-radius:6px;border:1px solid ' +
+      (sel ? 'rgba(100,200,160,0.5)' : 'var(--rv-panel-border)') + ';' +
+      'background:' + (sel ? 'rgba(100,200,160,0.1)' : 'transparent') + ';' +
+      'font-family:\'DM Mono\',monospace;font-size:11px;' +
+      'color:' + (sel ? 'rgba(100,200,160,0.9)' : 'rgba(200,220,240,0.4)') + ';cursor:pointer">' +
+      b + '</button>';
+  }).join('');
+
+  var bolusInfo = { Novorapid: 'peak ~75 min · 4 hr tail', Fiasp: 'peak ~55 min · 4 hr tail' };
+  var currentBolus = t.bolusType || 'Novorapid';
+
+  // ── IC/ISF ratio rows — time-based ──────────────────────────────────────
+  var ratioHeader = '<div style="display:flex;align-items:center;justify-content:flex-end;gap:4px;' +
+    'padding:0 14px;margin-bottom:4px">' +
+    lbl('rgba(255,150,50,0.5)', 'I:C') +
+    '<span style="width:60px"></span>' +
+    lbl('rgba(80,140,220,0.5)', 'ISF') +
+    '<span style="width:60px"></span>' +
+    '</div>';
+
+  var ratioRows = ratioHeader + t.ratios.map(function(row, i) {
+    var label = (row.start && row.end) ? (row.start + ' – ' + row.end) : (row.period || '');
+    return '<div style="' + rs + '">' +
+      '<span style="color:rgba(140,180,220,0.6);font-size:10px;min-width:100px;letter-spacing:0.3px">' + label + '</span>' +
       '<div style="display:flex;align-items:center;gap:4px">' +
-        '<span style="font-size:9px;color:rgba(255,150,50,0.5)">I:C 1:</span>' +
+        lbl('rgba(255,150,50,0.35)', '1:') +
         inp('ic-' + i, row.ic || '', {min:1, max:30, step:0.5}) +
       '</div>' +
       '<div style="display:flex;align-items:center;gap:4px">' +
-        '<span style="font-size:9px;color:rgba(80,140,220,0.5)">ISF 1:</span>' +
-        inp('isf-' + i, row.isf, {min:1, max:20, step:0.5}) +
+        lbl('rgba(80,140,220,0.35)', '1:') +
+        inp('isf-' + i, row.isf || '', {min:1, max:20, step:0.5}) +
       '</div>' +
     '</div>';
   }).join('');
 
   el.querySelector('div').innerHTML =
+    // ── header ──────────────────────────────────────────────────────────────
     '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:24px">' +
       '<div style="font-family:\'Fraunces\',serif;font-style:italic;font-weight:200;font-size:22px;color:rgba(180,220,200,0.8)">treatment</div>' +
-      '<button onclick="document.getElementById(\'treatment-overlay\').remove()" ' +
-        'style="background:none;border:none;cursor:pointer;font-size:22px;color:var(--rv-close-btn);padding:4px">×</button>' +
+      '<div style="display:flex;gap:10px;align-items:center">' +
+        '<button onclick="openTherapyHistory()" style="background:none;border:none;cursor:pointer;' +
+          'font-family:\'DM Mono\',monospace;font-size:9px;letter-spacing:1px;text-transform:uppercase;' +
+          'color:rgba(140,180,220,0.4);padding:4px 0">view history</button>' +
+        '<button onclick="document.getElementById(\'treatment-overlay\').remove()" ' +
+          'style="background:none;border:none;cursor:pointer;font-size:22px;color:var(--rv-close-btn);padding:4px">×</button>' +
+      '</div>' +
     '</div>' +
 
-    '<div style="' + labelStyle + 'color:rgba(80,140,220,0.5)">basal</div>' +
-    '<div style="' + rowStyle + '">' +
-      '<span style="color:rgba(140,180,220,0.6)">Degludec</span>' +
+    // ── basal ────────────────────────────────────────────────────────────────
+    '<div style="' + ls + 'color:rgba(80,140,220,0.5)">basal injection · Degludec</div>' +
+    '<div style="' + rs + '">' +
+      '<span style="color:rgba(140,180,220,0.6)">daily dose</span>' +
       '<div style="display:flex;align-items:center;gap:6px">' +
         inp('basal', t.basalDose, {min:1, max:80, step:1}) +
         '<span style="font-size:11px;color:rgba(80,140,220,0.6)">U / day</span>' +
       '</div>' +
     '</div>' +
+    '<div style="' + rs + '">' +
+      '<span style="color:rgba(140,180,220,0.6)">injection time</span>' +
+      '<div style="display:flex;align-items:center;gap:6px">' +
+        inp('basal-time', t.basalTime || '17:00', {type:'time', w:'90px'}) +
+      '</div>' +
+    '</div>' +
 
-    '<div style="' + labelStyle + 'color:rgba(255,210,40,0.5)">hypo defaults</div>' +
-    '<div style="' + rowStyle + '">' +
-      '<span style="color:rgba(200,180,80,0.6)">threshold</span>' +
+    // ── bolus insulin ────────────────────────────────────────────────────────
+    '<div style="' + ls + 'color:rgba(100,180,140,0.5)">bolus insulin</div>' +
+    '<div style="' + rs + 'flex-direction:column;align-items:flex-start;gap:10px">' +
+      '<div style="display:flex;gap:8px">' + bolusOptions + '</div>' +
+      '<div id="tr-bolus-info" style="font-size:10px;color:rgba(160,200,180,0.6)">' +
+        bolusInfo[currentBolus] +
+      '</div>' +
+    '</div>' +
+
+    // ── hypo ─────────────────────────────────────────────────────────────────
+    '<div style="' + ls + 'color:rgba(255,210,40,0.5)">hypo</div>' +
+    '<div style="' + rs + '">' +
+      '<span style="color:rgba(200,180,80,0.6)">hypo threshold</span>' +
       '<div style="display:flex;align-items:center;gap:6px">' +
         inp('hypo-thr', t.hypoThreshold, {min:2, max:6, step:0.1}) +
         '<span style="font-size:10px;color:rgba(200,180,80,0.5)">mmol/L</span>' +
       '</div>' +
     '</div>' +
-    '<div style="' + rowStyle + '">' +
-      '<span style="color:rgba(200,180,80,0.6)">treatment</span>' +
+    '<div style="' + rs + '">' +
+      '<span style="color:rgba(200,180,80,0.6)">hypo treatment</span>' +
       '<div style="display:flex;align-items:center;gap:6px">' +
         inp('hypo-carbs', t.hypoCarbs, {min:5, max:40, step:5}) +
         '<span style="font-size:10px;color:rgba(200,180,80,0.5)">g fast carbs</span>' +
       '</div>' +
     '</div>' +
 
-    '<div style="' + labelStyle + 'color:rgba(255,150,50,0.5)">ratios</div>' +
+    // ── ratios ───────────────────────────────────────────────────────────────
+    '<div style="' + ls + 'color:rgba(255,150,50,0.5)">' +
+      '<span>ratios</span>' +
+      '<span style="float:right;font-size:8px;opacity:0.5">I:C = carbs per unit · ISF = mmol drop per unit</span>' +
+    '</div>' +
     ratioRows +
 
-    '<div style="font-family:\'DM Mono\',monospace;font-size:8px;letter-spacing:1.5px;text-transform:uppercase;color:rgba(100,180,140,0.5);margin-bottom:10px;margin-top:20px">bolus model</div>' +
-    '<div style="' + rowStyle + 'color:rgba(200,220,240,0.6)">' +
-      '<span style="color:rgba(140,180,160,0.6)">Novorapid</span>' +
-      '<span>peak ~75 min</span>' +
-      '<span style="color:rgba(100,140,120,0.5)">4hr tail</span>' +
-    '</div>' +
-
+    // ── save / footer ────────────────────────────────────────────────────────
     '<button onclick="saveTreatmentForm()" ' +
       'style="width:100%;margin-top:24px;padding:13px;border-radius:10px;' +
       'border:1px solid rgba(62,180,120,0.3);background:rgba(62,180,120,0.08);' +
       'font-family:\'Fraunces\',serif;font-style:italic;font-weight:200;font-size:17px;' +
       'color:rgba(62,180,120,0.9);cursor:pointer">save & sync</button>' +
-
     '<div style="font-family:\'DM Mono\',monospace;font-size:8px;color:rgba(120,140,160,0.3);' +
       'text-align:center;margin-top:16px;line-height:1.6">' +
-      'synced across all devices · always confirm with your clinical team' +
+      'synced across all devices · every save is logged · confirm changes with your clinical team' +
     '</div>';
 }
 
+function _setBolusType(type) {
+  if (!_TREATMENT) _TREATMENT = JSON.parse(JSON.stringify(_TREATMENT_DEFAULTS));
+  _TREATMENT.bolusType = type;
+  var bolusInfo = { Novorapid: 'peak ~75 min · 4 hr tail', Fiasp: 'peak ~55 min · 4 hr tail' };
+  ['Novorapid','Fiasp'].forEach(function(b) {
+    var btn = document.getElementById('tr-bolus-' + b);
+    if (!btn) return;
+    var sel = b === type;
+    btn.style.borderColor = sel ? 'rgba(100,200,160,0.5)' : 'var(--rv-panel-border)';
+    btn.style.background  = sel ? 'rgba(100,200,160,0.1)' : 'transparent';
+    btn.style.color       = sel ? 'rgba(100,200,160,0.9)' : 'rgba(200,220,240,0.4)';
+  });
+  var info = document.getElementById('tr-bolus-info');
+  if (info) info.textContent = bolusInfo[type] || '';
+}
+
+async function openTherapyHistory() {
+  var ex = document.getElementById('therapy-hist-overlay');
+  if (ex) { ex.remove(); return; }
+
+  var el = document.createElement('div');
+  el.id = 'therapy-hist-overlay';
+  el.style.cssText = 'position:fixed;inset:0;z-index:80;background:rgba(3,5,20,0.97);' +
+    'backdrop-filter:blur(16px);overflow-y:auto;display:flex;flex-direction:column;' +
+    'align-items:center;padding:48px 20px 60px;font-family:\'DM Mono\',monospace';
+  el.innerHTML = '<div style="max-width:360px;width:100%">' +
+    '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:20px">' +
+      '<div style="font-family:\'Fraunces\',serif;font-style:italic;font-weight:200;font-size:20px;' +
+        'color:rgba(180,220,200,0.8)">therapy history</div>' +
+      '<button onclick="document.getElementById(\'therapy-hist-overlay\').remove()" ' +
+        'style="background:none;border:none;cursor:pointer;font-size:22px;color:rgba(200,220,240,0.4)">×</button>' +
+    '</div>' +
+    '<div style="font-size:10px;color:rgba(140,160,180,0.4);text-align:center">loading…</div>' +
+    '</div>';
+  document.body.appendChild(el);
+
+  try {
+    var rows = await _sbFetch(
+      'therapy_history?order=t.desc&limit=40&select=t,basal_dose,basal_type,bolus_type,basal_time,hypo_threshold,hypo_carbs,ratios,dia,changed_by',
+      {}
+    );
+    if (!rows || !rows.length) {
+      el.querySelector('div').innerHTML += '<div style="font-size:11px;color:rgba(200,220,240,0.3);text-align:center">no history yet</div>';
+      return;
+    }
+    var html = '<div style="max-width:360px;width:100%">' +
+      '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:20px">' +
+        '<div style="font-family:\'Fraunces\',serif;font-style:italic;font-weight:200;font-size:20px;' +
+          'color:rgba(180,220,200,0.8)">therapy history</div>' +
+        '<button onclick="document.getElementById(\'therapy-hist-overlay\').remove()" ' +
+          'style="background:none;border:none;cursor:pointer;font-size:22px;color:rgba(200,220,240,0.4)">×</button>' +
+      '</div>';
+
+    rows.forEach(function(r) {
+      var d = new Date(r.t);
+      var dateStr = d.toLocaleDateString('en-GB',{day:'numeric',month:'short',year:'numeric'}) +
+        ' ' + d.toLocaleTimeString('en-GB',{hour:'2-digit',minute:'2-digit'});
+      var ratioList = (r.ratios||[]).map(function(seg) {
+        var label = (seg.start && seg.end) ? seg.start + '–' + seg.end : (seg.period||'');
+        return '<div style="display:flex;justify-content:space-between;font-size:9px;' +
+          'color:rgba(200,220,240,0.5);padding:2px 0">' +
+          '<span>' + label + '</span>' +
+          '<span style="color:rgba(255,150,50,0.7)">1:' + (seg.ic||'—') + '</span>' +
+          '<span style="color:rgba(80,140,220,0.6)">ISF ' + (seg.isf||'—') + '</span>' +
+          '</div>';
+      }).join('');
+      var who = r.changed_by === 'backfill' ? 'backfill import'
+        : r.changed_by ? 'device ' + r.changed_by.slice(0,8) : 'unknown';
+
+      html += '<div style="border:1px solid rgba(255,255,255,0.07);border-radius:10px;' +
+        'padding:12px 14px;margin-bottom:10px;background:rgba(255,255,255,0.02)">' +
+        '<div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:8px">' +
+          '<span style="font-size:10px;color:rgba(180,220,200,0.7)">' + dateStr + '</span>' +
+          '<span style="font-size:9px;color:rgba(140,160,180,0.4)">' + who + '</span>' +
+        '</div>' +
+        '<div style="font-size:9px;color:rgba(140,180,220,0.5);margin-bottom:6px">' +
+          (r.basal_type||'') + (r.basal_dose ? ' · ' + r.basal_dose + 'U' : '') +
+          (r.basal_time ? ' · ' + r.basal_time : '') +
+          (r.bolus_type ? ' · ' + r.bolus_type : '') +
+        '</div>' +
+        ratioList +
+        '</div>';
+    });
+    html += '</div>';
+    el.innerHTML = html;
+  } catch(e) {
+    el.querySelector('div div:last-child').textContent = 'failed to load: ' + e.message;
+  }
+}
+
 function saveTreatmentForm() {
-  var get = function(id) { var el = document.getElementById('tr-' + id); return el ? parseFloat(el.value) || 0 : 0; };
+  var getN = function(id) { var el = document.getElementById('tr-' + id); return el ? parseFloat(el.value) || 0 : 0; };
+  var getS = function(id) { var el = document.getElementById('tr-' + id); return el ? el.value : ''; };
   var updated = {
-    basalDose: get('basal'),
-    basalType: 'Degludec',
-    hypoThreshold: get('hypo-thr'),
-    hypoCarbs: get('hypo-carbs'),
+    basalDose:     getN('basal'),
+    basalType:     'Degludec',
+    basalTime:     getS('basal-time') || '17:00',
+    bolusType:     (_TREATMENT && _TREATMENT.bolusType) || 'Novorapid',
+    hypoThreshold: getN('hypo-thr'),
+    hypoCarbs:     getN('hypo-carbs'),
+    dia:           (_TREATMENT && _TREATMENT.dia) || 150,
     ratios: (_TREATMENT || _TREATMENT_DEFAULTS).ratios.map(function(row, i) {
-      return { period: row.period, isf: get('isf-' + i), ic: get('ic-' + i) || null };
+      return {
+        start:  row.start  || null,
+        end:    row.end    || null,
+        period: row.period || null,
+        isf: getN('isf-' + i),
+        ic:  getN('ic-'  + i) || null,
+        target: row.target || 5.5,
+      };
     })
   };
   _saveTreatmentSettings(updated).then(function() {
