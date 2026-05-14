@@ -5036,76 +5036,136 @@ async function loadObservedISF() {
   }
 }
 
-function _periodForHour(h) {
-  if (h >= 6  && h < 10) return 'Breakfast';
-  if (h >= 10 && h < 14) return 'Lunch';
-  if (h >= 14 && h < 18) return 'Afternoon';
-  if (h >= 18 && h < 22) return 'Evening';
-  return 'Overnight';
+// ── TIME-BASED SEGMENT LOOKUP ─────────────────────────────────────────────
+// ratios rows use {start:"HH:MM", end:"HH:MM", ic, isf, target} — no labels.
+// "end":"24:00" is treated as midnight (exclusive upper bound = next day 00:00).
+
+function _hhmm(t) {
+  // Returns "HH:MM" string for a unix-ms timestamp (local time)
+  var d = new Date(t || Date.now());
+  return (d.getHours() < 10 ? '0' : '') + d.getHours() + ':' +
+         (d.getMinutes() < 10 ? '0' : '') + d.getMinutes();
 }
 
-function getISF(t) {
-  var h      = new Date(t || Date.now()).getHours();
-  var period = _periodForHour(h);
+function _ratioForTime(ratios, t) {
+  // Finds the matching segment in a time-based ratios array for timestamp t.
+  // Segments: {start:"HH:MM", end:"HH:MM", ic, isf, target}
+  // end:"24:00" wraps to "00:00" for comparison.
+  if (!ratios || !ratios.length) return null;
+  var hhmm = _hhmm(t);
+  for (var i = 0; i < ratios.length; i++) {
+    var r = ratios[i];
+    if (!r.start || !r.end) continue;
+    var end = r.end === '24:00' ? '99:99' : r.end; // 24:00 always wins as last slot
+    if (hhmm >= r.start && hhmm < end) return r;
+  }
+  return ratios[ratios.length - 1]; // fallback: last segment
+}
 
-  // Layer 1: _TREATMENT ratios (Supabase-synced, user-editable)
+// Cache for getTherapyAt — keyed by therapy_history.t (not event t), filled lazily.
+var _therapyHistoryCache = null; // full sorted array, loaded once
+
+async function _loadTherapyHistory() {
+  if (_therapyHistoryCache !== null) return _therapyHistoryCache;
+  try {
+    var rows = await _sbFetch(
+      'therapy_history?order=t.asc&select=t,ratios,basal_dose,basal_type,hypo_threshold,hypo_carbs,dia',
+      {}
+    );
+    _therapyHistoryCache = Array.isArray(rows) ? rows : [];
+  } catch(e) {
+    console.warn('[getTherapyAt] load failed:', e.message);
+    _therapyHistoryCache = [];
+  }
+  return _therapyHistoryCache;
+}
+
+async function getTherapyAt(t) {
+  // Returns the therapy_history row active at unix-ms timestamp t.
+  // Uses binary search on the pre-loaded sorted cache.
+  var rows = await _loadTherapyHistory();
+  if (!rows.length) return null;
+  // Find last row where row.t <= t
+  var result = null;
+  for (var i = 0; i < rows.length; i++) {
+    if (rows[i].t <= t) result = rows[i];
+    else break;
+  }
+  return result;
+}
+
+function getISF(t, historicalRatios) {
+  // historicalRatios: optional pre-fetched ratios array from getTherapyAt (for backfill paths)
+  var now = t || Date.now();
+  var ratios = historicalRatios ||
+    (typeof _TREATMENT !== 'undefined' && _TREATMENT && _TREATMENT.ratios) || null;
+
+  // Layer 1: Find segment for this time in ratios (time-based or label-based)
   var treatmentISF = null;
-  if (typeof _TREATMENT !== 'undefined' && _TREATMENT && _TREATMENT.ratios) {
-    var row = _TREATMENT.ratios.find(function(r){ return r.period === period; });
-    if (row && row.isf) treatmentISF = row.isf;
+  if (ratios) {
+    var seg = _ratioForTime(ratios, now);
+    if (seg && seg.isf) treatmentISF = seg.isf;
   }
 
-  // Layer 2: Observed ISF from bolus_outcomes
-  var obs = _observedISF[period];
-  if (obs && obs.count >= MIN_OUTCOMES_FOR_ADAPTATION) {
-    if (treatmentISF) {
-      // Blend: observed 70%, treatment 30% — anchors to clinical setting but learns
-      var blended = obs.mean * 0.7 + treatmentISF * 0.3;
-      return +blended.toFixed(2);
+  // Layer 2: Observed ISF from bolus_outcomes (only in live/current context, not backfill)
+  if (!historicalRatios) {
+    var h = new Date(now).getHours();
+    var periodKey = h >= 6 && h < 10 ? '06:30' : h >= 10 && h < 14 ? '09:30' :
+                    h >= 14 && h < 18 ? '11:30' : h >= 18 && h < 22 ? '16:30' : '00:00';
+    var obs = _observedISF[periodKey] || _observedISF[_hhmm(now)];
+    if (obs && obs.count >= MIN_OUTCOMES_FOR_ADAPTATION) {
+      if (treatmentISF) {
+        var blended = obs.mean * 0.7 + treatmentISF * 0.3;
+        return +blended.toFixed(2);
+      }
+      return obs.mean;
     }
-    return obs.mean;
   }
 
-  // Layer 3: _TREATMENT only (not enough observed data yet)
   if (treatmentISF) return treatmentISF;
-
-  // Layer 4: Hardcoded fallback (should never reach here once _TREATMENT is loaded)
-  return h >= 9 && h < 15 ? 7.0 : 6.5;
+  // Hardcoded fallback
+  var hh = new Date(now).getHours();
+  return hh >= 9 && hh < 15 ? 7.0 : 6.5;
 }
 
-function getIC(t) {
-  var h      = new Date(t || Date.now()).getHours();
-  var period = _periodForHour(h);
-
-  if (typeof _TREATMENT !== 'undefined' && _TREATMENT && _TREATMENT.ratios) {
-    var row = _TREATMENT.ratios.find(function(r){ return r.period === period; });
-    if (row && row.ic) return row.ic;
+function getIC(t, historicalRatios) {
+  // historicalRatios: optional pre-fetched ratios array from getTherapyAt (for backfill paths)
+  var now = t || Date.now();
+  var ratios = historicalRatios ||
+    (typeof _TREATMENT !== 'undefined' && _TREATMENT && _TREATMENT.ratios) || null;
+  if (ratios) {
+    var seg = _ratioForTime(ratios, now);
+    if (seg && seg.ic) return seg.ic;
   }
   // Hardcoded fallback
+  var h = new Date(now).getHours();
   return h >= 6 && h < 10 ? 8.5 : h >= 10 && h < 14 ? 12 : h >= 14 && h < 18 ? 15 : 10;
 }
 
-function getTarget(t) {
-  // Future: could vary by time-of-day or activity
+function getTarget(t, historicalRatios) {
+  var now = t || Date.now();
+  var ratios = historicalRatios ||
+    (typeof _TREATMENT !== 'undefined' && _TREATMENT && _TREATMENT.ratios) || null;
+  if (ratios) {
+    var seg = _ratioForTime(ratios, now);
+    if (seg && seg.target) return seg.target;
+  }
   return (typeof _TREATMENT !== 'undefined' && _TREATMENT && _TREATMENT.targetBG)
     ? _TREATMENT.targetBG : 6.0;
 }
 
 function _currentTherapySnapshot(t) {
-  if (typeof _TREATMENT === 'undefined' || !_TREATMENT) return null;
-  var hour = new Date(t || Date.now()).getHours();
-  var period = (_TREATMENT.ratios || []).find(function(r) {
-    if (r.period === 'Breakfast')  return hour >= 6  && hour < 10;
-    if (r.period === 'Lunch')      return hour >= 10 && hour < 14;
-    if (r.period === 'Afternoon')  return hour >= 14 && hour < 18;
-    if (r.period === 'Evening')    return hour >= 18 && hour < 22;
-    if (r.period === 'Overnight')  return true;
-    return false;
-  }) || (_TREATMENT.ratios && _TREATMENT.ratios[0]) || null;
-  return period ? {
-    period: period.period, isf: period.isf, ic: period.ic,
-    basal: _TREATMENT.basalDose, basalType: _TREATMENT.basalType,
-  } : null;
+  var now = t || Date.now();
+  var ratios = (typeof _TREATMENT !== 'undefined' && _TREATMENT && _TREATMENT.ratios) || null;
+  if (!ratios) return null;
+  var seg = _ratioForTime(ratios, now);
+  if (!seg) return null;
+  return {
+    period: (seg.start + '-' + seg.end), // time-range string replaces label
+    isf: seg.isf, ic: seg.ic,
+    basal: _TREATMENT && _TREATMENT.basalDose,
+    basalType: _TREATMENT && _TREATMENT.basalType,
+  };
 }
 
 function _preBG(t) {
@@ -5122,25 +5182,7 @@ async function syncMealToSupabase(meal) {
   if (!SUPABASE_READY || !meal || !meal.t) return;
   try {
     // Capture therapy snapshot for active period at meal time
-    var therapySnap = null;
-    if (typeof _TREATMENT !== 'undefined' && _TREATMENT) {
-      var mealHour = new Date(meal.t).getHours();
-      var activePeriod = (_TREATMENT.ratios || []).find(function(r) {
-        if (r.period === 'Breakfast')  return mealHour >= 6  && mealHour < 10;
-        if (r.period === 'Lunch')      return mealHour >= 10 && mealHour < 14;
-        if (r.period === 'Afternoon')  return mealHour >= 14 && mealHour < 18;
-        if (r.period === 'Evening')    return mealHour >= 18 && mealHour < 22;
-        if (r.period === 'Overnight')  return true; // fallback
-        return false;
-      }) || (_TREATMENT.ratios && _TREATMENT.ratios[0]) || null;
-      therapySnap = activePeriod ? {
-        period: activePeriod.period,
-        isf: activePeriod.isf,
-        ic: activePeriod.ic,
-        basal: _TREATMENT.basalDose,
-        basalType: _TREATMENT.basalType,
-      } : null;
-    }
+    var therapySnap = _currentTherapySnapshot(meal.t);
 
     // Capture pre-meal BG (nearest reading before meal time)
     var preBG = null;
