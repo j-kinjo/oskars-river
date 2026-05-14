@@ -6697,10 +6697,18 @@ function searchFood(q) {
   var matches = all.filter(function(f) { return f.name.toLowerCase().indexOf(ql) >= 0; }).slice(0, 8);
 
   if (matches.length === 0) {
-    // No match — open the full-screen add-food modal directly.
-    // Single form for all entry points; no lossy inline dropdown.
-    results.style.display = 'none';
-    addCustomFood(q);
+    // No match — show a clear prompt row; user taps to open the add-food modal.
+    // Don't auto-open — too surprising if they just paused mid-type.
+    results.style.display = 'block';
+    results.innerHTML =
+      '<div onclick="document.getElementById(\'food-results\').style.display=\'none\';addCustomFood(\'' + q.replace(/'/g,"\\'") + '\')" ' +
+        'style="padding:11px 14px;cursor:pointer;display:flex;align-items:center;gap:10px">' +
+        '<div style="width:26px;height:26px;border-radius:50%;border:1px solid rgba(62,180,120,0.4);display:flex;align-items:center;justify-content:center;flex-shrink:0;font-size:14px;color:rgba(100,220,160,0.7)">+</div>' +
+        '<div>' +
+          '<div style="font-family:\'DM Mono\',monospace;font-size:12px;color:rgba(220,235,250,0.85)">' + q + '</div>' +
+          '<div style="font-family:\'DM Mono\',monospace;font-size:9px;color:rgba(62,180,120,0.5);margin-top:1px">not in library — tap to add &amp; save</div>' +
+        '</div>' +
+      '</div>';
     return;
   }
 
@@ -7539,7 +7547,7 @@ function addCustomFood(name) {
 
   var el = document.createElement('div');
   el.id = 'food-add-overlay';
-  el.style.cssText = 'position:fixed;inset:0;z-index:80;background:var(--rv-panel-bg);backdrop-filter:blur(14px);display:flex;flex-direction:column;align-items:center;justify-content:flex-start;padding:24px 24px 40px;transition:opacity .2s;opacity:0;overflow-y:auto;-webkit-overflow-scrolling:touch';
+  el.style.cssText = 'position:fixed;inset:0;z-index:600;background:var(--rv-panel-bg);backdrop-filter:blur(14px);display:flex;flex-direction:column;align-items:center;justify-content:flex-start;padding:24px 24px 40px;transition:opacity .2s;opacity:0;overflow-y:auto;-webkit-overflow-scrolling:touch';
 
   function inp(id, type, placeholder, min, max, step, val, extraStyle) {
     var i = document.createElement('input');
@@ -7570,17 +7578,35 @@ function addCustomFood(name) {
   var wrap = document.createElement('div');
   wrap.style.cssText = 'max-width:320px;width:100%';
 
-  // Title
-  var title = document.createElement('div');
-  title.style.cssText = "font-family:'Fraunces',serif;font-style:italic;font-weight:200;font-size:22px;color:rgba(180,220,200,0.95);margin-bottom:3px";
-  title.textContent = 'add food';
-  wrap.appendChild(title);
+  // ── Header row: title + close ────────────────────────────────────
+  var headerRow = document.createElement('div');
+  headerRow.style.cssText = 'display:flex;align-items:center;justify-content:space-between;margin-bottom:6px';
+  var titleEl = document.createElement('div');
+  titleEl.style.cssText = "font-family:'Fraunces',serif;font-style:italic;font-weight:200;font-size:14px;color:rgba(180,220,200,0.5)";
+  titleEl.textContent = 'add food';
+  var closeBtn2 = document.createElement('button');
+  closeBtn2.style.cssText = 'background:none;border:none;cursor:pointer;font-size:22px;color:rgba(180,200,220,0.4);padding:0;line-height:1;touch-action:manipulation';
+  closeBtn2.textContent = '×';
+  closeBtn2.onclick = function() { window._foodAddCallback = null; el.remove(); };
+  headerRow.appendChild(titleEl);
+  headerRow.appendChild(closeBtn2);
+  wrap.appendChild(headerRow);
 
-  var sub = document.createElement('div');
-  sub.className = 'food-name-sub';
-  sub.style.cssText = 'font-family:monospace;font-size:12px;color:rgba(100,200,160,0.6);margin-bottom:20px';
-  sub.textContent = name;
-  wrap.appendChild(sub);
+  // ── Food name — large, prominent, editable ───────────────────────
+  var nameInpEl = document.createElement('input');
+  nameInpEl.id = 'new-food-name';
+  nameInpEl.type = 'text';
+  nameInpEl.value = name;
+  nameInpEl.autocomplete = 'off';
+  nameInpEl.style.cssText = "width:100%;padding:10px 0;border:none;border-bottom:1px solid rgba(62,180,120,0.3);background:transparent;font-family:'Fraunces',serif;font-style:italic;font-weight:300;font-size:26px;color:rgba(220,240,230,0.95);outline:none;box-sizing:border-box;margin-bottom:18px";
+  wrap.appendChild(nameInpEl);
+
+  // ── Camera — first action ────────────────────────────────────────
+  var camBtn = document.createElement('button');
+  camBtn.style.cssText = 'width:100%;margin-bottom:16px;padding:10px;border-radius:9px;border:1px solid rgba(62,180,120,0.2);background:rgba(62,180,120,0.06);font-family:monospace;font-size:10px;color:rgba(100,220,160,0.6);cursor:pointer;display:flex;align-items:center;justify-content:center;gap:8px;touch-action:manipulation';
+  camBtn.innerHTML = '📷 <span>scan nutrition label or food</span>';
+  camBtn.onclick = function() { el.remove(); openPhotoFood(); };
+  wrap.appendChild(camBtn);
 
   // ── Toggle: carbs per 100g / carbs per serving ──────────────────
   var toggleWrap = document.createElement('div');
@@ -7645,30 +7671,53 @@ function addCustomFood(name) {
   gEachHidden.type = 'hidden'; gEachHidden.id = 'new-food-g_each'; gEachHidden.value = '';
   wrap.appendChild(gEachHidden);
 
-  // ── Category dropdown ────────────────────────────────────────────
+  // ── Category — themed segmented chips ───────────────────────────
   var catRow = document.createElement('div');
   catRow.style.cssText = 'margin-bottom:16px';
   catRow.appendChild(lbl('category'));
   var catCats = ['bread','cereal','pasta','fruit','dairy','protein','snack','hypo','drink','main','custom'];
-  var catSel = document.createElement('select');
-  catSel.id = 'new-food-cat';
-  catSel.style.cssText = 'width:100%;padding:10px 14px;border-radius:9px;border:1px solid rgba(255,255,255,0.2);background:rgba(255,255,255,0.06);font-family:monospace;font-size:13px;color:rgba(200,220,240,0.85);outline:none;box-sizing:border-box';
+  var _selCat = autoCat;
+  var catChips = document.createElement('div');
+  catChips.style.cssText = 'display:flex;flex-wrap:wrap;gap:5px';
   catCats.forEach(function(c) {
-    var o = document.createElement('option');
-    o.value = c; o.textContent = c;
-    if (c === autoCat) o.selected = true;
-    catSel.appendChild(o);
+    var chip = document.createElement('button');
+    chip.id = 'catbtn-' + c;
+    chip.textContent = c;
+    chip.style.cssText = 'padding:5px 10px;border-radius:20px;border:1px solid rgba(255,255,255,0.12);background:transparent;font-family:monospace;font-size:9px;color:rgba(160,180,200,0.5);cursor:pointer;touch-action:manipulation;transition:all .12s';
+    chip.onclick = function() {
+      _selCat = c;
+      catCats.forEach(function(x) {
+        var b = document.getElementById('catbtn-' + x);
+        if (!b) return;
+        var active = x === c;
+        b.style.background = active ? 'rgba(62,180,120,0.18)' : 'transparent';
+        b.style.color      = active ? 'rgba(100,220,160,0.9)' : 'rgba(160,180,200,0.5)';
+        b.style.borderColor= active ? 'rgba(62,180,120,0.4)'  : 'rgba(255,255,255,0.12)';
+      });
+      // Update hidden input for updateAddFoodPreview compatibility
+      var hidCat = document.getElementById('new-food-cat');
+      if (hidCat) hidCat.value = c;
+      var badge = document.getElementById('new-food-gi-badge');
+      if (badge && !badge.textContent.startsWith('AI')) {
+        var newEst = _giFromCategory(c, lname);
+        var giEl = document.getElementById('new-food-gi');
+        if (giEl) giEl.value = newEst.gi;
+        badge.textContent = '~' + newEst.gi + ' est. — ' + newEst.basis;
+      }
+      updateAddFoodPreview();
+    };
+    if (c === autoCat) {
+      chip.style.background  = 'rgba(62,180,120,0.18)';
+      chip.style.color       = 'rgba(100,220,160,0.9)';
+      chip.style.borderColor = 'rgba(62,180,120,0.4)';
+    }
+    catChips.appendChild(chip);
   });
-  catSel.addEventListener('change', function() {
-    var badge = document.getElementById('new-food-gi-badge');
-    var giEl  = document.getElementById('new-food-gi');
-    if (!badge || badge.textContent === 'edited') return; // user locked it, don't overwrite
-    var newEst = _giFromCategory(catSel.value, lname);
-    if (giEl) giEl.value = newEst.gi;
-    badge.textContent = '~' + newEst.gi + ' est. — ' + newEst.basis;
-    updateAddFoodPreview();
-  });
-  catRow.appendChild(catSel);
+  catRow.appendChild(catChips);
+  // Hidden input keeps compatibility with updateAddFoodPreview which reads #new-food-cat
+  var catHidden = document.createElement('input');
+  catHidden.type = 'hidden'; catHidden.id = 'new-food-cat'; catHidden.value = autoCat;
+  catRow.appendChild(catHidden);
   wrap.appendChild(catRow);
 
   // ── GI — always visible, auto-estimated, confirmable ────────────
@@ -7753,7 +7802,21 @@ function addCustomFood(name) {
   var saveBtn = document.createElement('button');
   saveBtn.style.cssText = "flex:1;padding:13px;border-radius:10px;border:1px solid rgba(62,180,120,0.4);background:rgba(62,180,120,0.12);font-family:'Fraunces',serif;font-style:italic;font-weight:200;font-size:17px;color:rgba(100,220,160,0.95);cursor:pointer";
   saveBtn.textContent = 'save + add';
-  saveBtn.onclick = function() { saveCustomFood(encodeURIComponent(name)); };
+  saveBtn.onclick = function() {
+    var c100val = parseFloat((document.getElementById('new-food-c100')||{}).value);
+    var cat     = (document.getElementById('new-food-cat')||{}).value || 'custom';
+    if ((!c100val || c100val <= 0) && cat !== 'protein') {
+      var ci = document.getElementById('new-food-c100');
+      if (ci) { ci.style.borderColor='rgba(220,80,60,0.7)'; setTimeout(function(){ ci.style.borderColor='rgba(62,180,120,0.5)'; },1500); }
+      if (typeof showToast === 'function') showToast('enter carbs per 100g first');
+      return;
+    }
+    // Read the editable name field
+    var nameEl = document.getElementById('new-food-name');
+    var finalName = nameEl ? nameEl.value.trim() : name;
+    if (!finalName) { if (typeof showToast === 'function') showToast('enter a food name'); return; }
+    saveCustomFood(encodeURIComponent(finalName));
+  };
 
   var cancelBtn = document.createElement('button');
   cancelBtn.style.cssText = 'padding:13px 16px;border-radius:10px;border:1px solid rgba(255,255,255,0.15);background:transparent;font-family:monospace;font-size:10px;color:rgba(255,255,255,0.5);cursor:pointer';
@@ -7763,13 +7826,6 @@ function addCustomFood(name) {
   btnRow.appendChild(saveBtn);
   btnRow.appendChild(cancelBtn);
   wrap.appendChild(btnRow);
-
-  // Camera button — scan a nutrition label to pre-fill
-  var camBtn = document.createElement('button');
-  camBtn.style.cssText = 'width:100%;margin-top:10px;padding:10px;border-radius:9px;border:1px solid rgba(255,255,255,0.1);background:rgba(255,255,255,0.04);font-family:monospace;font-size:10px;color:rgba(180,200,220,0.5);cursor:pointer;display:flex;align-items:center;justify-content:center;gap:8px';
-  camBtn.innerHTML = '📷 <span>scan nutrition label</span>';
-  camBtn.onclick = function() { el.remove(); openPhotoFood(); };
-  wrap.appendChild(camBtn);
 
   el.appendChild(wrap);
   el.addEventListener('click', function(e){ if(e.target===el) { window._foodAddCallback = null; el.remove(); } });
@@ -7889,7 +7945,7 @@ function updateAddFoodPreview() {
     var catEl  = document.getElementById('new-food-cat');
     var cat    = catEl ? catEl.value : 'custom';
     var overlay = document.getElementById('food-add-overlay');
-    var nameSub = overlay ? (overlay.querySelector('.food-name-sub')||{}).textContent||'' : '';
+    var nameSub = overlay ? ((overlay.querySelector('#new-food-name')||overlay.querySelector('.food-name-sub')||{}).value||(overlay.querySelector('#new-food-name')||overlay.querySelector('.food-name-sub')||{}).textContent||'') : '';
     var est    = _giFromCategory(cat, nameSub.toLowerCase());
 
     // Nudge GI by c100 density: very low carb (<5) → protein/fat, very high (>75) → likely refined
@@ -9362,9 +9418,8 @@ function timePickerHTML(id, defaultDate, allowFuture) {
       fmtTime(val) + '</div>' +
     '<input id="' + id + '" type="datetime-local" value="' + val + '" ' + max + ' ' +
       'style="position:absolute;opacity:0;width:1px;height:1px" ' +
-      'onchange="document.getElementById(\'' + id + '-display\').textContent=fmtTime(this.value)">' +
-    '<button onclick="document.getElementById(\'' + id + '\').showPicker?.' +
-      'call(document.getElementById(\'' + id + '\'))||document.getElementById(\'' + id + '\').click()" ' +
+      'onchange="document.getElementById(\'' + id + '-display\').textContent=fmtTime(this.value);window._pickerOpen=false">' +
+    '<button onclick="event.stopPropagation();window._pickerOpen=true;var _p=document.getElementById(\'' + id + '\');_p.showPicker?_p.showPicker():_p.click()" ' +
       'style="padding:5px 10px;border-radius:7px;border:1px solid var(--rv-panel-border);' +
       'background:var(--rv-input-bg);font-family:\'DM Mono\',monospace;font-size:9px;' +
       'color:rgba(200,220,240,0.4);cursor:pointer;touch-action:manipulation">change</button>' +
@@ -9382,7 +9437,7 @@ function openHypoLog() {
   var el=document.createElement('div'); el.id='hypo-overlay';
   el.style.cssText='position:fixed;inset:0;z-index:60;background:rgba(3,5,20,0.9);backdrop-filter:blur(14px);display:flex;flex-direction:column;align-items:center;justify-content:flex-start;padding:24px;padding-top:max(40px,env(safe-area-inset-top,40px));overflow-y:auto;-webkit-overflow-scrolling:touch;transition:opacity .25s;opacity:0;touch-action:pan-y;pointer-events:auto';
   el.addEventListener('touchstart',function(e){e.stopPropagation();},{passive:true});
-  el.addEventListener('click',function(e){if(e.target===el)closeHypoLog();});
+  el.addEventListener('click',function(e){if(window._pickerOpen)return;if(e.target===el)closeHypoLog();});
   var _hypoDefault = _radialDefaultT ? new Date(_radialDefaultT) : new Date();
   if (_radialDefaultT) _radialDefaultT = null;
   var s='<div style="max-width:360px;width:100%">';
