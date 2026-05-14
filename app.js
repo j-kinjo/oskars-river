@@ -565,6 +565,16 @@ try { LOGGED_EVENTS = JSON.parse(localStorage.getItem('river_logged')||'[]');
 // Do not push to BOLUS_EVENTS directly; push to LOGGED_EVENTS instead.
 var BOLUS_EVENTS = LOGGED_EVENTS;
 
+// ── COLLISION-SAFE TIMESTAMP ───────────────────────────────────────────────
+// Returns a timestamp guaranteed not to collide with any existing local event.
+// When two events are logged within the same minute, ms-level jitter separates
+// them so the upsert on_conflict=t never overwrites one with the other.
+function _safeEventT(baseT) {
+  var t = baseT || Date.now();
+  while (LOGGED_EVENTS.some(function(e){ return e.t === t; })) { t++; }
+  return t;
+}
+
 const POD_PAUSE_T  = 1773651600000;
 let CGM_START = HISTORY_RAW.length > 0 ? HISTORY_RAW[0].t : Date.now() - 2*3600000;
 let CGM_END   = HISTORY_RAW.length > 0 ? HISTORY_RAW[HISTORY_RAW.length-1].t : Date.now();
@@ -6359,7 +6369,7 @@ function closeSheet() {
   window._pendingDrop = null;
 }
 
-function suggestGI(n){
+function _giFromNameRegex(n){
   n=n.toLowerCase();
   if(/oat|porridge|bran|barley|lentil|bean|chick|pasta|pea/.test(n)) return 40;
   if(/apple|pear|orange|berry|yoghurt|milk|sourdough|rye/.test(n)) return 45;
@@ -6687,78 +6697,10 @@ function searchFood(q) {
   var matches = all.filter(function(f) { return f.name.toLowerCase().indexOf(ql) >= 0; }).slice(0, 8);
 
   if (matches.length === 0) {
-    results.style.display='block';
-    // ── Inline first-use capture — don't break the logging flow ──
-    var lq = q.toLowerCase();
-    var estCat = _categoryFromName(lq);
-    var estGIObj = _giFromCategory(estCat, lq);
-    var estGI = estGIObj.gi;
-
-    results.innerHTML =
-      '<div style="padding:12px 14px">' +
-        '<div style="font-family:\'DM Mono\',monospace;font-size:10px;color:rgba(180,200,220,0.5);margin-bottom:10px">' +
-          '<span style="color:rgba(220,100,60,0.7)">&#8220;' + q + '&#8221;</span> — not in library' +
-        '</div>' +
-        // Carbs row — with per-100 / per-serving toggle
-        '<div style="display:flex;gap:6px;margin-bottom:8px;align-items:flex-start">' +
-          '<div style="flex:1">' +
-            '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:3px">' +
-              '<div style="font-family:\'DM Mono\',monospace;font-size:7px;letter-spacing:1px;text-transform:uppercase;color:rgba(100,200,160,0.5)" id="inline-carbs-lbl">carbs per 100g</div>' +
-              '<div style="display:flex;border-radius:5px;overflow:hidden;border:1px solid rgba(62,180,120,0.2)">' +
-                '<button id="inline-mode-100" onclick="_setInlineMode(\'per100\')" style="padding:2px 6px;border:none;cursor:pointer;font-family:monospace;font-size:7px;background:rgba(62,180,120,0.2);color:rgba(100,220,160,0.9)">per 100g</button>' +
-                '<button id="inline-mode-serv" onclick="_setInlineMode(\'perServ\')" style="padding:2px 6px;border:none;cursor:pointer;font-family:monospace;font-size:7px;background:transparent;color:rgba(180,200,220,0.35)">per serving</button>' +
-              '</div>' +
-            '</div>' +
-            '<input id="inline-new-c100" type="number" min="0" max="500" step="0.1" inputmode="decimal" placeholder="e.g. 47"' +
-              ' style="width:100%;padding:8px 10px;border-radius:8px;border:1px solid rgba(62,180,120,0.4);background:rgba(62,180,120,0.07);font-family:monospace;font-size:14px;color:rgba(100,220,160,0.95);text-align:center;outline:none;box-sizing:border-box"' +
-              ' oninput="_updateInlinePreview()" onkeydown="return _numericOnly(event)">' +
-          '</div>' +
-          '<button onclick="openPhotoFood()" title="scan label" style="width:36px;height:58px;border-radius:8px;border:1px solid rgba(255,255,255,0.1);background:rgba(255,255,255,0.04);font-size:15px;cursor:pointer;flex-shrink:0;color:rgba(180,200,220,0.6);margin-top:18px">📷</button>' +
-        '</div>' +
-        // GI + GL side by side (small, informational)
-        '<div style="display:flex;gap:8px;margin-bottom:10px">' +
-          '<div style="flex:1">' +
-            '<div style="font-family:\'DM Mono\',monospace;font-size:7px;text-transform:uppercase;color:rgba(200,160,60,0.5);margin-bottom:3px;cursor:help" title="Glycaemic Index — how fast this food raises blood sugar (0–100). Higher = faster spike.">' +
-              'GI <span style="opacity:0.5;text-transform:none">glycaemic index</span>' +
-            '</div>' +
-            '<input id="inline-new-gi" type="number" min="0" max="100" step="1" inputmode="decimal" value="' + estGI + '"' +
-              ' style="width:100%;padding:7px 10px;border-radius:8px;border:1px solid rgba(200,160,60,0.3);background:rgba(200,160,60,0.05);font-family:monospace;font-size:13px;color:rgba(220,180,80,0.9);text-align:center;outline:none;box-sizing:border-box"' +
-              ' oninput="_updateInlinePreview()" onkeydown="return _numericOnly(event)">' +
-            '<div id="inline-gi-basis" style="font-family:\'DM Mono\',monospace;font-size:6.5px;color:rgba(200,160,60,0.4);margin-top:2px">est. — ' + estGIObj.basis + '</div>' +
-          '</div>' +
-          '<div style="flex:1">' +
-            '<div style="font-family:\'DM Mono\',monospace;font-size:7px;text-transform:uppercase;color:rgba(200,160,60,0.5);margin-bottom:3px;cursor:help" title="Glycaemic Load — GI × carbs in this portion ÷ 100. Combines speed and quantity. Under 10 = low impact, 10–20 = medium, 20+ = high.">' +
-              'GL <span style="opacity:0.5;text-transform:none">glycaemic load</span>' +
-            '</div>' +
-            '<div id="inline-gl-display" style="width:100%;padding:7px 10px;border-radius:8px;border:1px solid rgba(200,160,60,0.15);background:rgba(200,160,60,0.03);font-family:monospace;font-size:13px;color:rgba(220,180,80,0.6);text-align:center;box-sizing:border-box">—</div>' +
-          '</div>' +
-        '</div>' +
-        // Weight + CTA — the primary action row
-        '<div style="display:flex;gap:8px;align-items:flex-end;margin-bottom:8px">' +
-          '<div style="flex:1">' +
-            '<div style="font-family:\'DM Mono\',monospace;font-size:7px;letter-spacing:1px;text-transform:uppercase;color:rgba(160,180,200,0.6);margin-bottom:3px">grams to add now</div>' +
-            '<input id="inline-new-grams" type="number" min="0" max="2000" step="1" inputmode="decimal" placeholder="e.g. 80"' +
-              ' style="width:100%;padding:10px;border-radius:8px;border:1.5px solid rgba(62,180,120,0.5);background:rgba(62,180,120,0.06);font-family:monospace;font-size:16px;color:rgba(220,235,250,0.9);text-align:center;outline:none;box-sizing:border-box"' +
-              ' oninput="_updateInlinePreview()" onkeydown="return _numericOnly(event)">' +
-            '<div id="inline-new-preview" style="font-family:\'DM Mono\',monospace;font-size:10px;color:rgba(100,200,160,0.8);margin-top:4px;min-height:14px;font-weight:500"></div>' +
-          '</div>' +
-          '<button onclick="_saveInlineNewFood(\'' + q.replace(/'/g,"\\'") + '\')" ' +
-            'style="flex-shrink:0;padding:10px 14px;border-radius:9px;border:1px solid rgba(62,180,120,0.4);background:rgba(62,180,120,0.1);font-family:\'Fraunces\',serif;font-style:italic;font-weight:200;font-size:13px;color:rgba(100,220,160,0.9);cursor:pointer;touch-action:manipulation;white-space:nowrap;height:42px">add + save</button>' +
-        '</div>' +
-        // Secondary actions
-        '<div style="display:flex;gap:6px">' +
-          '<button onclick="addCustomFood(\'' + q.replace(/'/g,"\\'") + '\')" ' +
-            'style="flex:1;padding:7px;border-radius:8px;border:1px solid rgba(255,255,255,0.08);background:transparent;font-family:monospace;font-size:9px;color:rgba(160,180,200,0.4);cursor:pointer;touch-action:manipulation">more options…</button>' +
-          '<button onclick="document.getElementById(\'food-results\').style.display=\'none\';document.getElementById(\'food-search\').value=\'\';" ' +
-            'style="padding:7px 12px;border-radius:8px;border:1px solid rgba(255,255,255,0.06);background:transparent;font-family:monospace;font-size:11px;color:rgba(140,160,180,0.35);cursor:pointer;touch-action:manipulation">✕</button>' +
-        '</div>' +
-      '</div>';
-
-    // Fire Claude GI lookup for this food name — updates the GI field async
-    // without blocking the user; they can keep typing or override the estimate
-    suggestGI(q, document.getElementById('inline-new-gi'));
-
-    // Don't auto-focus — let user keep typing in the search box if they want
+    // No match — open the full-screen add-food modal directly.
+    // Single form for all entry points; no lossy inline dropdown.
+    results.style.display = 'none';
+    addCustomFood(q);
     return;
   }
 
@@ -6785,87 +6727,12 @@ function searchFood(q) {
   results.innerHTML = matchHtml + addExactRow;
 }
 
-// ── Inline first-use capture helpers (1e) ─────────────────────────────────
-
-// Prevent non-numeric input on number fields (fixes letter entry on iOS)
+// ── Prevent non-numeric input on number fields (fixes letter entry on iOS) ──
 function _numericOnly(e) {
   var allowed = ['Backspace','Delete','Tab','ArrowLeft','ArrowRight','ArrowUp','ArrowDown','Enter','.'];
   if (allowed.indexOf(e.key) >= 0) return true;
   if (e.key >= '0' && e.key <= '9') return true;
   e.preventDefault(); return false;
-}
-
-// Per-100g / per-serving toggle for inline form
-var _inlineMode = 'per100';
-function _setInlineMode(mode) {
-  _inlineMode = mode;
-  var lbl = document.getElementById('inline-carbs-lbl');
-  var btn100 = document.getElementById('inline-mode-100');
-  var btnServ = document.getElementById('inline-mode-serv');
-  if (lbl) lbl.textContent = mode === 'per100' ? 'carbs per 100g' : 'carbs per serving (g)';
-  if (btn100) { btn100.style.background = mode==='per100'?'rgba(62,180,120,0.2)':'transparent'; btn100.style.color = mode==='per100'?'rgba(100,220,160,0.9)':'rgba(180,200,220,0.35)'; }
-  if (btnServ) { btnServ.style.background = mode==='perServ'?'rgba(62,180,120,0.2)':'transparent'; btnServ.style.color = mode==='perServ'?'rgba(100,220,160,0.9)':'rgba(180,200,220,0.35)'; }
-  _updateInlinePreview();
-}
-
-function _updateInlinePreview() {
-  var c100raw = parseFloat((document.getElementById('inline-new-c100')||{}).value)||0;
-  var gi      = parseInt((document.getElementById('inline-new-gi')||{}).value)||0;
-  var grams   = parseFloat((document.getElementById('inline-new-grams')||{}).value)||0;
-  var prev    = document.getElementById('inline-new-preview');
-  var glBox   = document.getElementById('inline-gl-display');
-
-  var c100 = c100raw;
-  if (_inlineMode === 'perServ' && grams > 0 && c100raw > 0) {
-    c100 = c100raw / grams * 100;
-  }
-
-  if (c100raw > 0 && grams > 0) {
-    var carbsThis = _inlineMode === 'perServ' ? c100raw : c100 * grams / 100;
-    var gl = gi > 0 ? gi * carbsThis / 100 : null;
-    if (prev) prev.textContent = carbsThis.toFixed(1) + 'g carbs this portion';
-    if (glBox) glBox.textContent = gl !== null ? gl.toFixed(1) : '—';
-  } else if (c100raw > 0 && gi > 0) {
-    // c100 filled, no weight yet — show GL will appear once weight entered
-    if (prev) prev.textContent = '';
-    if (glBox) glBox.textContent = '—';
-  } else {
-    if (prev) prev.textContent = '';
-    if (glBox) glBox.textContent = '—';
-  }
-}
-
-function _saveInlineNewFood(name) {
-  var c100raw = parseFloat((document.getElementById('inline-new-c100')||{}).value)||0;
-  var gi      = parseInt((document.getElementById('inline-new-gi')||{}).value)||55;
-  var grams   = parseFloat((document.getElementById('inline-new-grams')||{}).value)||0;
-  if (!c100raw) { showToast('enter carbs first'); document.getElementById('inline-new-c100').focus(); return; }
-  if (!grams)   { showToast('enter weight in grams'); document.getElementById('inline-new-grams').focus(); return; }
-
-  // Resolve c100 from mode
-  var c100 = _inlineMode === 'perServ' ? (c100raw / grams * 100) : c100raw;
-  c100 = Math.round(c100 * 10) / 10;
-
-  var lname = name.toLowerCase();
-  var cat   = _categoryFromName(lname);
-  var f = {name:name, c100:c100, gi:gi, cat:cat, g_serv:grams, g_each:grams};
-
-  // Save to library as side-effect
-  var all = FOOD_LIBRARY.slice();
-  if (!all.find(function(x){ return x.name.toLowerCase() === lname; })) {
-    FOOD_LIBRARY.push(f);
-    saveFoodLibrary();
-  }
-
-  // Add to meal — don't leave logging context
-  var results = document.getElementById('food-results');
-  if (results) results.style.display = 'none';
-  var search = document.getElementById('food-search');
-  if (search) search.value = '';
-  _inlineMode = 'per100'; // reset for next use
-
-  addFoodItemGrams(name, grams);
-  showToast('added: ' + name);
 }
 
 
@@ -7891,17 +7758,27 @@ function addCustomFood(name) {
   var cancelBtn = document.createElement('button');
   cancelBtn.style.cssText = 'padding:13px 16px;border-radius:10px;border:1px solid rgba(255,255,255,0.15);background:transparent;font-family:monospace;font-size:10px;color:rgba(255,255,255,0.5);cursor:pointer';
   cancelBtn.textContent = 'cancel';
-  cancelBtn.onclick = function() { el.remove(); };
+  cancelBtn.onclick = function() { window._foodAddCallback = null; el.remove(); };
 
   btnRow.appendChild(saveBtn);
   btnRow.appendChild(cancelBtn);
   wrap.appendChild(btnRow);
 
+  // Camera button — scan a nutrition label to pre-fill
+  var camBtn = document.createElement('button');
+  camBtn.style.cssText = 'width:100%;margin-top:10px;padding:10px;border-radius:9px;border:1px solid rgba(255,255,255,0.1);background:rgba(255,255,255,0.04);font-family:monospace;font-size:10px;color:rgba(180,200,220,0.5);cursor:pointer;display:flex;align-items:center;justify-content:center;gap:8px';
+  camBtn.innerHTML = '📷 <span>scan nutrition label</span>';
+  camBtn.onclick = function() { el.remove(); openPhotoFood(); };
+  wrap.appendChild(camBtn);
+
   el.appendChild(wrap);
-  el.addEventListener('click', function(e){ if(e.target===el) el.remove(); });
-  el.addEventListener('keydown', function(e){ if(e.key==='Escape') el.remove(); });
+  el.addEventListener('click', function(e){ if(e.target===el) { window._foodAddCallback = null; el.remove(); } });
+  el.addEventListener('keydown', function(e){ if(e.key==='Escape') { window._foodAddCallback = null; el.remove(); } });
   document.body.appendChild(el);
   requestAnimationFrame(function(){ el.style.opacity='1'; });
+
+  // Fire Claude GI lookup immediately — fills GI field async without blocking
+  suggestGI(name, document.getElementById('new-food-gi'));
 
   // Pre-fill from photo data if available
   if (_photoFoodData) {
@@ -8069,20 +7946,37 @@ function saveCustomFood(encodedName) {
   if (el) el.remove();
   var f = {name:name, c100:carbs, gi:gi, cat:cat};
   if (gServ) { f.g_serv = gServ; f.g_each = gServ; } // mirror to g_each for compatibility
-  FOOD_LIBRARY.push(f);
-  saveFoodLibrary();
-  // If called from pad scan, update the pad item instead of adding to plate
-  if (typeof window._padAddCallback === 'function') {
-    var cb = window._padAddCallback;
-    window._padAddCallback = null;
+
+  // Save to library
+  var lname = name.toLowerCase();
+  if (!FOOD_LIBRARY.some(function(x){ return x.name.toLowerCase() === lname; })) {
+    FOOD_LIBRARY.push(f);
+    saveFoodLibrary();
+  }
+
+  // ── Caller callbacks — checked in priority order ──────────────────
+  // 1. Backfill callback (set by backfill.js before calling addCustomFood)
+  if (typeof window._foodAddCallback === 'function') {
+    var cb = window._foodAddCallback;
+    window._foodAddCallback = null;
     cb(f);
+    return;
+  }
+  // 2. Pad import callback
+  if (typeof window._padAddCallback === 'function') {
+    var pcb = window._padAddCallback;
+    window._padAddCallback = null;
+    pcb(f);
     // Re-open pad import overlay (it was obscured by food-add-overlay)
     var padOverlay = document.getElementById('pad-import-overlay');
     if (padOverlay) padOverlay.style.display = '';
     return;
   }
+  // 3. Default: add directly to the current meal plate
   addFoodItem(name);
 }
+// Export so backfill.js (loaded separately) can call it
+window.addCustomFood = addCustomFood;
 
 function updateItemCarbs(idx, val) {
   var c=parseFloat(val); if(isNaN(c)||c<0) return;
@@ -8170,12 +8064,13 @@ function logMealEntry(carbsOnly) {
   var eatWaitNow = (u > 0)
     ? (_eatWaitOverride !== null ? _eatWaitOverride : suggestEatWait(dataAt(t).bg || 7, avgGI))
     : 0; // no insulin → no wait, log carbs at bolus time immediately
-  var carbT = t + eatWaitNow * 60000; // when carbs enter the system
+  var carbT = _safeEventT(t + eatWaitNow * 60000); // when carbs enter the system
 
   // Log insulin at bolus time
   if (u > 0) {
-    SESSION.push({t: t, c: 0, u: u});
-    LOGGED_EVENTS.push({t: t, c: 0, u: u, note: 'bolus', local: true});
+    var bolusT = _safeEventT(t);
+    SESSION.push({t: bolusT, c: 0, u: u});
+    LOGGED_EVENTS.push({t: bolusT, c: 0, u: u, note: 'bolus', local: true});
   }
 
   // Log carbs at eat time — include per-food breakdown for GI-aware rendering
@@ -9396,7 +9291,8 @@ async function suggestGI(foodName, inputEl) {
     inputEl.placeholder = '⏳';
     inputEl.style.opacity = '0.5';
   }
-  var basisEl = document.getElementById('inline-gi-basis');
+  // Support both the old inline-gi-basis (now gone) and the overlay badge
+  var basisEl = document.getElementById('inline-gi-basis') || document.getElementById('new-food-gi-badge');
   if (basisEl) basisEl.textContent = 'looking up GI…';
 
   try {
@@ -9418,9 +9314,17 @@ async function suggestGI(foodName, inputEl) {
       // Colour-code the field by GI band
       inputEl.style.color = gi >= 70 ? 'rgba(210,80,40,0.9)' : gi >= 55 ? 'rgba(220,180,80,0.9)' : 'rgba(100,220,160,0.9)';
     }
-    if (basisEl) basisEl.textContent = result.note ? 'AI · ' + result.note : 'AI estimate';
-    // Also trigger preview update if the inline form is visible
-    if (typeof _updateInlinePreview === 'function') _updateInlinePreview();
+    var note = result.note ? 'AI · ' + result.note : 'AI estimate';
+    if (basisEl) {
+      basisEl.textContent = note;
+      // If it's the overlay badge, also mark as AI-confirmed so category change won't clobber it
+      if (basisEl.id === 'new-food-gi-badge') {
+        basisEl.style.color = 'rgba(62,200,140,0.8)';
+        basisEl.textContent = 'AI · ' + (result.note || 'estimated');
+      }
+    }
+    // Trigger preview update if the overlay form is visible
+    if (typeof updateAddFoodPreview === 'function') updateAddFoodPreview();
     return gi;
   } catch(e) {
     if (inputEl) { inputEl.placeholder = 'GI'; inputEl.style.opacity = ''; }
@@ -9544,7 +9448,7 @@ function logHypoTreatment(id){
   // Guardrail — 60g is already a very heavy hypo treatment for a child
   if(carbs>60){showToast('⚠️ '+carbs.toFixed(0)+'g is a very large hypo treatment — check quantity');return;}
   if(carbs>30){showToast('⚠️ '+carbs.toFixed(0)+'g logged — confirm this is correct');}
-  var now=getTimeVal('hypo-time');
+  var now=_safeEventT(getTimeVal('hypo-time'));
   SESSION.push({t:now,c:carbs,u:0,note:'hypo:'+id});
   try{localStorage.setItem('river_session',JSON.stringify(SESSION));}catch(e){}
   LOGGED_EVENTS.push({t:now,c:carbs,u:0,note:'hypo:'+id,logged_by:_thisPersonId||'unknown', local:true});
@@ -9671,7 +9575,7 @@ function logCorrection(){
   if(u<=0){closeCorrectionLog();return;}
   if(u>20){showToast('⚠️ '+u.toFixed(1)+'U is very high — max 20U per correction');return;}
   if(u>10){showToast('⚠️ '+u.toFixed(1)+'U logged — double-check this dose');}
-  var now=getTimeVal('corr-time');
+  var now=_safeEventT(getTimeVal('corr-time'));
   SESSION.push({t:now,c:0,u:u});
   LOGGED_EVENTS.push({t:now,c:0,u:u,note:'correction',logged_by:_thisPersonId||'unknown',local:true});
   try{localStorage.setItem('river_session',JSON.stringify(SESSION));}catch(e){}
@@ -10680,6 +10584,9 @@ function openOrbRadialMenu(pressX) {
   var ex = document.getElementById('orb-radial-menu');
   if (ex) ex.remove();
 
+  // Capture the canvas time at the press position so modal time-pickers pre-fill correctly
+  _radialDefaultT = viewTime;
+
   var d     = dataAt ? dataAt(viewTime) : null;
   var orbX  = (pressX !== undefined) ? pressX : NOW_X * W;
   var orbY  = d ? bgToY(d.bg) : window.innerHeight * 0.5;
@@ -11017,8 +10924,7 @@ function buildFunctionIndex() {
     'renderSheet', 'renderKitchen', 'openSheet', 'closeSheet',
     'logMealEntry', 'logCorrection', 'logHypoTreatment',
     'addFoodItem', 'addCustomFood', 'saveCustomFood', 'searchFood',
-    '_saveInlineNewFood', '_updateInlinePreview', '_showPhotoConfirmCard',
-    '_numericOnly', '_setInlineMode', '_updatePhotoConfirmPreview', '_debouncedSearchFood',
+    '_showPhotoConfirmCard', '_numericOnly', '_updatePhotoConfirmPreview', '_debouncedSearchFood',
     'drawGasCloud', 'drawBGTrail', 'drawOrb', 'drawEquilibriumZone',
     'buildSmartForecast', 'drawUnknownForce',
     'syncNow', 'syncPushEvents', 'syncPullEvents',
@@ -11769,7 +11675,7 @@ function logBloodPrick() {
   if (!inp) return;
   var bg = Math.round(parseFloat(inp.value) * 10) / 10;
   if (isNaN(bg) || bg < 1.0 || bg > 30.0) { _prickValidate(); return; }
-  var t  = tEl && tEl.value ? new Date(tEl.value).getTime() : Date.now();
+  var t  = _safeEventT(tEl && tEl.value ? new Date(tEl.value).getTime() : Date.now());
 
   var prick = { t: t, bg: bg, logged_by: _thisPersonId || 'unknown' };
   BLOOD_PRICKS.push(prick);
