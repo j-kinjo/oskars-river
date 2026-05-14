@@ -893,8 +893,29 @@ function bfOpenAddToLib(cardIdx, itemIdx, name) {
 }
 window.bfOpenAddToLib = bfOpenAddToLib;
 
-// bfInlineMode / bfInlinePreview / bfSaveInlineFood removed — all entry points
-// now use the shared addCustomFood overlay via _bfOpenAddFoodModal.
+// _bfOpenAddFoodModalInsert — used by the insert-item rows (bfInsertItemNameInput).
+// Writes the saved food back to window._bfInsertItems[idx].
+function _bfOpenAddFoodModalInsert(idx, name) {
+  if (typeof window.addCustomFood !== 'function') return;
+  window._foodAddCallback = function(savedFood) {
+    if (window._bfInsertItems && window._bfInsertItems[idx]) {
+      window._bfInsertItems[idx].name  = savedFood.name;
+      window._bfInsertItems[idx].c100  = savedFood.c100;
+      window._bfInsertItems[idx].gi    = savedFood.gi;
+    }
+    var nameInp = document.getElementById('bfins-name-' + idx);
+    var c100Inp = document.getElementById('bfins-c100-' + idx);
+    var giSpan  = document.getElementById('bfinsgi-'    + idx);
+    if (nameInp) nameInp.value = savedFood.name;
+    if (c100Inp && savedFood.c100) c100Inp.value = savedFood.c100;
+    if (giSpan && savedFood.gi) {
+      giSpan.textContent = 'GI ' + savedFood.gi;
+      giSpan.style.color = savedFood.gi>=70?'#c0392b':savedFood.gi>=55?'#b07820':'#1d9e72';
+    }
+  };
+  window.addCustomFood(name);
+}
+window._bfOpenAddFoodModalInsert = _bfOpenAddFoodModalInsert;
 
 // ── Alias linking ──────────────────────────────────────────────
 function bfShowAliasFor(cardIdx, itemIdx, alias) {
@@ -1690,12 +1711,12 @@ function bfInsertItemNameInput(idx, input) {
   if (!ac) return;
   if (!q || q.length < 2) { ac.style.display='none'; return; }
   var results = bfSearchFoods(q);
-  if (!results.length) { ac.style.display='none'; return; }
   var rect = input.getBoundingClientRect();
   ac.style.left  = rect.left + 'px';
   ac.style.top   = (rect.bottom + 2) + 'px';
   ac.style.width = rect.width + 'px';
-  ac.innerHTML = results.map(function(f) {
+
+  var matchHtml = results.map(function(f) {
     var enc = encodeURIComponent(f.name);
     return '<div onclick="bfInsertSelectFood(' + idx + ',decodeURIComponent(\'' + enc + '\'))" ' +
       'style="padding:5px 8px;cursor:pointer;border-bottom:1px solid #26262f;display:flex;align-items:center;gap:6px" ' +
@@ -1704,6 +1725,15 @@ function bfInsertItemNameInput(idx, input) {
       '<span style="font-size:10px;color:#555">' + (f.c100||'?') + '/100g</span>' +
     '</div>';
   }).join('');
+
+  // Always show "add as new" row at the bottom
+  var addRow = '<div onclick="var _ac=document.getElementById(\'bfinsac-' + idx + '\');if(_ac)_ac.style.display=\'none\';_bfOpenAddFoodModalInsert(' + idx + ',\'' + q.replace(/'/g,"\\'") + '\')" ' +
+    'style="padding:6px 8px;cursor:pointer;display:flex;align-items:center;gap:6px;' + (results.length ? 'border-top:1px solid #1a1a1e;' : '') + '">' +
+    '<span style="font-size:11px;color:#40a870">+</span>' +
+    '<span style="font-size:11px;color:#40a870">' + (results.length ? 'add \u201c' + q + '\u201d as new' : '\u201c' + q + '\u201d not in library — add it') + '</span>' +
+  '</div>';
+
+  ac.innerHTML = matchHtml + addRow;
   ac.style.display = 'block';
 }
 window.bfInsertItemNameInput = bfInsertItemNameInput;
@@ -1716,40 +1746,7 @@ function bfInsertItemNameBlur(idx, input) {
     if (window._bfInsertItems && window._bfInsertItems[idx]) {
       window._bfInsertItems[idx].name = name;
     }
-    if (!name || name.length < 2) return;
-
-    var existing = _bfLibLookup(name);
-    if (existing) {
-      // In library — store GI if missing, nothing else needed
-      if (!existing.gi && typeof window.addCustomFood === 'function') {
-        // Has no GI — open modal so user can fill it in and it gets saved back
-        // (unusual path; library items usually have GI already)
-      }
-      return;
-    }
-
-    // Not in library — open the shared full-screen add-food modal
-    if (typeof window.addCustomFood !== 'function') return;
-    window._foodAddCallback = function(savedFood) {
-      if (window._bfInsertItems && window._bfInsertItems[idx]) {
-        window._bfInsertItems[idx].name  = savedFood.name;
-        window._bfInsertItems[idx].c100  = savedFood.c100;
-        window._bfInsertItems[idx].gi    = savedFood.gi;
-      }
-      // Update the row inputs in place
-      var c100Inp = document.getElementById('bfins-c100-' + idx);
-      var giSpan  = document.getElementById('bfinsgi-'    + idx);
-      var nameInp = document.getElementById('bfins-name-' + idx);
-      if (nameInp) nameInp.value = savedFood.name;
-      if (c100Inp && savedFood.c100) { c100Inp.value = savedFood.c100; }
-      if (giSpan && savedFood.gi) {
-        var col = savedFood.gi >= 70 ? '#c0392b' : savedFood.gi >= 55 ? '#b07820' : '#1d9e72';
-        giSpan.textContent = 'GI ' + savedFood.gi;
-        giSpan.style.color = col;
-      }
-    };
-    window.addCustomFood(name);
-  }, 150);
+  }, 200);
 }
 window.bfInsertItemNameBlur = bfInsertItemNameBlur;
 
