@@ -1505,49 +1505,70 @@ function _drawIOBReservoir() {
     var remaining  = _iobFn(elapsedMin);
     if (remaining < 0.02) return;
 
-    var peakT  = bolus.t + 75 * 60000;
-    var peakX  = tX(peakT);
-    var sigma  = _bellSigma(1.1);  // slightly wider than medium GI
-    var lineY      = dataAt ? bgToY(dataAt(viewTime).bg) : H * 0.5;
-    var availableH = lineY - 8;    // space from top to just above BG line
-    var maxD   = Math.min(availableH * 0.90, 110 * (bolus.u/3) * remaining);
-    var minD   = Math.min(availableH * 0.12, 18);
+    // Time-space bell — mirrors COB approach so it tracks correctly on scroll
+    // Novorapid: peak ~75min, quick rise (sigmaR), long tail (sigmaF)
+    var peakT       = bolus.t + 75 * 60000;
+    var peakMins    = 75;
+    var sigmaRMins  = 32;   // rise side — steeper
+    var sigmaFMins  = 70;   // fall side — long Novorapid tail
+    var lineY       = dataAt ? bgToY(dataAt(viewTime).bg) : H * 0.5;
+    var availableH  = lineY - 8;
+    var maxD        = Math.min(availableH * 0.90, 110 * (bolus.u / 3) * remaining);
+    var minD        = Math.min(availableH * 0.12, 18);
     maxD = Math.max(minD * remaining, maxD);
 
-    var rv=COL_IOB[0], gv=COL_IOB[1], bv=COL_IOB[2];
+    var bolusT_local = bolus.t;
 
+    function bellH_iob(px) {
+      var t_px     = viewTime + (px - NOW_X * W) / W * viewSpan;
+      var minsDist = (t_px - peakT) / 60000;
+      // Ramp up from bolus time — no cliff at injection point
+      var rampMins = Math.min(1.0, Math.max(0, (t_px - bolusT_local) / (12 * 60000)));
+      var ramp     = rampMins * rampMins * (3 - 2 * rampMins); // smoothstep
+      // Asymmetric gaussian: tighter on rise, wider on fall
+      var sigma    = minsDist < 0 ? sigmaRMins : sigmaFMins;
+      return Math.exp(-0.5 * Math.pow(minsDist / sigma, 2)) * maxD * ramp;
+    }
+
+    var rv = COL_IOB[0], gv = COL_IOB[1], bv = COL_IOB[2];
+
+    // Fill — drawn from top edge down to bell surface
     CX.beginPath();
     CX.moveTo(0, 0);
     for (var i = 0; i <= 280; i++) {
-      var px = (i/280)*W;
-      CX.lineTo(px, Math.exp(-0.5*Math.pow((px-peakX)/sigma,2))*maxD);
+      var px = (i / 280) * W;
+      CX.lineTo(px, bellH_iob(px));
     }
     CX.lineTo(W, 0); CX.closePath();
 
     var gr = CX.createLinearGradient(0, 0, 0, maxD);
-    gr.addColorStop(0,   'rgba('+rv+','+gv+','+bv+','+(0.22+remaining*0.28)+')');
-    gr.addColorStop(0.5, 'rgba('+rv+','+gv+','+bv+','+(remaining*0.12)+')');
-    gr.addColorStop(1,   'rgba('+rv+','+gv+','+bv+',0)');
+    gr.addColorStop(0,   'rgba(' + rv + ',' + gv + ',' + bv + ',' + (0.22 + remaining * 0.28) + ')');
+    gr.addColorStop(0.5, 'rgba(' + rv + ',' + gv + ',' + bv + ',' + (remaining * 0.12) + ')');
+    gr.addColorStop(1,   'rgba(' + rv + ',' + gv + ',' + bv + ',0)');
     CX.fillStyle = gr; CX.fill();
 
+    // Rim — traces the bell curve
     CX.beginPath();
     for (var i = 0; i <= 280; i++) {
-      var px = (i/280)*W;
-      var py = Math.exp(-0.5*Math.pow((px-peakX)/sigma,2))*maxD;
-      i===0 ? CX.moveTo(px,py) : CX.lineTo(px,py);
+      var px = (i / 280) * W;
+      var py = bellH_iob(px);
+      i === 0 ? CX.moveTo(px, py) : CX.lineTo(px, py);
     }
-    CX.strokeStyle='rgba('+rv+','+gv+','+bv+','+(0.35+remaining*0.45)+')';
-    CX.lineWidth=1.2; CX.stroke();
+    CX.strokeStyle = 'rgba(' + rv + ',' + gv + ',' + bv + ',' + (0.35 + remaining * 0.45) + ')';
+    CX.lineWidth = 1.2; CX.stroke();
 
-    if (peakX > 30 && peakX < W-30 && maxD > 10) {
+    // Label at peak
+    var peakX = tX(peakT);
+    var peakD = bellH_iob(peakX);
+    if (peakX > 30 && peakX < W - 30 && peakD > 10) {
       CX.globalAlpha = remaining * 0.6;
-      CX.fillStyle   = 'rgba('+rv+','+gv+','+bv+',1)';
+      CX.fillStyle   = 'rgba(' + rv + ',' + gv + ',' + bv + ',1)';
       CX.font        = "300 8px 'DM Mono',monospace";
       CX.textAlign   = 'center';
-      CX.fillText(bolus.u.toFixed(1)+'U', peakX, maxD+10);
+      CX.fillText(bolus.u.toFixed(1) + 'U', peakX, peakD + 10);
       CX.globalAlpha = 1;
     }
-    // Track peak Y for pill positioning (deepest bell = closest to BG line)
+    // Track peak Y for pill positioning
     if (_lastIOBPeakY < 0 || maxD > _lastIOBPeakY) _lastIOBPeakY = maxD;
   });
 }
@@ -1883,156 +1904,70 @@ var _mistFrame = 0;
 function drawUnknownForce(pal) {
   _mistFrame++;
 
-  // Build forecast from 2h ago to now in 5min steps
-  var steps = 24; // 2h
+  // ── BUILD RESIDUAL SERIES — actual vs model-predicted (2h window) ──
+  var steps    = 24;
   var residuals = [];
 
   for (var i = 0; i <= steps; i++) {
-    var t       = viewTime - (steps - i) * 5 * 60000;
-    var actual  = dataAt(t).bg;
+    var t_i     = viewTime - (steps - i) * 5 * 60000;
+    var actual  = dataAt(t_i).bg;
     if (!actual || actual <= 0) continue;
 
-    // Simple forward forecast from 5min prior
-    var tPrev   = t - 5 * 60000;
+    var tPrev   = t_i - 5 * 60000;
     var dPrev   = dataAt(tPrev);
-    var ISF     = getISF(t);
+    var ISF     = getISF(t_i);
 
-    // What IOB+COB alone would predict over 5 mins
     var cobDelta = dPrev.cob > 0 ? dPrev.cob * (1 - cobF(5)) * 0.055 : 0;
     var iobDelta = dPrev.iob > 0 ? -dPrev.iob * (1 - iobF(5)) * ISF  : 0;
     var predicted = dPrev.bg + cobDelta + iobDelta;
 
-    var residual = actual - predicted; // + means went higher than expected, - means lower
-    var x = tX(t);
-
-    // Only show residuals beyond noise threshold (±0.3 mmol)
-    if (Math.abs(residual) > 0.3 && x > 0 && x < W) {
-      residuals.push({ t, x, actual, predicted, residual });
+    var residual = actual - predicted;
+    var x = tX(t_i);
+    if (x > 0 && x < W) {
+      residuals.push({ t: t_i, x: x, actual: actual, predicted: predicted, residual: residual });
     }
-  }
-
-  if (residuals.length === 0) return;
-
-  // ── RIBBON LAYER — stacked grey ribbons from edge toward BG line ──
-  // Positive residual (BG higher than expected) → ribbons from above (like phantom IOB failing)
-  // Negative residual (BG lower than expected)  → ribbons from below (like phantom COB absorbed)
-  var totalResidue = 0;
-  var recentResiduals = residuals.slice(-8); // last 40 min
-  recentResiduals.forEach(function(r){ totalResidue += r.residual; });
-  var avgResidue = recentResiduals.length > 0 ? totalResidue / recentResiduals.length : 0;
-  var ribbonStrength = Math.min(1, Math.abs(avgResidue) / 2.5);
-
-  if (ribbonStrength > 0.08) {
-    CX.save();
-    var isDown   = avgResidue < 0; // unknown force pulling BG down
-    var nowX2    = NOW_X * W;
-    var lineY2   = dataAt ? bgToY(dataAt(viewTime).bg) : H * 0.5;
-    var numRibs  = 3 + Math.floor(ribbonStrength * 4);
-    var edgeY    = isDown ? H : 0;  // ribbons from bottom (down) or top (up)
-
-    for (var ri = 0; ri < numRibs; ri++) {
-      var rFrac    = (ri + 1) / (numRibs + 1);
-      // Each ribbon anchored at a different x spanning past 40min to now
-      var rx       = nowX2 * (0.3 + rFrac * 0.6);
-      var ribLen   = 40 + rFrac * 60;  // width in px
-      var ribAlpha = ribbonStrength * (0.06 + rFrac * 0.08) * (0.5 + 0.5 * Math.sin(phi * 0.4 + ri));
-      var midY     = edgeY + (lineY2 - edgeY) * (0.3 + rFrac * 0.55);
-
-      var gr2 = CX.createLinearGradient(rx - ribLen/2, 0, rx + ribLen/2, 0);
-      gr2.addColorStop(0,   'rgba(180,195,220,0)');
-      gr2.addColorStop(0.2, 'rgba(180,195,220,' + ribAlpha + ')');
-      gr2.addColorStop(0.8, 'rgba(180,195,220,' + ribAlpha + ')');
-      gr2.addColorStop(1,   'rgba(180,195,220,0)');
-
-      // Thin horizontal ribbon
-      CX.globalAlpha = 1;
-      CX.fillStyle   = gr2;
-      CX.beginPath();
-      CX.roundRect(rx - ribLen/2, midY - 1.5, ribLen, 3, 1.5);
-      CX.fill();
-
-      // Vertical tendril from edge to ribbon
-      var tGr = CX.createLinearGradient(0, edgeY, 0, midY);
-      tGr.addColorStop(0,   'rgba(160,180,210,0)');
-      tGr.addColorStop(0.6, 'rgba(160,180,210,' + (ribAlpha * 0.5) + ')');
-      tGr.addColorStop(1,   'rgba(160,180,210,' + (ribAlpha * 0.9) + ')');
-      CX.fillStyle = tGr;
-      CX.fillRect(rx - 1, Math.min(edgeY, midY), 2, Math.abs(midY - edgeY));
-    }
-    CX.restore();
   }
 
   CX.save();
 
-  // Draw the residual gap as a shaded region between actual and predicted
+  // ── AURA + GAP MIST — always present around BG line; denser in the void ──
+  // The line never sits clean — there is always something unexplained.
+  // baseAura: permanent haze breathing around the line regardless of gap size.
+  // Gap density: fills the space between expected and actual when they diverge.
+  var baseAura = 10; // px — permanent mist radius around the CGM line
+
   residuals.forEach(function(pt) {
+    if (pt.x < 0 || pt.x > W) return;
+
     var actualY    = bgToY(pt.actual);
     var predictedY = bgToY(pt.predicted);
-    var gapPx      = Math.abs(actualY - predictedY);
-    if (gapPx < 2) return;
+    var gap        = Math.abs(actualY - predictedY);
+    var topY       = Math.min(actualY, predictedY) - baseAura;
+    var botY       = Math.max(actualY, predictedY) + baseAura;
 
-    var topY = Math.min(actualY, predictedY);
-    var botY = Math.max(actualY, predictedY);
-    var intensity = Math.min(1, Math.abs(pt.residual) / 3); // max at 3 mmol divergence
+    // Draw vertical column of mist particles for this residual point
+    for (var py = topY; py < botY; py += 2.5) {
+      var inGap       = py > Math.min(actualY, predictedY) && py < Math.max(actualY, predictedY);
+      var distFromLine = Math.abs(py - actualY);
+      var gapFactor    = inGap ? Math.min(1, gap / 20) : 0;
+      var auraFactor   = Math.exp(-(distFromLine * distFromLine) / (2 * baseAura * baseAura));
+      var density      = Math.max(gapFactor * 0.9, auraFactor * 0.4);
 
-    // Silver-white fill — ethereal, not force-coloured
-    var gr = CX.createLinearGradient(0, topY, 0, botY);
-    gr.addColorStop(0,   'rgba(200,210,230,' + (intensity * 0.18) + ')');
-    gr.addColorStop(0.5, 'rgba(180,195,220,' + (intensity * 0.10) + ')');
-    gr.addColorStop(1,   'rgba(200,210,230,' + (intensity * 0.18) + ')');
-    CX.fillStyle = gr;
-    CX.fillRect(pt.x - 2, topY, 5, gapPx);
+      var shimmer = Math.sin(pt.x * 0.11 + py * 0.09 + phi * 3.5) * 0.5 + 0.5;
+      var drift   = Math.sin(pt.x * 0.06 + phi * 1.4) * 2.0;
+      var alpha   = shimmer * density * 0.20;
+      if (alpha < 0.01) continue;
+
+      CX.beginPath();
+      CX.arc(pt.x + drift, py + Math.sin(phi * 1.0 + pt.x * 0.05) * 1.5, 1.4, 0, Math.PI * 2);
+      CX.fillStyle = 'rgba(200,212,235,' + alpha.toFixed(3) + ')';
+      CX.fill();
+    }
   });
 
-  // Spawn swirling mist particles at points of high divergence
-  if (_mistFrame % 12 === 0) {
-    residuals.forEach(function(pt) {
-      if (Math.abs(pt.residual) < 0.8) return;
-      if (Math.random() > 0.35) return;
-      var intensity = Math.min(1, Math.abs(pt.residual) / 3);
-      var goingUp   = pt.residual < 0; // actual lower than predicted = unknown pulling down
-      _mistParticles.push({
-        x:        pt.x + (Math.random() - 0.5) * 20,
-        y:        bgToY(pt.actual) + (Math.random() - 0.5) * 12,
-        vx:       (Math.random() - 0.5) * 0.4,
-        vy:       (goingUp ? -0.3 : 0.3) * (0.5 + Math.random() * 0.5),
-        r:        4 + Math.random() * 10,
-        alpha:    0,
-        maxAlpha: 0.12 + intensity * 0.14,
-        life:     0,
-        maxLife:  80 + Math.random() * 120,
-        phase:    Math.random() * Math.PI * 2,
-        intensity: intensity,
-      });
-    });
-    if (_mistParticles.length > 200) _mistParticles.splice(0, _mistParticles.length - 200);
-  }
-
-  // Update and draw mist particles
-  for (var i = _mistParticles.length - 1; i >= 0; i--) {
-    var m = _mistParticles[i];
-    m.life++;
-    m.x  += m.vx + Math.sin(m.life * 0.04 + m.phase) * 0.3;
-    m.y  += m.vy + Math.sin(m.life * 0.06 + m.phase * 1.3) * 0.2;
-
-    var t = m.life / m.maxLife;
-    if (t < 0.2)      m.alpha = m.maxAlpha * (t / 0.2);
-    else if (t < 0.7) m.alpha = m.maxAlpha;
-    else              m.alpha = m.maxAlpha * (1 - (t - 0.7) / 0.3);
-
-    if (m.life >= m.maxLife) { _mistParticles.splice(i, 1); continue; }
-
-    CX.beginPath();
-    CX.arc(m.x, m.y, m.r * (0.6 + t * 0.6), 0, Math.PI * 2);
-    // Silver-white — cooler than IOB blue, warmer than pure white
-    CX.fillStyle = 'rgba(210,220,235,' + Math.max(0, m.alpha) + ')';
-    CX.fill();
-  }
-
-  // Subtle edge line tracing the predicted path
-  // Shows what "should have happened" as a ghost beneath reality
+  // ── PREDICTED (EXPECTED) LINE — ghost of what should have happened ──
   if (residuals.length > 2) {
-    CX.globalAlpha = 0.15;
+    CX.globalAlpha = 0.18;
     CX.strokeStyle = 'rgba(200,215,235,1)';
     CX.lineWidth   = 1;
     CX.setLineDash([2, 8]);
@@ -2043,6 +1978,84 @@ function drawUnknownForce(pal) {
     });
     CX.stroke();
     CX.setLineDash([]);
+    CX.globalAlpha = 1;
+  }
+
+  // ── RIBBON LAYER — directional pull when sustained residual ──────
+  var totalResidue = 0;
+  var recentResiduals = residuals.slice(-8);
+  recentResiduals.forEach(function(r) { totalResidue += r.residual; });
+  var avgResidue    = recentResiduals.length > 0 ? totalResidue / recentResiduals.length : 0;
+  var ribbonStrength = Math.min(1, Math.abs(avgResidue) / 2.5);
+
+  if (ribbonStrength > 0.08) {
+    var isDown   = avgResidue < 0;
+    var nowX2    = NOW_X * W;
+    var lineY2   = dataAt ? bgToY(dataAt(viewTime).bg) : H * 0.5;
+    var numRibs  = 3 + Math.floor(ribbonStrength * 4);
+    var edgeY    = isDown ? H : 0;
+
+    for (var ri = 0; ri < numRibs; ri++) {
+      var rFrac    = (ri + 1) / (numRibs + 1);
+      var rx       = nowX2 * (0.3 + rFrac * 0.6);
+      var ribLen   = 40 + rFrac * 60;
+      var ribAlpha = ribbonStrength * (0.06 + rFrac * 0.08) * (0.5 + 0.5 * Math.sin(phi * 0.4 + ri));
+      var midY     = edgeY + (lineY2 - edgeY) * (0.3 + rFrac * 0.55);
+
+      var gr2 = CX.createLinearGradient(rx - ribLen / 2, 0, rx + ribLen / 2, 0);
+      gr2.addColorStop(0,   'rgba(180,195,220,0)');
+      gr2.addColorStop(0.2, 'rgba(180,195,220,' + ribAlpha + ')');
+      gr2.addColorStop(0.8, 'rgba(180,195,220,' + ribAlpha + ')');
+      gr2.addColorStop(1,   'rgba(180,195,220,0)');
+      CX.fillStyle = gr2;
+      CX.beginPath(); CX.roundRect(rx - ribLen / 2, midY - 1.5, ribLen, 3, 1.5); CX.fill();
+
+      var tGr = CX.createLinearGradient(0, edgeY, 0, midY);
+      tGr.addColorStop(0,   'rgba(160,180,210,0)');
+      tGr.addColorStop(0.6, 'rgba(160,180,210,' + (ribAlpha * 0.5) + ')');
+      tGr.addColorStop(1,   'rgba(160,180,210,' + (ribAlpha * 0.9) + ')');
+      CX.fillStyle = tGr;
+      CX.fillRect(rx - 1, Math.min(edgeY, midY), 2, Math.abs(midY - edgeY));
+    }
+  }
+
+  // ── LEGACY MIST PARTICLES — keep ticking for smooth transition ───
+  if (_mistFrame % 16 === 0) {
+    residuals.forEach(function(pt) {
+      if (Math.abs(pt.residual) < 1.2) return;
+      if (Math.random() > 0.25) return;
+      var intensity = Math.min(1, Math.abs(pt.residual) / 3);
+      _mistParticles.push({
+        x:        pt.x + (Math.random() - 0.5) * 18,
+        y:        bgToY(pt.actual) + (Math.random() - 0.5) * 10,
+        vx:       (Math.random() - 0.5) * 0.3,
+        vy:       (pt.residual < 0 ? -0.25 : 0.25) * (0.5 + Math.random() * 0.5),
+        r:        3 + Math.random() * 8,
+        alpha:    0,
+        maxAlpha: 0.08 + intensity * 0.10,
+        life:     0,
+        maxLife:  60 + Math.random() * 90,
+        phase:    Math.random() * Math.PI * 2,
+        intensity: intensity,
+      });
+    });
+    if (_mistParticles.length > 160) _mistParticles.splice(0, _mistParticles.length - 160);
+  }
+
+  for (var mi = _mistParticles.length - 1; mi >= 0; mi--) {
+    var mp = _mistParticles[mi];
+    mp.life++;
+    mp.x += mp.vx + Math.sin(mp.life * 0.04 + mp.phase) * 0.25;
+    mp.y += mp.vy + Math.sin(mp.life * 0.06 + mp.phase * 1.3) * 0.18;
+    var tFrac = mp.life / mp.maxLife;
+    if (tFrac < 0.2)      mp.alpha = mp.maxAlpha * (tFrac / 0.2);
+    else if (tFrac < 0.7) mp.alpha = mp.maxAlpha;
+    else                  mp.alpha = mp.maxAlpha * (1 - (tFrac - 0.7) / 0.3);
+    if (mp.life >= mp.maxLife) { _mistParticles.splice(mi, 1); continue; }
+    CX.beginPath();
+    CX.arc(mp.x, mp.y, mp.r * (0.6 + tFrac * 0.6), 0, Math.PI * 2);
+    CX.fillStyle = 'rgba(210,220,235,' + Math.max(0, mp.alpha).toFixed(3) + ')';
+    CX.fill();
   }
 
   CX.globalAlpha = 1;
@@ -2743,90 +2756,12 @@ var _lastPebbleMsg  = null;  // remember last nudge for ghost display
 function showRiverPebble(msg, type) {
   _riverPebble   = { msg, type, alpha: 1.0, t: Date.now() };
   _lastPebbleMsg = { msg, type, t: Date.now() };  // store for ghost
-  var chip = document.getElementById('pebble-chip');
-  if (!chip) {
-    chip = document.createElement('div');
-    chip.id = 'pebble-chip';
-    chip.style.cssText = [
-      'position:fixed',
-      'bottom:calc(max(80px,env(safe-area-inset-bottom,80px)) + 12px)',
-      'left:50%',
-      'transform:translateX(-50%)',
-      'z-index:25',
-      'padding:6px 16px',
-      'border-radius:20px',
-      "font-family:DM Mono,monospace",
-      'font-size:10px',
-      'color:rgba(200,220,240,0.9)',
-      'letter-spacing:.4px',
-      'cursor:pointer',
-      'background:rgba(30,50,80,0.75)',
-      'backdrop-filter:blur(10px)',
-      'border:1px solid rgba(100,150,200,0.2)',
-      'transition:opacity .4s',
-      'white-space:nowrap',
-      'pointer-events:auto',
-    ].join(';');
-    chip.onclick = function() {
-      chip.style.opacity = '0';
-      ALERTS.snooze('corr_nudge', 20*60000);
-      ALERTS.snooze('corr_high',  20*60000);
-    };
-    document.body.appendChild(chip);
-  }
-  chip.textContent = msg;
-
-  // Only show chip when viewing "now" — hide when scrolled
-  var atNow = _isAtNow || (HISTORY_RAW.length > 0 &&
-    Math.abs(viewTime - HISTORY_RAW[HISTORY_RAW.length-1].t) < 8 * 60000);
-  chip.style.opacity = atNow ? '1' : '0';
-  chip.style.pointerEvents = atNow ? 'auto' : 'none';
-
-  if (window._pebbleTimeout) clearTimeout(window._pebbleTimeout);
-  window._pebbleTimeout = setTimeout(function() {
-    if (chip) chip.style.opacity = '0';
-  }, 10000);
+  // DOM chip removed — correction nudges now handled by timer overlay system
 }
 
 // Called from frame to keep nudge chip visibility in sync with scroll state
 function updateNudgeChipVisibility() {
-  var chip = document.getElementById('pebble-chip');
-  if (!chip || chip.style.opacity === '0') return;
-  var atNow = _isAtNow || (HISTORY_RAW.length > 0 &&
-    Math.abs(viewTime - HISTORY_RAW[HISTORY_RAW.length-1].t) < 8 * 60000);
-  chip.style.opacity      = atNow ? '1' : '0';
-  chip.style.pointerEvents = atNow ? 'auto' : 'none';
-
-  // Ghost chip: when scrolled away from now and a recent nudge exists
-  var ghost = document.getElementById('pebble-ghost');
-  if (!atNow && _lastPebbleMsg && (Date.now() - _lastPebbleMsg.t) < 20 * 60000) {
-    if (!ghost) {
-      ghost = document.createElement('div');
-      ghost.id = 'pebble-ghost';
-      ghost.style.cssText = [
-        'position:fixed',
-        'bottom:calc(max(80px,env(safe-area-inset-bottom,80px)) + 12px)',
-        'left:50%',
-        'transform:translateX(-50%)',
-        'z-index:24',
-        'padding:5px 14px',
-        'border-radius:20px',
-        "font-family:DM Mono,monospace",
-        'font-size:9px',
-        'letter-spacing:.4px',
-        'color:rgba(140,170,200,0.4)',
-        'background:rgba(20,30,55,0.4)',
-        'border:1px solid rgba(80,110,160,0.15)',
-        'white-space:nowrap',
-        'pointer-events:none',
-      ].join(';');
-      document.body.appendChild(ghost);
-    }
-    ghost.textContent = '⟳ ' + _lastPebbleMsg.msg;
-    ghost.style.display = 'block';
-  } else if (ghost) {
-    ghost.style.display = 'none';
-  }
+  // Chip removed — correction nudges handled by timer overlay system
 }
 
 function drawRiverPebble(pal) {
@@ -3069,51 +3004,8 @@ var _alertPulse = 0;
 var _bannerTimeout = null;
 
 function showAlertBanner(msg, bgCol, urgent) {
-  var banner = document.getElementById('alert-banner');
-  if (!banner) {
-    banner = document.createElement('div');
-    banner.id = 'alert-banner';
-    banner.style.position   = 'fixed';
-    // Position in the flow — below the HUD readout, in the canvas area
-    banner.style.top        = 'max(90px, calc(env(safe-area-inset-top, 0px) + 90px))';
-    banner.style.left       = '50%';
-    banner.style.transform  = 'translateX(-50%)';
-    banner.style.zIndex     = '30';  // below HUD (z:40+) but visible on canvas
-    banner.style.padding    = '8px 18px';
-    banner.style.borderRadius = '20px';
-    banner.style.fontFamily = "'DM Mono',monospace";
-    banner.style.fontSize   = '11px';
-    banner.style.letterSpacing = '.5px';
-    banner.style.textTransform = 'uppercase';
-    banner.style.color      = 'rgba(255,255,255,0.92)';
-    banner.style.textAlign  = 'center';
-    banner.style.backdropFilter = 'blur(8px)';
-    banner.style.border     = '1px solid rgba(255,255,255,0.12)';
-    banner.style.cursor     = 'pointer';
-    banner.style.maxWidth   = '240px';
-    banner.style.lineHeight = '1.4';
-    banner.style.transition = 'opacity .3s, transform .3s';
-    banner.style.pointerEvents = 'auto';
-    banner.onclick = function() {
-      banner.style.opacity   = '0';
-      banner.style.transform = 'translateX(-50%) translateY(-6px)';
-      ALERTS.snooze('corr_nudge', 20*60000);
-      ALERTS.snooze('corr_high',  20*60000);
-    };
-    document.body.appendChild(banner);
-  }
-  banner.textContent = msg;
-  banner.style.background  = bgCol;
-  banner.style.opacity     = '1';
-  banner.style.transform   = 'translateX(-50%) translateY(0)';
-  banner.style.boxShadow   = urgent ? '0 4px 24px rgba(60,100,255,0.35)' : '0 2px 12px rgba(0,0,0,0.3)';
-  if (_bannerTimeout) clearTimeout(_bannerTimeout);
-  _bannerTimeout = setTimeout(function() {
-    if (banner) {
-      banner.style.opacity   = '0';
-      banner.style.transform = 'translateX(-50%) translateY(-6px)';
-    }
-  }, urgent ? 20000 : 8000);
+  // Banner replaced by timer overlay system — route to toast for eat reminders
+  showToast(msg);
 }
 
 function checkAlerts(d) {
@@ -3149,23 +3041,17 @@ function checkAlerts(d) {
     return;
   }
 
-  // Correction window: only alert when you can actually act
+  // Correction window state tracked for ketone timer context — no card shown
+  // (correction nudges handled by timer overlay system, Steps 3–7)
   var iobClear = d.iob < 0.5;
   var bolusGap = minsSinceLastBolus > 90;
   var high = d.bg > 10.5;
-  var veryHigh = d.bg > 14;
-
   if (high && iobClear && bolusGap) {
     _alertState = 'correction';
-    var key = veryHigh ? 'corr_high' : 'corr_nudge';
-    var cooldown = veryHigh ? 30*60000 : 60*60000;
-    if (ALERTS.canFire(key, cooldown)) {
+    // Audio-only nudge — no DOM card
+    if (ALERTS.canFire('corr_nudge', 60*60000)) {
       ALERTS.correctionNudge();
-      ALERTS.fire(key);
-      var msg = veryHigh
-        ? ('BG ' + d.bg.toFixed(1) + ' — correction window open')
-        : (d.bg.toFixed(1) + ' mmol — could correct now');
-      showRiverPebble(msg,'correction');
+      ALERTS.fire('corr_nudge');
     }
     return;
   }
