@@ -426,6 +426,7 @@ async function syncNow(silent) {
     await syncMealHistoryFromSupabase();
     await _bootstrapPatternLibrary(); // seed pattern library on first sync after session 7
     await loadObservedISF(); // refresh adaptive ISF from bolus_outcomes
+    await _syncTimerEvents(); // cross-device timer state sync
 
     _lastSyncT  = Date.now();
     _syncState  = 'ok';
@@ -565,6 +566,35 @@ try { LOGGED_EVENTS = JSON.parse(localStorage.getItem('river_logged')||'[]');
 // BOLUS_EVENTS is a live alias for LOGGED_EVENTS — single source of truth.
 // Do not push to BOLUS_EVENTS directly; push to LOGGED_EVENTS instead.
 var BOLUS_EVENTS = LOGGED_EVENTS;
+
+// ── CLINICAL TIMER OVERLAY — state ────────────────────────────────────────
+// Three ambient pills: ketone check, hypo recovery, correction window.
+// Clinical state is derived from live data; UI state (minimised) is localStorage.
+let _activeTimers = {
+  ketone: {
+    state: 'inactive',       // inactive | counting | prompt | resolved_remote
+    episode_start_t: null,   // timestamp of FIRST reading >= threshold in this episode
+    below_since_t: null,     // timestamp when BG first dipped below threshold mid-episode
+    thresholdMmol: 14.0,     // overridden from _TREATMENT on load
+    durationMins: 120,       // overridden from _TREATMENT on load
+    minimised: false,        // device-local; never synced
+    remote: null,            // { value, display_name, t, note } when resolved_remote
+    _optionsOpen: false,     // transient: options panel expanded
+    _peekUntil: 0,           // transient: timestamp when minimised peek expires
+  },
+  hypo: {
+    state: 'inactive',       // inactive | counting | prompt | resolved_remote
+    treatmentT: null,        // timestamp of hypo treatment event that triggered this
+    recheckMins: 15,         // overridden from _TREATMENT on load
+    remote: null,
+  },
+  correction: {
+    state: 'inactive',       // inactive | watching | trending_down | nudge
+    trending: null,
+    lastCorrectionT: null,
+  }
+};
+let _timerLastEval = 0; // throttle guard — ms timestamp of last _updateTimers() run
 
 // ── COLLISION-SAFE TIMESTAMP ───────────────────────────────────────────────
 // Returns a timestamp guaranteed not to collide with any existing local event.
@@ -3570,6 +3600,467 @@ function _drawCurveBubbles() {
   });
 }
 
+// ═══════════════════════════════════════════════════════════════════════════
+// CLINICAL TIMER OVERLAY — Steps 1, 2, 3
+// Ambient pills: ketone check | hypo recovery | correction window
+// ═══════════════════════════════════════════════════════════════════════════
+
+// ── localStorage persistence (UI state only — not clinical state) ─────────
+function _saveTimerState() {
+  try {
+    localStorage.setItem('river_timers', JSON.stringify({
+      ketone_minimised: _activeTimers.ketone.minimised,
+    }));
+  } catch(e) {}
+}
+
+function _loadTimerState() {
+  try {
+    var saved = JSON.parse(localStorage.getItem('river_timers') || 'null');
+    if (saved) {
+      if (saved.ketone_minimised !== undefined) {
+        _activeTimers.ketone.minimised = !!saved.ketone_minimised;
+      }
+    }
+  } catch(e) {}
+}
+
+// ── _getDisplayName — human-readable label for this device ────────────────
+function _getDisplayName() {
+  return localStorage.getItem('river_display_name') || 'Someone';
+}
+
+// ── _writeTimerEvent — fire-and-forget write to timer_events ─────────────
+async function _writeTimerEvent(payload) {
+  if (!SUPABASE_READY) return;
+  try {
+    await fetch(SUPABASE_URL + '/rest/v1/timer_events', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'apikey': SUPABASE_ANON_KEY,
+        'Authorization': 'Bearer ' + SUPABASE_ANON_KEY,
+        'Prefer': 'return=minimal',
+      },
+      body: JSON.stringify({
+        t:               Date.now(),
+        timer_type:      payload.timer_type,
+        event_type:      payload.event_type,
+        value:           payload.value   ?? null,
+        note:            payload.note    ?? null,
+        logged_by:       _deviceId,
+        display_name:    _getDisplayName(),
+        episode_start_t: payload.episode_start_t ?? null,
+      }),
+    });
+  } catch(e) {
+    console.warn('[Timer] write failed:', e);
+  }
+}
+
+// ── _syncTimerEvents — pull remote entries for active episodes ────────────
+async function _syncTimerEvents() {
+  if (!SUPABASE_READY) return;
+  var ketoneEpisode = _activeTimers.ketone.episode_start_t;
+  var hypoEpisode   = _activeTimers.hypo.treatmentT;
+  if (!ketoneEpisode && !hypoEpisode) return;
+
+  var episodeTimes = [ketoneEpisode, hypoEpisode].filter(Boolean);
+  var qs = 'episode_start_t=in.(' + episodeTimes.join(',') + ')' +
+           '&event_type=eq.entry_logged' +
+           '&logged_by=neq.' + _deviceId +
+           '&order=t.desc&limit=5';
+  try {
+    var res = await fetch(SUPABASE_URL + '/rest/v1/timer_events?' + qs, {
+      headers: { 'apikey': SUPABASE_ANON_KEY, 'Authorization': 'Bearer ' + SUPABASE_ANON_KEY },
+    });
+    var rows = await res.json();
+    if (!Array.isArray(rows)) return;
+    var now = Date.now();
+
+    for (var i = 0; i < rows.length; i++) {
+      var row = rows[i];
+      if (row.timer_type === 'ketone' && row.episode_start_t === ketoneEpisode) {
+        if (_activeTimers.ketone.state !== 'inactive' && _activeTimers.ketone.state !== 'resolved_remote') {
+          _activeTimers.ketone.state     = 'resolved_remote';
+          _activeTimers.ketone.minimised = false;
+          _activeTimers.ketone.remote    = {
+            value:        row.value,
+            display_name: row.display_name || 'Someone',
+            t:            row.t,
+            note:         row.note,
+            shown_at:     now,
+          };
+          _saveTimerState();
+        }
+      }
+      if (row.timer_type === 'hypo' && row.episode_start_t === hypoEpisode) {
+        if (_activeTimers.hypo.state !== 'inactive' && _activeTimers.hypo.state !== 'resolved_remote') {
+          _activeTimers.hypo.state  = 'resolved_remote';
+          _activeTimers.hypo.remote = {
+            value:        row.value,
+            display_name: row.display_name || 'Someone',
+            t:            row.t,
+            note:         row.note,
+            shown_at:     now,
+          };
+          _saveTimerState();
+        }
+      }
+    }
+    _renderTimerOverlay();
+  } catch(e) {
+    console.warn('[Timer] sync failed:', e);
+  }
+}
+
+// ── _updateTimers — throttled evaluation (runs at most every 30s) ─────────
+function _updateTimers() {
+  var now = Date.now();
+  if (now - _timerLastEval < 30000) return;
+  _timerLastEval = now;
+
+  var latest = HISTORY_RAW[HISTORY_RAW.length - 1];
+  if (!latest) return;
+
+  var latestBG = latest.bg;
+  var latestT  = latest.t;
+
+  // ── Ketone timer ───────────────────────────────────────────────────────
+  var threshold  = (_TREATMENT && _TREATMENT.ketone_threshold  != null) ? _TREATMENT.ketone_threshold  : 14.0;
+  var windowMins = (_TREATMENT && _TREATMENT.ketone_window_mins != null) ? _TREATMENT.ketone_window_mins : 120;
+  var showKetone = (_TREATMENT && _TREATMENT.show_ketone_timer != null)  ? _TREATMENT.show_ketone_timer  : true;
+  var k = _activeTimers.ketone;
+
+  if (showKetone && latestBG !== undefined) {
+    if (latestBG >= threshold) {
+      k.below_since_t = null; // clear any partial dip
+
+      if (k.state === 'inactive') {
+        k.state           = 'counting';
+        k.episode_start_t = latestT;
+        k.minimised       = false;
+        _writeTimerEvent({
+          timer_type:      'ketone',
+          event_type:      'episode_start',
+          value:           latestBG,
+          episode_start_t: k.episode_start_t,
+        });
+        _saveTimerState();
+      }
+
+      if (k.state === 'counting') {
+        var elapsed = now - k.episode_start_t;
+        if (elapsed >= windowMins * 60 * 1000) {
+          k.state     = 'prompt';
+          k.minimised = false; // always surface prompt
+          _saveTimerState();
+        }
+      }
+
+    } else {
+      // BG below threshold — track how long
+      if (k.state !== 'inactive' && k.state !== 'resolved_remote') {
+        if (!k.below_since_t) k.below_since_t = latestT;
+        var belowDuration = now - k.below_since_t;
+        if (belowDuration >= 30 * 60 * 1000) {
+          // Sustained 30 min below — episode over
+          k.state           = 'inactive';
+          k.episode_start_t = null;
+          k.below_since_t   = null;
+          k.minimised       = false;
+          k.remote          = null;
+          k._optionsOpen    = false;
+          _saveTimerState();
+        }
+      }
+    }
+  }
+
+  // ── resolved_remote auto-clear (10 min) ──────────────────────────────
+  if (k.state === 'resolved_remote' && k.remote && k.remote.shown_at) {
+    if (now - k.remote.shown_at > 10 * 60 * 1000) {
+      k.state = 'inactive'; k.remote = null; k.episode_start_t = null; _saveTimerState();
+    }
+  }
+  if (_activeTimers.hypo.state === 'resolved_remote' && _activeTimers.hypo.remote && _activeTimers.hypo.remote.shown_at) {
+    if (now - _activeTimers.hypo.remote.shown_at > 10 * 60 * 1000) {
+      _activeTimers.hypo.state = 'inactive'; _activeTimers.hypo.remote = null; _activeTimers.hypo.treatmentT = null; _saveTimerState();
+    }
+  }
+
+  // ── Hypo timer — trigger on hypo: events ─────────────────────────────
+  var showHypo = (_TREATMENT && _TREATMENT.show_hypo_timer != null) ? _TREATMENT.show_hypo_timer : true;
+  if (showHypo) {
+    var recheckMins = (_TREATMENT && _TREATMENT.hypo_recheck_mins != null) ? _TREATMENT.hypo_recheck_mins : 15;
+    var h = _activeTimers.hypo;
+    if (h.state === 'inactive') {
+      // Look for an unhandled recent hypo event
+      var cutoff = now - recheckMins * 2 * 60 * 1000;
+      var hypoEvt = null;
+      for (var ei = LOGGED_EVENTS.length - 1; ei >= 0; ei--) {
+        var ev = LOGGED_EVENTS[ei];
+        if (ev.t < cutoff) break;
+        if (ev.note && ev.note.indexOf('hypo:') === 0 && ev.t > (h._lastHandledT || 0)) {
+          hypoEvt = ev; break;
+        }
+      }
+      if (hypoEvt) {
+        h.state      = 'counting';
+        h.treatmentT = hypoEvt.t;
+        h._lastHandledT = hypoEvt.t;
+        _saveTimerState();
+      }
+    }
+    if (h.state === 'counting') {
+      var hypoElapsed = now - h.treatmentT;
+      var recheckMs   = recheckMins * 60 * 1000;
+      if (hypoElapsed >= recheckMs) {
+        h.state = 'prompt';
+        _saveTimerState();
+      }
+    }
+  }
+
+  console.log('[Timer eval] BG:', latestBG, 'states:', _activeTimers.ketone.state, _activeTimers.hypo.state, _activeTimers.correction.state);
+  _renderTimerOverlay();
+}
+
+// ── Helper: format ms to H:MM or MM:SS ───────────────────────────────────
+function _formatTimerRemaining(ms) {
+  if (ms <= 0) return '0:00';
+  var totalSec = Math.ceil(ms / 1000);
+  var mins     = Math.floor(totalSec / 60);
+  var secs     = totalSec % 60;
+  if (mins >= 60) {
+    var hrs = Math.floor(mins / 60);
+    var rem = mins % 60;
+    return hrs + ':' + (rem < 10 ? '0' : '') + rem;
+  }
+  return mins + ':' + (secs < 10 ? '0' : '') + secs;
+}
+
+function _formatTime(ms) {
+  var d = new Date(ms);
+  return d.getHours() + ':' + (d.getMinutes() < 10 ? '0' : '') + d.getMinutes();
+}
+
+// ── _ketoneHide — mid-timer hide action ──────────────────────────────────
+function _ketoneHide(reason) {
+  _writeTimerEvent({
+    timer_type:      'ketone',
+    event_type:      'hide',
+    note:            'ketone_hide:' + reason,
+    episode_start_t: _activeTimers.ketone.episode_start_t,
+  });
+  if (reason === 'blood_below_14') {
+    var latestBG = (HISTORY_RAW[HISTORY_RAW.length - 1] || {}).bg;
+    var thr = (_TREATMENT && _TREATMENT.ketone_threshold != null) ? _TREATMENT.ketone_threshold : 14.0;
+    if (latestBG < thr) {
+      _activeTimers.ketone.state           = 'inactive';
+      _activeTimers.ketone.episode_start_t = null;
+      _activeTimers.ketone.below_since_t   = null;
+    }
+  }
+  _activeTimers.ketone._optionsOpen = false;
+  _saveTimerState();
+  _renderTimerOverlay();
+}
+
+// ── _ketoneMinimise — collapse to dot ────────────────────────────────────
+function _ketoneMinimise() {
+  _activeTimers.ketone.minimised    = true;
+  _activeTimers.ketone._optionsOpen = false;
+  _saveTimerState();
+  _renderTimerOverlay();
+}
+
+// ── openKetoneModal — stub for Step 4 ────────────────────────────────────
+function openKetoneModal() {
+  console.log('[Ketone] modal not yet built. episode_start_t:', _activeTimers.ketone.episode_start_t);
+  showToast('Ketone entry coming soon');
+}
+
+// ── _renderTimerOverlay — build/update DOM pill container ─────────────────
+function _renderTimerOverlay() {
+  var el = document.getElementById('timer-overlay');
+  if (!el) {
+    el = document.createElement('div');
+    el.id = 'timer-overlay';
+    el.style.cssText = [
+      'position:fixed',
+      'top:16px',
+      'right:16px',
+      'z-index:200',
+      'display:flex',
+      'flex-direction:column',
+      'align-items:flex-end',
+      'gap:8px',
+      'pointer-events:none',
+      'font-family:DM Mono,monospace',
+    ].join(';');
+
+    // Inject CSS for pulse + peek animations once
+    if (!document.getElementById('timer-overlay-css')) {
+      var style = document.createElement('style');
+      style.id = 'timer-overlay-css';
+      style.textContent = [
+        '@keyframes timer-pulse{',
+        '0%,100%{box-shadow:0 0 0 0 rgba(186,117,23,0.5)}',
+        '50%{box-shadow:0 0 0 10px rgba(186,117,23,0)}',
+        '}',
+        '@keyframes hypo-pulse{',
+        '0%,100%{box-shadow:0 0 0 0 rgba(220,80,80,0.5)}',
+        '50%{box-shadow:0 0 0 10px rgba(220,80,80,0)}',
+        '}',
+        '.timer-pill{',
+        'pointer-events:auto;',
+        'border-radius:20px;',
+        'padding:6px 14px;',
+        'font-size:13px;',
+        'font-weight:600;',
+        'cursor:pointer;',
+        'user-select:none;',
+        '-webkit-user-select:none;',
+        'transition:all 0.2s;',
+        'white-space:nowrap;',
+        '}',
+        '.timer-pill-amber{background:rgba(186,117,23,0.92);color:#fffbe0;}',
+        '.timer-pill-coral{background:rgba(210,70,70,0.92);color:#fff5f5;}',
+        '.timer-pill-green{background:rgba(40,160,90,0.92);color:#e8fff0;}',
+        '.timer-pill-gray{background:rgba(80,90,100,0.75);color:rgba(220,230,240,0.8);}',
+        '.timer-pill-pulse-amber{animation:timer-pulse 1.5s ease-in-out infinite;}',
+        '.timer-pill-pulse-coral{animation:hypo-pulse 1.5s ease-in-out infinite;}',
+        '.timer-dot{',
+        'pointer-events:auto;',
+        'width:12px;height:12px;',
+        'border-radius:50%;',
+        'cursor:pointer;',
+        '}',
+        '.timer-options{',
+        'pointer-events:auto;',
+        'background:rgba(15,20,35,0.96);',
+        'border:1px solid rgba(186,117,23,0.35);',
+        'border-radius:14px;',
+        'overflow:hidden;',
+        'margin-top:4px;',
+        '}',
+        '.timer-option-row{',
+        'padding:10px 16px;',
+        'font-size:12px;',
+        'color:rgba(220,200,160,0.9);',
+        'cursor:pointer;',
+        'border-bottom:1px solid rgba(186,117,23,0.15);',
+        '}',
+        '.timer-option-row:last-child{border-bottom:none;}',
+        '.timer-option-row:active{background:rgba(186,117,23,0.15);}',
+      ].join('');
+      document.head.appendChild(style);
+    }
+
+    document.body.appendChild(el);
+  }
+
+  var now = Date.now();
+  var html = '';
+
+  // ── Ketone pill ──────────────────────────────────────────────────────
+  var k = _activeTimers.ketone;
+  var windowMins = (_TREATMENT && _TREATMENT.ketone_window_mins != null) ? _TREATMENT.ketone_window_mins : 120;
+  var showKetone = (_TREATMENT && _TREATMENT.show_ketone_timer != null) ? _TREATMENT.show_ketone_timer : true;
+
+  if (showKetone) {
+    if (k.state === 'counting') {
+      if (k.minimised) {
+        // Minimised dot — tap to peek
+        var dotColor = 'rgba(186,117,23,0.85)';
+        if (k._peekUntil && now < k._peekUntil) {
+          // Peek: show time inline then re-minimise
+          var remMs  = Math.max(0, windowMins * 60 * 1000 - (now - k.episode_start_t));
+          var remStr = _formatTimerRemaining(remMs);
+          html += '<div class="timer-pill timer-pill-amber" style="font-size:11px;opacity:0.85" ' +
+                  'onclick="_activeTimers.ketone._peekUntil=0;_renderTimerOverlay()">' +
+                  '⚠ ' + remStr + ' remaining</div>';
+        } else {
+          html += '<div class="timer-dot" style="background:' + dotColor + ';margin-right:2px" ' +
+                  'title="Ketone check in progress — tap to peek" ' +
+                  'onclick="_activeTimers.ketone._peekUntil=Date.now()+3000;_renderTimerOverlay()"></div>';
+        }
+      } else {
+        // Full pill + optional options panel
+        var rem  = Math.max(0, windowMins * 60 * 1000 - (now - k.episode_start_t));
+        var remS = _formatTimerRemaining(rem);
+        html += '<div style="display:flex;flex-direction:column;align-items:flex-end">';
+        html += '<div class="timer-pill timer-pill-amber" ' +
+                'onclick="_activeTimers.ketone._optionsOpen=!_activeTimers.ketone._optionsOpen;_renderTimerOverlay()">' +
+                '⚠ Check ketones in ' + remS + ' &nbsp;×</div>';
+        if (k._optionsOpen) {
+          html += '<div class="timer-options" style="min-width:220px">';
+          html += '<div class="timer-option-row" onclick="_ketoneHide(\'blood_below_14\')">Blood prick showed &lt; 14</div>';
+          html += '<div class="timer-option-row" onclick="_ketoneHide(\'already_checked\');openKetoneModal()">Already checked ketones</div>';
+          html += '<div class="timer-option-row" onclick="_ketoneMinimise()">Minimise</div>';
+          html += '</div>';
+        }
+        html += '</div>';
+      }
+    } else if (k.state === 'prompt') {
+      html += '<div class="timer-pill timer-pill-amber timer-pill-pulse-amber" ' +
+              'onclick="openKetoneModal()">⚠ Enter ketone reading →</div>';
+    } else if (k.state === 'resolved_remote' && k.remote) {
+      var note = k.remote.note || '';
+      var val  = (k.remote.value != null) ? k.remote.value.toFixed(1) + ' mmol' : '';
+      var who  = k.remote.display_name || 'Someone';
+      var when = _formatTime(k.remote.t);
+      var text = note.indexOf('skipped') !== -1
+        ? '✓ Ketones not checked · ' + who + ' · ' + when
+        : '✓ Ketones ' + val + ' · ' + who + ' · ' + when;
+      html += '<div class="timer-pill timer-pill-green" ' +
+              'onclick="_activeTimers.ketone.state=\'inactive\';_activeTimers.ketone.remote=null;_renderTimerOverlay()">' +
+              text + '</div>';
+    }
+  }
+
+  // ── Hypo pill ────────────────────────────────────────────────────────
+  var hy = _activeTimers.hypo;
+  var showHypo = (_TREATMENT && _TREATMENT.show_hypo_timer != null) ? _TREATMENT.show_hypo_timer : true;
+  var recheckMins = (_TREATMENT && _TREATMENT.hypo_recheck_mins != null) ? _TREATMENT.hypo_recheck_mins : 15;
+
+  if (showHypo) {
+    if (hy.state === 'counting') {
+      var hyRem  = Math.max(0, recheckMins * 60 * 1000 - (now - hy.treatmentT));
+      var hyRemS = _formatTimerRemaining(hyRem);
+      html += '<div class="timer-pill timer-pill-coral">🍬 Recheck in ' + hyRemS + '</div>';
+    } else if (hy.state === 'prompt') {
+      html += '<div class="timer-pill timer-pill-coral timer-pill-pulse-coral">🍬 Recheck blood now →</div>';
+    } else if (hy.state === 'resolved_remote' && hy.remote) {
+      var hyNote = hy.remote.note || '';
+      var hyVal  = (hy.remote.value != null) ? hy.remote.value.toFixed(1) + ' mmol' : '';
+      var hyWho  = hy.remote.display_name || 'Someone';
+      var hyWhen = _formatTime(hy.remote.t);
+      var hyText = hyNote.indexOf('skip') !== -1
+        ? '✓ Recheck skipped · ' + hyWho
+        : '✓ Recheck done · ' + hyVal + ' · ' + hyWho + ' · ' + hyWhen;
+      html += '<div class="timer-pill timer-pill-green" ' +
+              'onclick="_activeTimers.hypo.state=\'inactive\';_activeTimers.hypo.remote=null;_renderTimerOverlay()">' +
+              hyText + '</div>';
+    }
+  }
+
+  // ── Correction pill ──────────────────────────────────────────────────
+  var c = _activeTimers.correction;
+  var showCorr = (_TREATMENT && _TREATMENT.show_correction_timer != null) ? _TREATMENT.show_correction_timer : true;
+  if (showCorr && c.state === 'trending_down') {
+    html += '<div class="timer-pill timer-pill-gray" style="font-size:11px">↓ Trending down — watching</div>';
+  }
+
+  // ── Debug pill (dev only) ────────────────────────────────────────────
+  if (!html && window.RIVER_DEBUG) {
+    html = '<div style="pointer-events:none;font-size:9px;color:rgba(150,160,180,0.4);padding:2px 8px">[timers ok]</div>';
+  }
+
+  el.innerHTML = html;
+}
+
 function frame(ts) {
   try {
   const dt=Math.min((ts-t0)/1000, 0.05); t0=ts;
@@ -3579,6 +4070,8 @@ function frame(ts) {
   const d   = dataAt(viewTime);
   const pal = palette(viewTime);
   if (!d || !pal) { requestAnimationFrame(frame); return; }
+
+  _updateTimers(); // clinical timer evaluation — throttled to 30s
 
   // ── ANIMATION STATE ──────────────────────────────────────────
   window._bgDots=[];
@@ -13214,7 +13707,7 @@ async function _loadTreatmentSettings() {
   if (SUPABASE_READY) {
     try {
       var rows = await _sbFetch(
-        'therapy_history?order=t.desc&limit=1&select=ratios,basal_dose,basal_type,basal_time,bolus_type,hypo_threshold,hypo_carbs,dia',
+        'therapy_history?order=t.desc&limit=1&select=ratios,basal_dose,basal_type,basal_time,bolus_type,hypo_threshold,hypo_carbs,dia,ketone_threshold,ketone_window_mins,hypo_recheck_mins,show_ketone_timer,show_hypo_timer,show_correction_timer',
         {}
       );
       if (rows && rows.length > 0) {
@@ -13228,6 +13721,13 @@ async function _loadTreatmentSettings() {
           hypoCarbs:     r.hypo_carbs     || _TREATMENT_DEFAULTS.hypoCarbs,
           ratios:        r.ratios         || _TREATMENT_DEFAULTS.ratios,
           dia:           r.dia            || 150,
+          // Timer overlay settings (schema migration already applied May 2026)
+          ketone_threshold:    r.ketone_threshold    ?? 14.0,
+          ketone_window_mins:  r.ketone_window_mins  ?? 120,
+          hypo_recheck_mins:   r.hypo_recheck_mins   ?? 15,
+          show_ketone_timer:   r.show_ketone_timer   ?? true,
+          show_hypo_timer:     r.show_hypo_timer     ?? true,
+          show_correction_timer: r.show_correction_timer ?? true,
         });
         return;
       }
@@ -13686,6 +14186,7 @@ function saveTreatmentForm() {
 window.addEventListener('load',()=>{
   // Load any persisted CGM history from previous sessions
   loadPersistedReadings();
+  _loadTimerState(); // restore timer UI state (minimised flags) from localStorage
 
   // If no embedded history, start at now
   if (HISTORY_RAW.length === 0) updateCGMBounds();
