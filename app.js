@@ -15543,7 +15543,7 @@ function insightsExport() {
   H += '</div>';
 
   // Charts script
-  H += '<script>';
+  H += '<scr'+'ipt>';
   // Embed data
   H += 'var cgmPts=' + JSON.stringify(cgmPoints) + ';';
   H += 'var prickPts=' + JSON.stringify(prickPoints) + ';';
@@ -15636,7 +15636,7 @@ function insightsExport() {
   H += 'hctx.fillText(h.toString().padStart(2,"0"),offX+h*cellW+cellW/2-1,H3-6);';
   H += '});';
   H += '})();';
-  H += '</script>';
+  H += '</'+'script>';
 
   H += '</div></body></html>';
 
