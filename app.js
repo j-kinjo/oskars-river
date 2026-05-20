@@ -14432,7 +14432,7 @@ function openInsightsPanel() {
     'font-family:\'Fraunces\',serif;font-style:italic;font-weight:200;font-size:17px;' +
     'color:rgba(255,200,100,0.9);cursor:pointer">download clinic report</button>';
   s += '<div style="font-size:9px;color:rgba(200,220,240,0.3);margin-top:8px;text-align:center">' +
-    'plain text · not a clinical document · for conversation with your team</div>';
+    'html · not a clinical document · for conversation with your team</div>';
   s += '</div>';
 
   s += '</div>'; // end max-width wrapper
@@ -15160,96 +15160,492 @@ async function openPatternExplorer() {
 }
 
 function insightsExport() {
-  var readings = HISTORY_RAW.filter(function(r){ return r && r.bg > 0; });
-  var pricks   = (function(){ try{ return JSON.parse(localStorage.getItem('river_pricks')||'[]'); }catch(e){ return []; } })();
+  // ── Data assembly ─────────────────────────────────────────────────────────
+  var allReadings = HISTORY_RAW.filter(function(r){ return r && r.bg > 0; });
+  var pricks = (function(){ try{ return JSON.parse(localStorage.getItem('river_pricks')||'[]'); }catch(e){ return []; } })();
+
+  // Report window: last 7 days (or full range if shorter)
+  var reportEnd   = Date.now();
+  var reportStart = reportEnd - 7 * 24 * 3600000;
+  // Include overnight before first full day
+  var windowStart = reportStart - 8 * 3600000;
+
+  var readings = allReadings.filter(function(r){ return r.t >= windowStart && r.t <= reportEnd; });
   var total    = readings.length || 1;
-  var meanBG   = readings.reduce(function(s,r){return s+r.bg;},0) / total;
-  var inRange  = readings.filter(function(r){ return r.bg >= 3.9 && r.bg <= 10.0; }).length;
+
+  // Stats
+  var meanBG     = readings.reduce(function(s,r){return s+r.bg;},0) / total;
+  var inRange    = readings.filter(function(r){ return r.bg >= 3.9 && r.bg <= 10.0; }).length;
   var belowRange = readings.filter(function(r){ return r.bg < 3.9; }).length;
   var aboveRange = readings.filter(function(r){ return r.bg > 10.0; }).length;
-  var eA1C     = ((meanBG + 2.59) / 1.59).toFixed(1);
-  var dateMin  = readings.length ? new Date(readings[0].t).toLocaleDateString('en-GB') : '—';
-  var dateMax  = readings.length ? new Date(readings[readings.length-1].t).toLocaleDateString('en-GB') : '—';
+  var below54    = readings.filter(function(r){ return r.bg < 5.4; }).length;
+  var eA1C       = ((meanBG + 2.59) / 1.59).toFixed(1);
+  var tirPct     = Math.round(100 * inRange / total);
+  var belPct     = Math.round(100 * belowRange / total);
+  var abvPct     = Math.round(100 * aboveRange / total);
+  var below54Pct = Math.round(100 * below54 / total);
+  var cvArr      = readings.map(function(r){ return r.bg; });
+  var sdBG       = cvArr.length > 1 ? (function(){
+    var m2 = cvArr.reduce(function(s,v){return s+v;},0)/cvArr.length;
+    return Math.sqrt(cvArr.reduce(function(s,v){return s+Math.pow(v-m2,2);},0)/cvArr.length);
+  })() : 0;
+  var cv         = meanBG > 0 ? Math.round(100*sdBG/meanBG) : 0;
 
-  var lines = [];
-  lines.push('OSKAR\'S RIVER — CLINIC REPORT');
-  lines.push('Generated: ' + new Date().toLocaleString('en-GB'));
-  lines.push('Data range: ' + dateMin + ' – ' + dateMax);
-  lines.push('NOT A CLINICAL DOCUMENT — for conversation with your care team only');
-  lines.push('');
-  lines.push('── GLUCOSE SUMMARY ─────────────────────────────────────────');
-  lines.push('Mean BG:          ' + meanBG.toFixed(1) + ' mmol/L');
-  lines.push('Time in range:    ' + Math.round(100*inRange/total) + '% (' + inRange + '/' + total + ' readings)');
-  lines.push('Below 3.9 mmol:   ' + Math.round(100*belowRange/total) + '% (' + belowRange + ' readings)');
-  lines.push('Above 10.0 mmol:  ' + Math.round(100*aboveRange/total) + '% (' + aboveRange + ' readings)');
-  lines.push('Estimated A1c:    ' + eA1C + '% (formula estimate — not GMI)');
-  lines.push('Total readings:   ' + total);
-  lines.push('');
+  var dateMinStr = readings.length ? new Date(readings[0].t).toLocaleDateString('en-GB',{day:'numeric',month:'short',year:'numeric'}) : '—';
+  var dateMaxStr = readings.length ? new Date(readings[readings.length-1].t).toLocaleDateString('en-GB',{day:'numeric',month:'short',year:'numeric'}) : '—';
 
-  // Hourly profile
-  lines.push('── HOURLY PROFILE ──────────────────────────────────────────');
-  lines.push('Hour  Mean    n   In-range');
-  var hourBuckets = [];
-  for (var h = 0; h < 24; h++) hourBuckets.push([]);
-  readings.forEach(function(r){ hourBuckets[new Date(r.t).getHours()].push(r.bg); });
-  hourBuckets.forEach(function(b, h){
-    if (!b.length) return;
-    var m = b.reduce(function(s,v){return s+v;},0)/b.length;
-    var ir = b.filter(function(v){ return v>=3.9&&v<=10.0; }).length;
-    var hStr = h.toString().padStart(2,'0') + ':00';
-    lines.push(hStr + '  ' + m.toFixed(1).padStart(5) + '   ' + b.length.toString().padStart(3) + '   ' + Math.round(100*ir/b.length) + '%');
-  });
-  lines.push('');
-
-  // Meal log
-  lines.push('── MEAL LOG (last 30) ──────────────────────────────────────');
-  (MEAL_HISTORY||[]).slice(0,30).forEach(function(m){
-    var dt = new Date(m.t).toLocaleString('en-GB',{day:'2-digit',month:'short',hour:'2-digit',minute:'2-digit'});
-    lines.push(dt + '  ' + (m.totalCarbs||0) + 'g  ' + (m.u||0) + 'U  — ' + (m.name||''));
-    if (m.items && m.items.length) {
-      m.items.forEach(function(i){ lines.push('         ' + (i.name||'') + ' ' + (i.carbs||0) + 'g carbs'); });
+  // Hypos & near-misses from CGM
+  var hypoEvents = [];
+  var nearMissEvents = [];
+  var inHypo = false, inNear = false;
+  var hypoStart = null, nearStart = null;
+  readings.forEach(function(r) {
+    if (r.bg < 3.9) {
+      if (!inHypo) { inHypo = true; hypoStart = r.t; }
+      inNear = false; nearStart = null;
+    } else {
+      if (inHypo) { hypoEvents.push({ t: hypoStart, end: r.t, nadir: Math.min.apply(null, readings.filter(function(x){return x.t>=hypoStart&&x.t<r.t;}).map(function(x){return x.bg;})) }); inHypo = false; }
+      if (r.bg < 5.4) {
+        if (!inNear) { inNear = true; nearStart = r.t; }
+      } else {
+        if (inNear) { nearMissEvents.push({ t: nearStart, end: r.t, nadir: Math.min.apply(null, readings.filter(function(x){return x.t>=nearStart&&x.t<r.t;}).map(function(x){return x.bg;})) }); inNear = false; }
+      }
     }
   });
-  lines.push('');
 
-  // Bolus log
-  lines.push('── BOLUS / CORRECTION LOG ──────────────────────────────────');
-  (LOGGED_EVENTS||[]).filter(function(e){ return e.u > 0; }).slice(-40).forEach(function(e){
-    var dt = new Date(e.t).toLocaleString('en-GB',{day:'2-digit',month:'short',hour:'2-digit',minute:'2-digit'});
-    lines.push(dt + '  ' + e.u.toFixed(1) + 'U  ' + (e.note||'') + '  ' + (e.logged_by||''));
+  // Events in window
+  var events = (LOGGED_EVENTS||[]).filter(function(e){ return e.t >= windowStart && e.t <= reportEnd; });
+  var mealEvents = events.filter(function(e){ return e.c > 0; });
+  var bolusEvents = events.filter(function(e){ return e.u > 0; });
+  var hypoTreatments = events.filter(function(e){ return e.note && e.note.indexOf('hypo')===0; });
+  var totalCarbs = mealEvents.reduce(function(s,e){return s+(e.c||0);},0);
+  var totalBolus = bolusEvents.reduce(function(s,e){return s+(e.u||0);},0);
+
+  // Meal history in window
+  var meals = (MEAL_HISTORY||[]).filter(function(m){ return m.t >= windowStart && m.t <= reportEnd; });
+
+  // Ghost events in window
+  var ghosts = (_ghostPebbles||[]).filter(function(g){ return g.t >= windowStart && g.t <= reportEnd; });
+
+  // Hourly profile
+  var hourBuckets = [];
+  for (var h2 = 0; h2 < 24; h2++) hourBuckets.push([]);
+  readings.forEach(function(r){ hourBuckets[new Date(r.t).getHours()].push(r.bg); });
+  pricks.forEach(function(p){ if(p&&p.bg&&p.t&&p.t>=windowStart) hourBuckets[new Date(p.t).getHours()].push(p.bg); });
+
+  // CGM trace data as JSON for chart
+  var cgmPoints = readings.map(function(r){ return { x: r.t, y: +r.bg.toFixed(2) }; });
+  var prickPoints = pricks.filter(function(p){ return p&&p.bg&&p.t>=windowStart&&p.t<=reportEnd; }).map(function(p){ return { x: p.t, y: +p.bg.toFixed(2) }; });
+
+  // Event markers
+  var mealMarkers = mealEvents.map(function(e){
+    var nearby = readings.filter(function(r){ return Math.abs(r.t-e.t)<600000; });
+    var bg = nearby.length ? nearby.reduce(function(best,r){ return Math.abs(r.t-e.t)<Math.abs(best.t-e.t)?r:best; }, nearby[0]).bg : null;
+    return { x: e.t, y: bg, label: (e.c||0)+'g '+(e.u?e.u+'U':''), type:'meal' };
   });
-  lines.push('');
+  var corrMarkers = bolusEvents.filter(function(e){ return !e.c || e.c===0; }).map(function(e){
+    var nearby = readings.filter(function(r){ return Math.abs(r.t-e.t)<600000; });
+    var bg = nearby.length ? nearby.reduce(function(best,r){ return Math.abs(r.t-e.t)<Math.abs(best.t-e.t)?r:best; }, nearby[0]).bg : null;
+    return { x: e.t, y: bg, label: (e.u||0)+'U corr', type:'corr' };
+  });
+  var ghostMarkers = ghosts.map(function(g){
+    var nearby = readings.filter(function(r){ return Math.abs(r.t-g.t)<600000; });
+    var bg = nearby.length ? nearby.reduce(function(best,r){ return Math.abs(r.t-g.t)<Math.abs(best.t-g.t)?r:best; }, nearby[0]).bg : null;
+    return { x: g.t, y: bg, label: '?', type:'ghost', ghost_type: g.ghost_type||'', implied: g.implied_units||g.implied_carbs||null };
+  });
+  var hypoMarkers = hypoEvents.map(function(h3){ return { x: h3.t, y: h3.nadir, label: h3.nadir.toFixed(1), type:'hypo' }; });
 
-  // Prick readings
-  if (pricks.length) {
-    lines.push('── FINGER PRICK READINGS ───────────────────────────────────');
-    pricks.forEach(function(p){
-      var dt = new Date(p.t).toLocaleString('en-GB',{day:'2-digit',month:'short',hour:'2-digit',minute:'2-digit'});
-      lines.push(dt + '  ' + p.bg.toFixed(1) + ' mmol/L');
+  // Build day-by-day meal log for table
+  var dayMap = {};
+  function _dayKey(t){ return new Date(t).toLocaleDateString('en-GB',{weekday:'short',day:'numeric',month:'short'}); }
+  events.forEach(function(e){
+    var dk = _dayKey(e.t);
+    if (!dayMap[dk]) dayMap[dk] = { meals:[], corrections:[], ghosts:[], hypos:[] };
+    var time = new Date(e.t).toLocaleTimeString('en-GB',{hour:'2-digit',minute:'2-digit'});
+    var nearby = readings.filter(function(r){ return Math.abs(r.t-e.t)<600000; });
+    var bg = nearby.length ? nearby.reduce(function(best,r){ return Math.abs(r.t-e.t)<Math.abs(best.t-e.t)?r:best; }, nearby[0]).bg : null;
+    if (e.c > 0) {
+      // Find meal_history entry for items
+      var mh = (MEAL_HISTORY||[]).find(function(m){ return Math.abs(m.t-e.t)<120000; });
+      dayMap[dk].meals.push({ time:time, carbs:e.c, bolus:e.u, bg:bg, note:e.note, items: mh&&mh.items ? mh.items : null, name: mh&&mh.name ? mh.name : null, pre_bg: mh&&mh.pre_bg ? mh.pre_bg : bg, iob: e.iob||0, t:e.t });
+    } else if (e.u > 0) {
+      dayMap[dk].corrections.push({ time:time, bolus:e.u, bg:bg, note:e.note, t:e.t });
+    }
+    if (e.note && e.note.indexOf('hypo')===0) {
+      dayMap[dk].hypos.push({ time:time, carbs:e.c, t:e.t });
+    }
+  });
+  ghosts.forEach(function(g){
+    var dk = _dayKey(g.t);
+    if (!dayMap[dk]) dayMap[dk] = { meals:[], corrections:[], ghosts:[], hypos:[] };
+    var time = new Date(g.t).toLocaleTimeString('en-GB',{hour:'2-digit',minute:'2-digit'});
+    dayMap[dk].ghosts.push({ time:time, ghost_type:g.ghost_type, implied_units:g.implied_units, implied_carbs:g.implied_carbs, confidence:g.confidence, confirmed:g.confirmed, t:g.t });
+  });
+
+  // ── HTML report ───────────────────────────────────────────────────────────
+  var gen = new Date().toLocaleString('en-GB',{day:'2-digit',month:'short',year:'numeric',hour:'2-digit',minute:'2-digit'});
+
+  var H = '<!DOCTYPE html><html lang="en"><head><meta charset="utf-8">';
+  H += '<title>Oskar Anderson-King — River Clinical Report ' + dateMaxStr + '</title>';
+  H += '<style>';
+  H += '*{box-sizing:border-box;margin:0;padding:0}';
+  H += 'html{font-size:13px}';
+  H += 'body{font-family:"DM Mono",ui-monospace,monospace;background:#03050f;color:rgba(200,220,240,0.85);line-height:1.6;padding:0}';
+  H += '@import url("https://fonts.googleapis.com/css2?family=DM+Mono:wght@300;400;500&family=Fraunces:ital,wght@1,200;1,300&display=swap");';
+  H += '.page{max-width:820px;margin:0 auto;padding:40px 24px 80px}';
+  H += '.rh{display:flex;justify-content:space-between;align-items:flex-end;border-bottom:1px solid rgba(255,255,255,0.08);padding-bottom:20px;margin-bottom:32px}';
+  H += '.rh-title{font-family:"Fraunces",serif;font-style:italic;font-weight:200;font-size:28px;color:rgba(200,220,240,0.9);line-height:1.2}';
+  H += '.rh-sub{font-size:10px;color:rgba(200,220,240,0.35);margin-top:4px;letter-spacing:0.5px}';
+  H += '.rh-meta{text-align:right;font-size:10px;color:rgba(200,220,240,0.3);line-height:1.8}';
+  H += '.sec-label{font-size:9px;letter-spacing:1.5px;text-transform:uppercase;color:rgba(200,220,240,0.35);margin-bottom:14px;border-bottom:1px solid rgba(255,255,255,0.05);padding-bottom:6px}';
+  H += '.sec{margin-bottom:36px}';
+  H += '.stat-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-bottom:16px}';
+  H += '.stat{background:rgba(255,255,255,0.04);border-radius:10px;padding:14px 12px;text-align:center}';
+  H += '.stat-val{font-size:26px;font-weight:500;line-height:1}';
+  H += '.stat-lbl{font-size:9px;color:rgba(200,220,240,0.35);margin-top:5px;letter-spacing:0.5px}';
+  H += '.stat-sub{font-size:9px;color:rgba(200,220,240,0.25);margin-top:2px}';
+  H += '.tir-row{display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;margin-bottom:16px}';
+  H += '.tir-bar{border-radius:6px;padding:9px 12px;display:flex;justify-content:space-between;align-items:center}';
+  H += '.chart-wrap{position:relative;width:100%;height:300px;background:rgba(255,255,255,0.02);border-radius:10px;overflow:hidden;margin-bottom:8px}';
+  H += '.chart-leg{display:flex;flex-wrap:wrap;gap:14px;font-size:10px;color:rgba(200,220,240,0.4);margin-bottom:28px}';
+  H += '.chart-leg span{display:flex;align-items:center;gap:5px}';
+  H += '.dot{width:7px;height:7px;border-radius:50%;flex-shrink:0}';
+  H += '.line{width:18px;height:2px;flex-shrink:0}';
+  H += '.day-block{border:1px solid rgba(255,255,255,0.06);border-radius:10px;overflow:hidden;margin-bottom:12px}';
+  H += '.day-hdr{background:rgba(255,255,255,0.04);padding:8px 14px;font-size:10px;letter-spacing:0.5px;color:rgba(200,220,240,0.5);display:flex;gap:16px;align-items:center}';
+  H += '.day-hdr b{color:rgba(200,220,240,0.8);font-weight:500;font-size:11px;letter-spacing:0}';
+  H += '.ev-row{display:grid;grid-template-columns:48px 64px 1fr auto;gap:8px;align-items:start;padding:8px 14px;border-bottom:1px solid rgba(255,255,255,0.04);font-size:11px}';
+  H += '.ev-row:last-child{border-bottom:none}';
+  H += '.ev-time{color:rgba(200,220,240,0.35);font-size:10px;padding-top:1px;font-variant-numeric:tabular-nums}';
+  H += '.badge{display:inline-block;font-size:9px;font-weight:500;padding:2px 6px;border-radius:4px;white-space:nowrap}';
+  H += '.b-meal{background:rgba(62,180,120,0.15);color:rgba(62,200,140,0.9)}';
+  H += '.b-corr{background:rgba(255,180,60,0.12);color:rgba(255,180,60,0.8)}';
+  H += '.b-ghost{background:rgba(140,120,240,0.12);color:rgba(180,160,240,0.8)}';
+  H += '.b-hypo{background:rgba(255,80,80,0.12);color:rgba(255,120,100,0.85)}';
+  H += '.b-near{background:rgba(255,160,40,0.12);color:rgba(255,160,40,0.8)}';
+  H += '.ev-main{color:rgba(200,220,240,0.8);font-weight:500;margin-bottom:2px}';
+  H += '.ev-sub{color:rgba(200,220,240,0.35);font-size:10px}';
+  H += '.ev-sub span{margin-right:8px}';
+  H += '.ev-items{color:rgba(200,220,240,0.3);font-size:10px;margin-top:3px;font-style:italic}';
+  H += '.ev-note{color:rgba(255,180,80,0.5);font-size:10px;margin-top:3px}';
+  H += '.bg-num{font-variant-numeric:tabular-nums;font-weight:500;font-size:13px;white-space:nowrap;padding-top:1px}';
+  H += '.bg-high{color:rgba(255,160,60,0.85)}.bg-ok{color:rgba(62,200,140,0.85)}.bg-low{color:rgba(255,100,80,0.9)}.bg-dim{color:rgba(200,220,240,0.3)}';
+  H += '.ghost-block{border:1px solid rgba(140,120,240,0.2);border-radius:10px;padding:14px;margin-bottom:10px;background:rgba(140,120,240,0.04)}';
+  H += '.ghost-title{font-size:10px;color:rgba(180,160,240,0.8);letter-spacing:0.5px;margin-bottom:6px}';
+  H += '.ghost-detail{font-size:10px;color:rgba(200,220,240,0.4);line-height:1.8}';
+  H += '.hour-grid{display:grid;grid-template-columns:repeat(24,1fr);gap:2px;margin-bottom:8px}';
+  H += '.hour-cell{height:36px;border-radius:3px;position:relative}';
+  H += '.hour-label{font-size:8px;color:rgba(200,220,240,0.3);text-align:center;margin-top:2px}';
+  H += '.footer{border-top:1px solid rgba(255,255,255,0.06);padding-top:20px;font-size:9px;color:rgba(200,220,240,0.25);line-height:2;text-align:center}';
+  H += '.compound-flag{background:rgba(100,140,255,0.1);border-left:2px solid rgba(100,140,255,0.4)}';
+  H += '.hypo-flag{background:rgba(255,80,60,0.07);border-left:2px solid rgba(255,80,60,0.4)}';
+  H += '.iob-pill{display:inline-block;background:rgba(100,160,255,0.12);color:rgba(140,190,255,0.8);font-size:9px;padding:1px 5px;border-radius:3px;margin-left:4px}';
+  H += '.cob-pill{display:inline-block;background:rgba(80,200,120,0.12);color:rgba(80,200,120,0.8);font-size:9px;padding:1px 5px;border-radius:3px;margin-left:4px}';
+  H += '@media print{body{background:#fff;color:#111}.page{padding:20px}.stat{background:#f5f5f5;border:1px solid #ddd}.chart-wrap{border:1px solid #ddd}.day-block{border:1px solid #ddd}.ev-row{border-bottom:1px solid #eee}.rh{border-bottom:1px solid #ccc}}';
+  H += '</style></head><body><div class="page">';
+
+  // Header
+  H += '<div class="rh">';
+  H += '<div><div class="rh-title">Oskar\'s River</div>';
+  H += '<div class="rh-sub">clinical summary · ' + dateMinStr + ' – ' + dateMaxStr + '</div></div>';
+  H += '<div class="rh-meta">Oskar Anderson-King · DOB 12 Jan 2014<br>T1D · MDI (Degludec + MyLife)<br>CGM: Libre 3 / Dexcom G7<br>Generated ' + gen + '</div>';
+  H += '</div>';
+
+  // Warning
+  H += '<div style="font-size:9px;background:rgba(255,160,40,0.07);border:1px solid rgba(255,160,40,0.15);border-radius:8px;padding:8px 12px;color:rgba(255,160,40,0.6);margin-bottom:28px;letter-spacing:0.3px">';
+  H += 'NOT A CLINICAL DOCUMENT — generated by River, Oskar\'s glucose visualisation tool. For conversation with your care team only. All times BST (UTC+1).';
+  H += '</div>';
+
+  // Overview stats
+  H += '<div class="sec">';
+  H += '<div class="sec-label">glucose summary</div>';
+  H += '<div class="stat-grid">';
+  var meanCol = meanBG < 8 ? 'rgba(62,200,140,0.9)' : meanBG < 10 ? 'rgba(255,180,60,0.9)' : 'rgba(255,100,80,0.85)';
+  H += '<div class="stat"><div class="stat-val" style="color:' + meanCol + '">' + meanBG.toFixed(1) + '</div><div class="stat-lbl">mean mmol/L</div></div>';
+  var tirCol = tirPct >= 70 ? 'rgba(62,200,140,0.9)' : tirPct >= 50 ? 'rgba(255,180,60,0.9)' : 'rgba(255,100,80,0.85)';
+  H += '<div class="stat"><div class="stat-val" style="color:' + tirCol + '">' + tirPct + '%</div><div class="stat-lbl">in range 3.9–10</div><div class="stat-sub">(' + inRange + '/' + total + ')</div></div>';
+  H += '<div class="stat"><div class="stat-val" style="color:rgba(200,180,120,0.85)">' + eA1C + '%</div><div class="stat-lbl">est. A1c (formula)</div><div class="stat-sub">not GMI</div></div>';
+  H += '<div class="stat"><div class="stat-val" style="color:rgba(180,200,220,0.7)">' + cv + '%</div><div class="stat-lbl">coeff. variation</div><div class="stat-sub">target &lt;36%</div></div>';
+  H += '</div>';
+  // TIR breakdown
+  H += '<div class="tir-row">';
+  H += '<div class="tir-bar" style="background:rgba(255,80,80,0.06)"><span style="font-size:10px;color:rgba(255,130,100,0.6)">below 3.9 mmol</span><span style="font-size:18px;font-weight:500;color:rgba(255,130,100,0.9)">' + belPct + '%</span></div>';
+  H += '<div class="tir-bar" style="background:rgba(62,180,120,0.06)"><span style="font-size:10px;color:rgba(62,180,120,0.6)">3.9–10.0 mmol</span><span style="font-size:18px;font-weight:500;color:rgba(62,200,140,0.9)">' + tirPct + '%</span></div>';
+  H += '<div class="tir-bar" style="background:rgba(255,180,60,0.06)"><span style="font-size:10px;color:rgba(255,180,60,0.6)">above 10.0 mmol</span><span style="font-size:18px;font-weight:500;color:rgba(255,180,60,0.9)">' + abvPct + '%</span></div>';
+  H += '</div>';
+  H += '<div style="font-size:9px;color:rgba(200,220,240,0.25)">' + total + ' CGM readings · ' + prickPoints.length + ' finger prick(s) · ' + mealEvents.length + ' meal boluses · ' + (bolusEvents.length - mealEvents.length) + ' corrections · ' + hypoEvents.length + ' hypo episode(s) · ' + ghosts.length + ' unexplained ghost event(s)</div>';
+  H += '</div>';
+
+  // CGM chart — rendered as inline Canvas via script
+  H += '<div class="sec">';
+  H += '<div class="sec-label">continuous glucose trace · ' + dateMinStr + ' – ' + dateMaxStr + '</div>';
+  H += '<div class="chart-wrap"><canvas id="cgm-main" style="width:100%;height:100%"></canvas></div>';
+  H += '<div class="chart-leg">';
+  H += '<span><span class="line" style="background:rgba(62,180,160,0.8)"></span>CGM trace</span>';
+  H += '<span><span class="dot" style="background:rgba(255,200,100,0.9)"></span>finger prick</span>';
+  H += '<span><span class="dot" style="background:rgba(62,200,120,0.85)"></span>meal bolus</span>';
+  H += '<span><span class="dot" style="background:rgba(255,160,40,0.85)"></span>correction</span>';
+  H += '<span><span class="dot" style="background:rgba(180,140,255,0.85)"></span>ghost ? event</span>';
+  H += '<span><span class="dot" style="background:rgba(255,80,80,0.9)"></span>hypo ≤3.9</span>';
+  H += '<span><span class="line" style="background:rgba(62,180,120,0.25);border-top:1px dashed rgba(62,180,120,0.4)"></span>target 4.0–7.0</span>';
+  H += '</div>';
+  H += '</div>';
+
+  // Hourly profile (24hr heatmap via canvas)
+  H += '<div class="sec">';
+  H += '<div class="sec-label">24-hour pattern</div>';
+  H += '<canvas id="hr-chart" width="760" height="120" style="width:100%;height:auto;border-radius:8px;background:rgba(255,255,255,0.02)"></canvas>';
+  H += '</div>';
+
+  // Hypo & near-miss events
+  if (hypoEvents.length || nearMissEvents.length) {
+    H += '<div class="sec">';
+    H += '<div class="sec-label">hypos & near-misses</div>';
+    hypoEvents.forEach(function(hv) {
+      var ts = new Date(hv.t).toLocaleString('en-GB',{weekday:'short',day:'numeric',month:'short',hour:'2-digit',minute:'2-digit'});
+      var dur = Math.round((hv.end - hv.t) / 60000);
+      H += '<div class="ev-row hypo-flag"><div class="ev-time">' + new Date(hv.t).toLocaleTimeString('en-GB',{hour:'2-digit',minute:'2-digit'}) + '</div>';
+      H += '<div><span class="badge b-hypo">HYPO</span></div>';
+      H += '<div class="ev-main">' + ts + ' · nadir ' + hv.nadir.toFixed(1) + ' mmol/L · ~' + dur + ' min</div>';
+      H += '<div class="bg-num bg-low">' + hv.nadir.toFixed(1) + '</div></div>';
     });
-    lines.push('');
+    nearMissEvents.forEach(function(nm) {
+      var ts = new Date(nm.t).toLocaleString('en-GB',{weekday:'short',day:'numeric',month:'short',hour:'2-digit',minute:'2-digit'});
+      H += '<div class="ev-row"><div class="ev-time">' + new Date(nm.t).toLocaleTimeString('en-GB',{hour:'2-digit',minute:'2-digit'}) + '</div>';
+      H += '<div><span class="badge b-near">near</span></div>';
+      H += '<div class="ev-main">' + ts + ' · nadir ' + nm.nadir.toFixed(1) + ' mmol/L · BG ≤5.4 falling</div>';
+      H += '<div class="bg-num" style="color:rgba(255,160,40,0.8)">' + nm.nadir.toFixed(1) + '</div></div>';
+    });
+    H += '</div>';
   }
 
-  // Hypo events
-  var hypos = (LOGGED_EVENTS||[]).filter(function(e){ return e.note && e.note.indexOf('hypo')===0; });
-  if (hypos.length) {
-    lines.push('── HYPO EVENTS ─────────────────────────────────────────────');
-    hypos.forEach(function(e){
-      var dt = new Date(e.t).toLocaleString('en-GB',{day:'2-digit',month:'short',hour:'2-digit',minute:'2-digit'});
-      lines.push(dt + '  ' + (e.c||0) + 'g treatment  ' + (e.logged_by||''));
+  // Ghost / unexplained events
+  if (ghosts.length) {
+    H += '<div class="sec">';
+    H += '<div class="sec-label">unexplained ghost events</div>';
+    H += '<div style="font-size:10px;color:rgba(200,220,240,0.3);margin-bottom:12px">River detected these BG patterns with no matching log entry. Tap ? pebbles in the app to confirm or explain.</div>';
+    ghosts.forEach(function(g) {
+      var ts = new Date(g.t).toLocaleString('en-GB',{weekday:'short',day:'numeric',month:'short',hour:'2-digit',minute:'2-digit'});
+      var typeLabel = (g.ghost_type||'unknown').replace(/_/g,' ');
+      var confPct = g.confidence ? Math.round(g.confidence*100)+'%' : '—';
+      var status = g.confirmed === null ? 'unreviewed' : g.confirmed === false ? 'dismissed' : 'confirmed';
+      H += '<div class="ghost-block">';
+      H += '<div class="ghost-title">? ' + ts + ' · ' + typeLabel + ' · confidence ' + confPct + ' · ' + status + '</div>';
+      H += '<div class="ghost-detail">';
+      if (g.implied_units) H += 'Implied correction ≈ ' + g.implied_units + 'U<br>';
+      if (g.implied_carbs) H += 'Implied carbs ≈ ' + g.implied_carbs + 'g<br>';
+      H += '</div></div>';
     });
-    lines.push('');
+    H += '</div>';
   }
 
-  lines.push('────────────────────────────────────────────────────────────');
-  lines.push('Oskar\'s River · Insight and capture layer, not clinical decision pathway');
-  lines.push('CGM: Libre 3 via Nightscout/Gluroo · MDI · Oskar, T1D, diagnosed Aug 2025');
+  // Day-by-day event log
+  H += '<div class="sec">';
+  H += '<div class="sec-label">day-by-day event log</div>';
 
-  var blob = new Blob([lines.join('\n')], {type:'text/plain'});
+  var dayKeys = Object.keys(dayMap);
+  dayKeys.forEach(function(dk) {
+    var d = dayMap[dk];
+    var allEv = d.meals.concat(d.corrections).concat(d.ghosts).concat(d.hypos);
+    if (!allEv.length) return;
+    // Day stats
+    var dayCarbs = d.meals.reduce(function(s,m){return s+(m.carbs||0);},0);
+    var dayBolus = d.meals.reduce(function(s,m){return s+(m.bolus||0);},0) + d.corrections.reduce(function(s,c){return s+(c.bolus||0);},0);
+    var dayBgs = d.meals.map(function(m){return m.bg;}).concat(d.corrections.map(function(c){return c.bg;})).filter(Boolean);
+    var dayMin = dayBgs.length ? Math.min.apply(null,dayBgs).toFixed(1) : '—';
+    var dayMax = dayBgs.length ? Math.max.apply(null,dayBgs).toFixed(1) : '—';
+
+    H += '<div class="day-block">';
+    H += '<div class="day-hdr"><b>' + dk + '</b>';
+    H += '<span>' + dayCarbs.toFixed(0) + 'g carbs</span>';
+    H += '<span>' + dayBolus.toFixed(1) + 'U bolus</span>';
+    H += '<span>BG ' + dayMin + '–' + dayMax + ' mmol</span>';
+    if (d.ghosts.length) H += '<span style="color:rgba(180,140,255,0.7)">?' + d.ghosts.length + ' ghost</span>';
+    if (d.hypos.length) H += '<span style="color:rgba(255,100,80,0.8)">⚡ hypo treatment</span>';
+    H += '</div>';
+
+    // Sort all events by time
+    var allRows = [];
+    d.meals.forEach(function(m){ allRows.push({ t:m.t, type:'meal', data:m }); });
+    d.corrections.forEach(function(c){ allRows.push({ t:c.t, type:'corr', data:c }); });
+    d.ghosts.forEach(function(g){ allRows.push({ t:g.t, type:'ghost', data:g }); });
+    d.hypos.forEach(function(h4){ allRows.push({ t:h4.t, type:'hypo_tx', data:h4 }); });
+    allRows.sort(function(a,b){ return a.t - b.t; });
+
+    allRows.forEach(function(row) {
+      var isCompound = false;
+      if (row.type === 'meal' && row.data.iob > 0.5) isCompound = true;
+      if (row.type === 'corr' && row.data.iob > 0) isCompound = true;
+      var rowClass = 'ev-row' + (isCompound ? ' compound-flag' : '');
+
+      H += '<div class="' + rowClass + '">';
+      H += '<div class="ev-time">' + row.data.time + '</div>';
+
+      if (row.type === 'meal') {
+        var bgCol = !row.data.bg ? 'bg-dim' : row.data.bg < 3.9 ? 'bg-low' : row.data.bg < 5.5 ? 'bg-ok' : row.data.bg < 10 ? 'bg-ok' : 'bg-high';
+        H += '<div><span class="badge b-meal">meal</span></div>';
+        H += '<div>';
+        H += '<div class="ev-main">' + (row.data.carbs||0) + 'g carbs · ' + (row.data.bolus||0) + 'U';
+        if (row.data.iob > 0) H += '<span class="iob-pill">IOB ' + row.data.iob.toFixed(1) + 'U</span>';
+        H += '</div>';
+        if (row.data.name) H += '<div class="ev-sub">' + row.data.name + '</div>';
+        if (row.data.items && row.data.items.length) {
+          H += '<div class="ev-items">' + row.data.items.map(function(it){ return (it.name||'') + ' ' + (it.carbs||0) + 'g'; }).join(' · ') + '</div>';
+        }
+        if (row.data.note && ['bolus','correction','free','hypo','snack'].indexOf(row.data.note)<0) {
+          H += '<div class="ev-note">' + row.data.note + '</div>';
+        }
+        H += '</div>';
+        H += '<div class="bg-num ' + bgCol + '">' + (row.data.bg ? row.data.bg.toFixed(1) : '—') + '</div>';
+
+      } else if (row.type === 'corr') {
+        var bgColC = !row.data.bg ? 'bg-dim' : row.data.bg < 3.9 ? 'bg-low' : row.data.bg > 10 ? 'bg-high' : 'bg-ok';
+        H += '<div><span class="badge b-corr">correction</span></div>';
+        H += '<div>';
+        H += '<div class="ev-main">' + (row.data.bolus||0) + 'U</div>';
+        if (row.data.note && ['bolus','correction','free','hypo','snack'].indexOf(row.data.note)<0) {
+          H += '<div class="ev-note">' + row.data.note + '</div>';
+        }
+        H += '</div>';
+        H += '<div class="bg-num ' + bgColC + '">' + (row.data.bg ? row.data.bg.toFixed(1) : '—') + '</div>';
+
+      } else if (row.type === 'ghost') {
+        var gl = (row.data.ghost_type||'').replace(/_/g,' ');
+        var conf = row.data.confidence ? Math.round(row.data.confidence*100)+'%' : '';
+        H += '<div><span class="badge b-ghost">? ghost</span></div>';
+        H += '<div>';
+        H += '<div class="ev-main">' + gl + (conf ? ' · ' + conf + ' confidence' : '') + '</div>';
+        if (row.data.implied_units) H += '<div class="ev-sub"><span>implied ≈' + row.data.implied_units + 'U</span></div>';
+        if (row.data.implied_carbs) H += '<div class="ev-sub"><span>implied ≈' + row.data.implied_carbs + 'g carbs</span></div>';
+        var statusStr = row.data.confirmed === null ? 'unreviewed' : row.data.confirmed === false ? 'dismissed' : 'confirmed';
+        H += '<div class="ev-sub" style="color:rgba(200,220,240,0.25)">' + statusStr + '</div>';
+        H += '</div>';
+        H += '<div class="bg-num bg-dim">?</div>';
+
+      } else if (row.type === 'hypo_tx') {
+        H += '<div><span class="badge b-hypo">hypo tx</span></div>';
+        H += '<div><div class="ev-main">' + (row.data.carbs||0) + 'g treatment</div></div>';
+        H += '<div></div>';
+      }
+
+      H += '</div>'; // ev-row
+    });
+
+    H += '</div>'; // day-block
+  });
+  H += '</div>'; // sec
+
+  // Footer
+  H += '<div class="footer">';
+  H += "Oskar's River · glucose observation and pattern memory · not a clinical decision pathway<br>";
+  H += 'CGM: Libre 3 via Nightscout · MDI · Oskar Anderson-King, T1D, diagnosed Aug 2025<br>';
+  H += 'River build ' + (window['__BUILD'+'_ID__'] || 'dev') + ' · report generated ' + gen;
+  H += '</div>';
+
+  // Charts script
+  H += '<script>';
+  // Embed data
+  H += 'var cgmPts=' + JSON.stringify(cgmPoints) + ';';
+  H += 'var prickPts=' + JSON.stringify(prickPoints) + ';';
+  H += 'var mealMkr=' + JSON.stringify(mealMarkers) + ';';
+  H += 'var corrMkr=' + JSON.stringify(corrMarkers) + ';';
+  H += 'var ghostMkr=' + JSON.stringify(ghostMarkers) + ';';
+  H += 'var hypoMkr=' + JSON.stringify(hypoMarkers) + ';';
+  H += 'var hourBkts=' + JSON.stringify(hourBuckets.map(function(b){ return b.length ? +(b.reduce(function(s,v){return s+v;},0)/b.length).toFixed(2) : null; })) + ';';
+  H += 'var hourCnts=' + JSON.stringify(hourBuckets.map(function(b){ return b.length; })) + ';';
+
+  H += '(function(){';
+  // Main CGM chart
+  H += 'var cv=document.getElementById("cgm-main");';
+  H += 'if(!cv)return;';
+  H += 'var par=cv.parentElement;';
+  H += 'cv.width=par.offsetWidth||760;cv.height=par.offsetHeight||300;';
+  H += 'var ctx=cv.getContext("2d");';
+  H += 'var W=cv.width,H2=cv.height;';
+  H += 'var pad={t:20,r:16,b:32,l:44};';
+  H += 'var tMin=cgmPts.length?cgmPts[0].x:Date.now()-7*86400000;';
+  H += 'var tMax=cgmPts.length?cgmPts[cgmPts.length-1].x:Date.now();';
+  H += 'var bgMin=2.0,bgMax=20.0;';
+  H += 'function tx(t){return pad.l+(t-tMin)/(tMax-tMin)*(W-pad.l-pad.r);}';
+  H += 'function ty(bg){return pad.t+(1-(bg-bgMin)/(bgMax-bgMin))*(H2-pad.t-pad.b);}';
+  // target band
+  H += 'ctx.fillStyle="rgba(62,180,120,0.08)";';
+  H += 'ctx.fillRect(pad.l,ty(10),W-pad.l-pad.r,ty(3.9)-ty(10));';
+  // grid lines
+  H += '[4,6,8,10,14,18].forEach(function(v){';
+  H += 'ctx.strokeStyle=v===4||v===10?"rgba(255,255,255,0.12)":"rgba(255,255,255,0.05)";';
+  H += 'ctx.lineWidth=v===4||v===10?1:0.5;';
+  H += 'ctx.setLineDash([]);';
+  H += 'ctx.beginPath();ctx.moveTo(pad.l,ty(v));ctx.lineTo(W-pad.r,ty(v));ctx.stroke();';
+  H += 'ctx.fillStyle="rgba(200,220,240,0.3)";ctx.font="9px monospace";ctx.textAlign="right";';
+  H += 'ctx.fillText(v,pad.l-4,ty(v)+3);';
+  H += '});';
+  // time axis labels (day marks)
+  H += 'var day=86400000;var d0=Math.ceil(tMin/day)*day;';
+  H += 'for(var td=d0;td<=tMax;td+=day){';
+  H += 'var xd=tx(td);';
+  H += 'ctx.strokeStyle="rgba(255,255,255,0.08)";ctx.lineWidth=0.5;ctx.setLineDash([3,4]);';
+  H += 'ctx.beginPath();ctx.moveTo(xd,pad.t);ctx.lineTo(xd,H2-pad.b);ctx.stroke();';
+  H += 'ctx.setLineDash([]);';
+  H += 'ctx.fillStyle="rgba(200,220,240,0.35)";ctx.font="9px monospace";ctx.textAlign="center";';
+  H += 'ctx.fillText(new Date(td).toLocaleDateString("en-GB",{weekday:"short",day:"numeric",month:"short"}),xd,H2-pad.b+14);';
+  H += '}';
+  // CGM line
+  H += 'if(cgmPts.length>1){';
+  H += 'ctx.beginPath();ctx.strokeStyle="rgba(62,180,160,0.75)";ctx.lineWidth=1.5;ctx.setLineDash([]);';
+  H += 'var gap=15*60000;';
+  H += 'ctx.moveTo(tx(cgmPts[0].x),ty(cgmPts[0].y));';
+  H += 'for(var i=1;i<cgmPts.length;i++){';
+  H += 'if(cgmPts[i].x-cgmPts[i-1].x>gap){ctx.stroke();ctx.beginPath();ctx.moveTo(tx(cgmPts[i].x),ty(cgmPts[i].y));}';
+  H += 'else ctx.lineTo(tx(cgmPts[i].x),ty(cgmPts[i].y));';
+  H += '}ctx.stroke();}';
+  // prick dots
+  H += 'prickPts.forEach(function(p){ctx.beginPath();ctx.arc(tx(p.x),ty(p.y),4,0,Math.PI*2);ctx.fillStyle="rgba(255,200,100,0.9)";ctx.fill();});';
+  // meal markers
+  H += 'mealMkr.forEach(function(m){if(!m.y)return;var x=tx(m.x),y=ty(m.y);ctx.beginPath();ctx.arc(x,y,5,0,Math.PI*2);ctx.fillStyle="rgba(62,200,120,0.85)";ctx.fill();});';
+  // corr markers
+  H += 'corrMkr.forEach(function(m){if(!m.y)return;var x=tx(m.x),y=ty(m.y);ctx.beginPath();ctx.arc(x,y,4,0,Math.PI*2);ctx.fillStyle="rgba(255,160,40,0.85)";ctx.fill();});';
+  // ghost markers
+  H += 'ghostMkr.forEach(function(m){if(!m.y)return;var x=tx(m.x),y=ty(m.y);ctx.beginPath();ctx.arc(x,y,5,0,Math.PI*2);ctx.fillStyle="rgba(180,140,255,0.8)";ctx.fill();ctx.fillStyle="rgba(255,255,255,0.7)";ctx.font="bold 8px monospace";ctx.textAlign="center";ctx.fillText("?",x,y+3);});';
+  // hypo markers
+  H += 'hypoMkr.forEach(function(m){var x=tx(m.x),y=ty(m.y||3.9);ctx.beginPath();ctx.arc(x,y,5,0,Math.PI*2);ctx.fillStyle="rgba(255,80,80,0.9)";ctx.fill();});';
+  H += '})();';
+
+  // Hourly canvas
+  H += '(function(){';
+  H += 'var hcv=document.getElementById("hr-chart");if(!hcv)return;';
+  H += 'var hctx=hcv.getContext("2d");';
+  H += 'var W2=hcv.width,H3=hcv.height;';
+  H += 'var cellW=Math.floor((W2-32)/24);var cellH=H3-28;var offX=16;var offY=8;';
+  H += 'hourBkts.forEach(function(mean,h){';
+  H += 'var x=offX+h*cellW;';
+  H += 'if(mean===null){hctx.fillStyle="rgba(255,255,255,0.03)";hctx.fillRect(x,offY,cellW-2,cellH);return;}';
+  H += 'var t=Math.max(0,Math.min(1,(mean-3.9)/(14-3.9)));';
+  H += 'var r,g,b;';
+  H += 'if(mean<3.9){r=255;g=80;b=80;}';
+  H += 'else if(mean<=7){r=62;g=Math.round(180+20*(1-(mean-3.9)/3.1));b=Math.round(120+40*(1-(mean-3.9)/3.1));}';
+  H += 'else if(mean<=10){r=Math.round(60+200*((mean-7)/3));g=Math.round(200-140*((mean-7)/3));b=Math.round(120-60*((mean-7)/3));}';
+  H += 'else{r=255;g=Math.round(160-80*Math.min(1,(mean-10)/4));b=40;}';
+  H += 'var alpha=hourCnts[h]>0?0.7:0.1;';
+  H += 'hctx.fillStyle="rgba("+r+","+g+","+b+","+alpha+")";';
+  H += 'hctx.fillRect(x,offY,cellW-2,cellH);';
+  H += 'if(hourCnts[h]>0){hctx.fillStyle="rgba(255,255,255,0.5)";hctx.font="8px monospace";hctx.textAlign="center";hctx.fillText(mean.toFixed(1),x+cellW/2-1,offY+cellH/2+3);}';
+  H += '});';
+  H += '[0,3,6,9,12,15,18,21].forEach(function(h){';
+  H += 'hctx.fillStyle="rgba(200,220,240,0.3)";hctx.font="8px monospace";hctx.textAlign="center";';
+  H += 'hctx.fillText(h.toString().padStart(2,"0"),offX+h*cellW+cellW/2-1,H3-6);';
+  H += '});';
+  H += '})();';
+  H += '</script>';
+
+  H += '</div></body></html>';
+
+  // Download
+  var blob = new Blob([H], { type: 'text/html;charset=utf-8' });
   var url  = URL.createObjectURL(blob);
   var a    = document.createElement('a');
   a.href   = url;
-  a.download = 'oskar-river-clinic-' + new Date().toISOString().slice(0,10) + '.txt';
+  a.download = 'oskar-river-clinic-' + new Date().toISOString().slice(0,10) + '.html';
   a.click();
   URL.revokeObjectURL(url);
   showToast('clinic report downloaded');
