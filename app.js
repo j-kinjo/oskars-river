@@ -14263,7 +14263,7 @@ async function openInsightsPanel() {
   var sbReadings = [], sbMeals = [], sbEvents = [];
   try {
     var rRows = await _sbFetch(
-      'events?t=gte.' + since + '&bg=gt.0&select=t,bg&order=t.asc&limit=50000',
+      'readings?t=gte.' + since + '&order=t.asc&limit=50000',
       { method: 'GET' }
     );
     if (Array.isArray(rRows)) sbReadings = rRows;
@@ -14279,7 +14279,7 @@ async function openInsightsPanel() {
 
   try {
     var eRows = await _sbFetch(
-      'events?t=gte.' + since + '&note=eq.prick&select=t,gi,cgm_reading&order=t.asc&limit=500',
+      'events?t=gte.' + since + '&note=eq.prick&select=t,gi&order=t.asc&limit=500',
       { method: 'GET' }
     );
     if (Array.isArray(eRows)) sbEvents = eRows;
@@ -15206,7 +15206,7 @@ async function insightsExport() {
 
   try {
     var r1 = await _sbFetch(
-      'events?t=gte.' + windowStart + '&t=lte.' + reportEnd + '&bg=gt.0&select=t,bg&order=t.asc&limit=50000',
+      'readings?t=gte.' + windowStart + '&t=lte.' + reportEnd + '&order=t.asc&limit=50000',
       { method: 'GET' }
     );
     if (Array.isArray(r1)) sbReadings = r1;
@@ -15240,7 +15240,7 @@ async function insightsExport() {
 
   try {
     var r5 = await _sbFetch(
-      'events?t=gte.' + windowStart + '&t=lte.' + reportEnd + '&note=eq.prick&select=t,gi,cgm_reading&order=t.asc&limit=500',
+      'events?t=gte.' + windowStart + '&t=lte.' + reportEnd + '&note=eq.prick&select=t,gi&order=t.asc&limit=500',
       { method: 'GET' }
     );
     if (Array.isArray(r5)) sbPricks = r5.filter(function(e){ return e.gi > 0; });
