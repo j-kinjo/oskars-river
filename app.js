@@ -15214,7 +15214,7 @@ async function insightsExport() {
 
   try {
     var r2 = await _sbFetch(
-      'events?t=gte.' + windowStart + '&t=lte.' + reportEnd + '&select=t,c,u,note,items,iob,logged_by&order=t.asc&limit=5000',
+      'events?t=gte.' + windowStart + '&t=lte.' + reportEnd + '&select=t,c,u,gi,note,items&order=t.asc&limit=5000',
       { method: 'GET' }
     );
     if (Array.isArray(r2)) sbEvents = r2;
@@ -15223,7 +15223,7 @@ async function insightsExport() {
   try {
     var r3 = await _sbFetch(
       'meal_history?t=gte.' + windowStart + '&t=lte.' + reportEnd +
-      '&select=t,name,total_carbs,items,bolus_u,pre_bg,peak_bg,therapy_snapshot,iob_at_meal,wait_mins,source&order=t.asc&limit=500',
+      '&select=t,name,total_carbs,items,bolus_u,pre_bg,peak_bg,therapy_snapshot,wait_mins,source&order=t.asc&limit=500',
       { method: 'GET' }
     );
     if (Array.isArray(r3)) sbMeals = r3;
@@ -15332,7 +15332,7 @@ async function insightsExport() {
     var bg = nearby.length ? nearby.reduce(function(best,r){ return Math.abs(r.t-m.t)<Math.abs(best.t-m.t)?r:best; }, nearby[0]).bg : (m.pre_bg||null);
     var items = m.items;
     if (typeof items === 'string') { try { items = JSON.parse(items); } catch(e2) { items = null; } }
-    dayMap[dk].meals.push({ time:time, carbs:m.total_carbs, bolus:m.bolus_u, bg:bg, items:items, name:m.name, iob:m.iob_at_meal||0, t:m.t });
+    dayMap[dk].meals.push({ time:time, carbs:m.total_carbs, bolus:m.bolus_u, bg:bg, items:items, name:m.name, iob:0, t:m.t });
   });
   sbEvents.filter(function(e){ return e.u > 0 && (!e.c || e.c===0); }).forEach(function(e){
     var dk = _dayKey(e.t);
@@ -15384,6 +15384,7 @@ async function insightsExport() {
   H += '.bg-high{color:rgba(255,160,60,0.85)}.bg-ok{color:rgba(62,200,140,0.85)}.bg-low{color:rgba(255,100,80,0.9)}.bg-dim{color:rgba(200,220,240,0.3)}';
   H += '.compound-flag{background:rgba(100,140,255,0.06);border-left:2px solid rgba(100,140,255,0.3)}';
   H += '.iob-pill{display:inline-block;background:rgba(100,160,255,0.12);color:rgba(140,190,255,0.8);font-size:9px;padding:1px 5px;border-radius:3px;margin-left:4px}';
+  H += '.cob-pill{display:inline-block;background:rgba(80,200,120,0.12);color:rgba(80,200,120,0.8);font-size:9px;padding:1px 5px;border-radius:3px;margin-left:4px}';
   H += '.ghost-block{border:1px solid rgba(140,120,240,0.2);border-radius:10px;padding:14px;margin-bottom:10px;background:rgba(140,120,240,0.04)}';
   H += '.footer{border-top:1px solid rgba(255,255,255,0.06);padding-top:20px;font-size:9px;color:rgba(200,220,240,0.25);line-height:2;text-align:center}';
   H += '@media print{body{background:#fff;color:#111}.stat,.day-block,.ghost-block{border:1px solid #ddd;background:#f9f9f9}.chart-wrap{border:1px solid #ddd}}';
@@ -15468,6 +15469,72 @@ async function insightsExport() {
     H += '</div>';
   }
 
+  // Helper: find nearest CGM reading to timestamp t
+  function _nearestBG(t, rds, windowMs) {
+    var w = windowMs || 600000;
+    var nearby = rds.filter(function(r){ return Math.abs(r.t - t) < w; });
+    if (!nearby.length) return null;
+    return nearby.reduce(function(best,r){ return Math.abs(r.t-t)<Math.abs(best.t-t)?r:best; }, nearby[0]);
+  }
+
+  // Helper: estimate active IOB at time t from prior bolus events
+  // Uses a simple bi-exponential decay (DIA ~2.5h, peak ~60min)
+  function _estimateIOB(t, evts) {
+    var DIA_MS = 150 * 60000; // 2.5h in ms
+    var iob = 0;
+    evts.forEach(function(e) {
+      if (!e.u || e.u <= 0) return;
+      var age = t - e.t;
+      if (age < 0 || age > DIA_MS) return;
+      var frac = age / DIA_MS;
+      // Rough remaining insulin fraction (linear decay is close enough for display)
+      var remaining = Math.max(0, 1 - frac);
+      iob += e.u * remaining;
+    });
+    return +iob.toFixed(2);
+  }
+
+  // Helper: estimate active COB at time t from prior meal events (45min absorption)
+  function _estimateCOB(t, evts) {
+    var ABS_MS = 120 * 60000; // 2h rough absorption window
+    var cob = 0;
+    evts.forEach(function(e) {
+      if (!e.c || e.c <= 0) return;
+      var age = t - e.t;
+      if (age < 0 || age > ABS_MS) return;
+      var remaining = Math.max(0, 1 - age / ABS_MS);
+      cob += e.c * remaining;
+    });
+    return +cob.toFixed(1);
+  }
+
+  // Helper: build a mini inline CGM sparkline for ±2h window around a meal
+  function _mealSparkline(t, rds) {
+    var W2 = 120, H4 = 28, PAD2 = 2;
+    var windowMs2 = 2 * 3600000;
+    var pts = rds.filter(function(r){ return r.t >= t - windowMs2 && r.t <= t + windowMs2; });
+    if (pts.length < 3) return '';
+    var bgVals = pts.map(function(p){ return p.bg; });
+    var bgMin2 = Math.min.apply(null, bgVals);
+    var bgMax2 = Math.max.apply(null, bgVals);
+    if (bgMax2 === bgMin2) bgMax2 = bgMin2 + 1;
+    var tMin2 = t - windowMs2, tMax2 = t + windowMs2;
+    function sx(ts){ return PAD2 + (ts - tMin2) / (tMax2 - tMin2) * (W2 - PAD2*2); }
+    function sy(bg){ return PAD2 + (1 - (bg - bgMin2) / (bgMax2 - bgMin2)) * (H4 - PAD2*2); }
+    var pathD = pts.map(function(p, i){ return (i===0?'M':'L') + sx(p.t).toFixed(1) + ',' + sy(p.bg).toFixed(1); }).join(' ');
+    var mealX = sx(t).toFixed(1);
+    // Target band
+    var bandY1 = sy(Math.min(bgMax2, 10)).toFixed(1);
+    var bandY2 = sy(Math.max(bgMin2, 3.9)).toFixed(1);
+    return '<svg width="' + W2 + '" height="' + H4 + '" style="display:block;margin-top:5px;overflow:visible">' +
+      '<rect x="' + PAD2 + '" y="' + bandY1 + '" width="' + (W2-PAD2*2) + '" height="' + (parseFloat(bandY2)-parseFloat(bandY1)) + '" fill="rgba(62,180,120,0.1)"/>' +
+      '<path d="' + pathD + '" fill="none" stroke="rgba(62,180,160,0.7)" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>' +
+      '<line x1="' + mealX + '" y1="' + PAD2 + '" x2="' + mealX + '" y2="' + (H4-PAD2) + '" stroke="rgba(62,200,120,0.6)" stroke-width="1" stroke-dasharray="2,2"/>' +
+      '<text x="2" y="9" fill="rgba(200,220,240,0.3)" font-size="6" font-family="monospace">' + bgMin2.toFixed(1) + '</text>' +
+      '<text x="2" y="' + (H4-2) + '" fill="rgba(200,220,240,0.3)" font-size="6" font-family="monospace">' + bgMax2.toFixed(1) + '</text>' +
+      '</svg>';
+  }
+
   // Day-by-day log
   H += '<div class="sec"><div class="sec-label">day-by-day event log</div>';
   var dayKeys = Object.keys(dayMap).sort(function(a,b){ return dayMap[a].t_first - dayMap[b].t_first; });
@@ -15491,32 +15558,65 @@ async function insightsExport() {
     allRows.sort(function(a,b){ return a.t-b.t; });
 
     allRows.forEach(function(row){
-      var isCompound = (row.type==='meal' && row.data.iob > 0.5) || (row.type==='corr' && row.data.iob > 0);
-      H += '<div class="ev-row' + (isCompound?' compound-flag':'') + '">';
+      // Compute IOB/COB from prior events
+      var priorEvts = sbEvents.filter(function(e){ return e.t < row.t && e.t >= row.t - 3*3600000; });
+      var iobAtRow = _estimateIOB(row.t, priorEvts);
+      var cobAtRow = _estimateCOB(row.t, priorEvts);
+      var isCompound = iobAtRow > 0.5;
+
+      H += '<div class="ev-row' + (isCompound ? ' compound-flag' : '') + '">';
       H += '<div class="ev-time">' + row.data.time + '</div>';
-      if (row.type==='meal') {
-        var bgCol = !row.data.bg?'bg-dim':row.data.bg<3.9?'bg-low':row.data.bg>10?'bg-high':'bg-ok';
+
+      if (row.type === 'meal') {
+        var snap = row.data.therapy_snapshot || {};
+        var snapRatios = snap.ratios || [];
+        // Find the ratio for the current period
+        var mealH = new Date(row.t).getHours();
+        var mealPeriod = mealH < 10 ? 'Breakfast' : mealH < 14 ? 'Lunch' : mealH < 18 ? 'Afternoon' : mealH < 22 ? 'Evening' : 'Overnight';
+        var periodRatio = snapRatios.find(function(r){ return r.period === mealPeriod; });
+        var ic  = periodRatio ? periodRatio.ic  : (snap.ic  || null);
+        var isf = periodRatio ? periodRatio.isf : (snap.isf || null);
+        var bgCol = !row.data.bg ? 'bg-dim' : row.data.bg < 3.9 ? 'bg-low' : row.data.bg > 10 ? 'bg-high' : 'bg-ok';
+
         H += '<div><span class="badge b-meal">meal</span></div><div>';
         H += '<div class="ev-main">' + (row.data.carbs||0) + 'g · ' + (row.data.bolus||0) + 'U';
-        if (row.data.iob > 0) H += '<span class="iob-pill">IOB ' + row.data.iob.toFixed(1) + 'U</span>';
+        if (iobAtRow > 0.3) H += '<span class="iob-pill">IOB ' + iobAtRow.toFixed(1) + 'U</span>';
+        if (cobAtRow > 2)   H += '<span class="cob-pill">COB ' + cobAtRow.toFixed(0) + 'g</span>';
         H += '</div>';
+        // Therapy context
+        var ctxParts = [];
+        if (ic)  ctxParts.push('IC 1:' + ic);
+        if (isf) ctxParts.push('ISF ' + isf);
+        if (row.data.wait_mins != null) ctxParts.push('wait ' + row.data.wait_mins + 'min');
+        if (ctxParts.length) H += '<div class="ev-sub">' + ctxParts.join(' · ') + '</div>';
         if (row.data.name) H += '<div class="ev-sub">' + row.data.name + '</div>';
         if (row.data.items && row.data.items.length) {
           var itemArr = Array.isArray(row.data.items) ? row.data.items : [];
-          H += '<div class="ev-items">' + itemArr.map(function(it){ return (it.name||'')+(it.carbs?' '+it.carbs+'g':''); }).join(' · ') + '</div>';
+          if (itemArr.length) H += '<div class="ev-items">' + itemArr.map(function(it){ return (it.name||'') + (it.carbs ? ' ' + it.carbs + 'g' : ''); }).join(' · ') + '</div>';
         }
-        H += '</div><div class="bg-num ' + bgCol + '">' + (row.data.bg?row.data.bg.toFixed(1):'—') + '</div>';
-      } else if (row.type==='corr') {
-        var bgColC = !row.data.bg?'bg-dim':row.data.bg<3.9?'bg-low':row.data.bg>10?'bg-high':'bg-ok';
+        // Mini CGM sparkline ±2h
+        H += _mealSparkline(row.t, readings);
+        H += '</div><div class="bg-num ' + bgCol + '">' + (row.data.bg ? row.data.bg.toFixed(1) : '—') + '</div>';
+
+      } else if (row.type === 'corr') {
+        var bgColC = !row.data.bg ? 'bg-dim' : row.data.bg < 3.9 ? 'bg-low' : row.data.bg > 10 ? 'bg-high' : 'bg-ok';
         H += '<div><span class="badge b-corr">correction</span></div>';
-        H += '<div><div class="ev-main">' + (row.data.bolus||0) + 'U</div></div>';
-        H += '<div class="bg-num ' + bgColC + '">' + (row.data.bg?row.data.bg.toFixed(1):'—') + '</div>';
-      } else if (row.type==='ghost') {
+        H += '<div><div class="ev-main">' + (row.data.bolus||0) + 'U';
+        if (iobAtRow > 0.3) H += '<span class="iob-pill">IOB ' + iobAtRow.toFixed(1) + 'U</span>';
+        H += '</div>';
+        if (cobAtRow > 2) H += '<div class="ev-sub"><span class="cob-pill" style="margin-left:0">COB ' + cobAtRow.toFixed(0) + 'g still active</span></div>';
+        if (row.data.note && ['bolus','correction','free','hypo','snack'].indexOf(row.data.note) < 0) {
+          H += '<div class="ev-note" style="font-size:10px;color:rgba(255,180,80,0.5);margin-top:2px">' + row.data.note + '</div>';
+        }
+        H += '</div><div class="bg-num ' + bgColC + '">' + (row.data.bg ? row.data.bg.toFixed(1) : '—') + '</div>';
+
+      } else if (row.type === 'ghost') {
         H += '<div><span class="badge b-ghost">? ghost</span></div>';
         H += '<div><div class="ev-main">' + (row.data.ghost_type||'').replace(/_/g,' ');
         if (row.data.confidence) H += ' · ' + Math.round(row.data.confidence*100) + '%';
         H += '</div>';
         if (row.data.implied_units) H += '<div class="ev-sub">implied ≈' + row.data.implied_units + 'U</div>';
+        if (row.data.implied_carbs) H += '<div class="ev-sub">implied ≈' + row.data.implied_carbs + 'g carbs</div>';
         H += '</div><div class="bg-num bg-dim">?</div>';
       }
       H += '</div>';
