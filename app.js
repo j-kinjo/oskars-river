@@ -14237,30 +14237,89 @@ window.addEventListener('load',()=>{
 // INSIGHTS PANEL
 // ═══════════════════════════════════════════════════════════════════════════
 
-function openInsightsPanel() {
+async function openInsightsPanel() {
   var ex = document.getElementById('insights-overlay');
   if (ex) ex.remove();
 
-  // ── Compute stats ────────────────────────────────────────────────────────
-  var readings = HISTORY_RAW.filter(function(r){ return r && r.bg > 0; });
-  var pricks   = (function(){
-    try{ return JSON.parse(localStorage.getItem('river_pricks')||'[]'); }catch(e){ return []; }
-  })();
+  // ── Show loading shell immediately ───────────────────────────────────────
+  var el = document.createElement('div');
+  el.id  = 'insights-overlay';
+  el.style.cssText = 'position:fixed;inset:0;z-index:90;background:rgba(3,5,20,0.97);' +
+    'backdrop-filter:blur(20px);overflow-y:auto;-webkit-overflow-scrolling:touch;' +
+    'font-family:"DM Mono",monospace;color:rgba(200,220,240,0.85);';
+  el.innerHTML = '<div style="max-width:540px;margin:0 auto;padding:env(safe-area-inset-top,24px) 20px 80px">' +
+    '<div style="display:flex;justify-content:space-between;align-items:center;padding:20px 0 24px;border-bottom:1px solid rgba(255,255,255,0.07);margin-bottom:24px">' +
+    '<div style="font-family:\'Fraunces\',serif;font-style:italic;font-weight:200;font-size:22px;color:rgba(200,220,240,0.9)">insights</div>' +
+    '<button onclick="document.getElementById(\'insights-overlay\').remove()" style="background:none;border:none;cursor:pointer;font-size:24px;color:rgba(200,220,240,0.4);padding:4px">×</button></div>' +
+    '<div id="insights-loading" style="text-align:center;padding:40px 0;font-size:10px;letter-spacing:1px;color:rgba(200,220,240,0.3)">loading from supabase…</div>' +
+    '</div>';
+  document.body.appendChild(el);
 
-  var inRange  = readings.filter(function(r){ return r.bg >= 3.9 && r.bg <= 10.0; }).length;
+  // ── Fetch from Supabase ──────────────────────────────────────────────────
+  var now = Date.now();
+  var windowMs = 90 * 24 * 3600000;
+  var since = now - windowMs;
+
+  var sbReadings = [], sbMeals = [], sbEvents = [];
+  try {
+    var rRows = await _sbFetch(
+      'events?t=gte.' + since + '&bg=gt.0&select=t,bg&order=t.asc&limit=50000',
+      { method: 'GET' }
+    );
+    if (Array.isArray(rRows)) sbReadings = rRows;
+  } catch(e) { console.warn('[insights panel] CGM fetch:', e.message); }
+
+  try {
+    var mRows = await _sbFetch(
+      'meal_history?t=gte.' + since + '&order=t.desc&limit=200&select=t,name,total_carbs,bolus_u,pre_bg,peak_bg,items',
+      { method: 'GET' }
+    );
+    if (Array.isArray(mRows)) sbMeals = mRows;
+  } catch(e) { console.warn('[insights panel] meal fetch:', e.message); }
+
+  try {
+    var eRows = await _sbFetch(
+      'events?t=gte.' + since + '&note=eq.prick&select=t,gi,cgm_reading&order=t.asc&limit=500',
+      { method: 'GET' }
+    );
+    if (Array.isArray(eRows)) sbEvents = eRows;
+  } catch(e) { console.warn('[insights panel] prick fetch:', e.message); }
+
+  // ── Merge Supabase with in-memory (Supabase wins on overlap) ────────────
+  var localTs = new Set(sbReadings.map(function(r){ return r.t; }));
+  var readings = sbReadings.slice();
+  HISTORY_RAW.forEach(function(r){
+    if (r && r.bg > 0 && !localTs.has(r.t)) readings.push({ t: r.t, bg: r.bg });
+  });
+  readings.sort(function(a,b){ return a.t - b.t; });
+
+  var pricks = sbEvents.filter(function(e){ return e.gi > 0; }).map(function(e){
+    return { t: e.t, bg: e.gi, cgm_reading: e.cgm_reading };
+  });
+  // Also add localStorage pricks not in Supabase
+  var sbPrickTs = new Set(pricks.map(function(p){ return p.t; }));
+  var localPricks = (function(){ try{ return JSON.parse(localStorage.getItem('river_pricks')||'[]'); }catch(e){ return []; } })();
+  localPricks.forEach(function(p){ if(p && p.bg && p.t && !sbPrickTs.has(p.t)) pricks.push(p); });
+
+  var meals = sbMeals.length ? sbMeals.map(function(m){
+    return { t: m.t, name: m.name, totalCarbs: m.total_carbs, u: m.bolus_u, pre_bg: m.pre_bg, peak_bg: m.peak_bg, items: m.items };
+  }) : (MEAL_HISTORY || []);
+
+  // ── Compute stats ─────────────────────────────────────────────────────────
+  var inRange    = readings.filter(function(r){ return r.bg >= 3.9 && r.bg <= 10.0; }).length;
   var belowRange = readings.filter(function(r){ return r.bg < 3.9; }).length;
   var aboveRange = readings.filter(function(r){ return r.bg > 10.0; }).length;
-  var total    = readings.length || 1;
-  var meanBG   = readings.reduce(function(s,r){return s+r.bg;},0) / total;
-  var eA1C     = ((meanBG + 2.59) / 1.59).toFixed(1);
-  var tirPct   = Math.round(100 * inRange / total);
-  var belPct   = Math.round(100 * belowRange / total);
-  var abvPct   = Math.round(100 * aboveRange / total);
+  var total      = readings.length || 1;
+  var meanBG     = readings.reduce(function(s,r){return s+r.bg;},0) / total;
+  var eA1C       = ((meanBG + 2.59) / 1.59).toFixed(1);
+  var tirPct     = Math.round(100 * inRange / total);
+  var belPct     = Math.round(100 * belowRange / total);
+  var abvPct     = Math.round(100 * aboveRange / total);
 
-  var dateMin  = readings.length ? new Date(readings[0].t).toLocaleDateString('en-GB',{day:'numeric',month:'short'}) : '—';
-  var dateMax  = readings.length ? new Date(readings[readings.length-1].t).toLocaleDateString('en-GB',{day:'numeric',month:'short'}) : '—';
+  var dateMin = readings.length ? new Date(readings[0].t).toLocaleDateString('en-GB',{day:'numeric',month:'short'}) : '—';
+  var dateMax = readings.length ? new Date(readings[readings.length-1].t).toLocaleDateString('en-GB',{day:'numeric',month:'short'}) : '—';
 
-  // ── Hourly buckets ───────────────────────────────────────────────────────
+  // ── Hourly buckets ────────────────────────────────────────────────────────
   var hourBuckets = [];
   for (var h = 0; h < 24; h++) hourBuckets.push([]);
   readings.forEach(function(r){ hourBuckets[new Date(r.t).getHours()].push(r.bg); });
@@ -14269,27 +14328,26 @@ function openInsightsPanel() {
   var hourP10   = hourBuckets.map(function(b){ if(!b.length) return null; var s=[...b].sort(function(a,c){return a-c;}); return s[Math.floor(s.length*0.1)]; });
   var hourP90   = hourBuckets.map(function(b){ if(!b.length) return null; var s=[...b].sort(function(a,c){return a-c;}); return s[Math.floor(s.length*0.9)]; });
 
-  // ── Meal response ────────────────────────────────────────────────────────
-  var mealStats = (MEAL_HISTORY||[]).slice(0,8).map(function(m){
-    var preMeal  = null, peakRise = null, timeToPeak = null;
+  // ── Meal response ─────────────────────────────────────────────────────────
+  var mealStats = meals.slice(0,8).map(function(m){
+    var preMeal = m.pre_bg || null;
+    var peakRise = (m.peak_bg && preMeal) ? +(m.peak_bg - preMeal).toFixed(1) : null;
     var window2hr = readings.filter(function(r){ return r.t >= m.t && r.t <= m.t + 7200000; });
-    if (window2hr.length) {
+    if (!preMeal && window2hr.length) {
       var prePts = readings.filter(function(r){ return r.t >= m.t - 600000 && r.t < m.t; });
       preMeal = prePts.length ? prePts[prePts.length-1].bg : window2hr[0].bg;
       var peak = window2hr.reduce(function(best,r){ return r.bg > best.bg ? r : best; }, window2hr[0]);
       peakRise = +(peak.bg - preMeal).toFixed(1);
-      timeToPeak = Math.round((peak.t - m.t) / 60000);
     }
-    return { name: m.name, totalCarbs: m.totalCarbs, preMeal: preMeal, peakRise: peakRise, timeToPeak: timeToPeak };
-  }).filter(function(m){ return m.preMeal !== null; });
+    return { name: m.name, totalCarbs: m.totalCarbs, preMeal: preMeal, peakRise: peakRise };
+  }).filter(function(m){ return m.preMeal !== null && m.peakRise !== null; });
 
   var avgRise = mealStats.length ? (mealStats.reduce(function(s,m){return s+(m.peakRise||0);},0)/mealStats.length).toFixed(1) : '—';
-  var avgPeak = mealStats.length ? Math.round(mealStats.reduce(function(s,m){return s+(m.timeToPeak||0);},0)/mealStats.length) : '—';
 
-  // ── Sensor lag ───────────────────────────────────────────────────────────
+  // ── Sensor lag ────────────────────────────────────────────────────────────
   var lagPairs = pricks.map(function(p){
     var cgm = readings.find(function(r){ return Math.abs(r.t - p.t) < 600000; });
-    return cgm ? { prick: p.bg, cgm: cgm.bg, delta: +(p.bg - cgm.bg).toFixed(1) } : null;
+    return cgm ? { prick: p.bg, cgm: cgm.bg, delta: +(p.bg - cgm.bg).toFixed(1), t: p.t } : null;
   }).filter(Boolean);
   var meanLag = lagPairs.length ? (lagPairs.reduce(function(s,p){return s+p.delta;},0)/lagPairs.length).toFixed(2) : null;
   var sdLag   = (lagPairs.length > 1) ? (function(){
@@ -14297,13 +14355,7 @@ function openInsightsPanel() {
     return Math.sqrt(lagPairs.reduce(function(s,p){return s+Math.pow(p.delta-m2,2);},0)/lagPairs.length).toFixed(2);
   })() : null;
 
-  // ── Build HTML ────────────────────────────────────────────────────────────
-  var el = document.createElement('div');
-  el.id  = 'insights-overlay';
-  el.style.cssText = 'position:fixed;inset:0;z-index:90;background:rgba(3,5,20,0.97);' +
-    'backdrop-filter:blur(20px);overflow-y:auto;-webkit-overflow-scrolling:touch;' +
-    'font-family:"DM Mono",monospace;color:rgba(200,220,240,0.85);';
-
+  // ── Replace loading state with full content ───────────────────────────────
   var s = '<div style="max-width:540px;margin:0 auto;padding:env(safe-area-inset-top,24px) 20px 80px">';
   s += '<div style="display:flex;justify-content:space-between;align-items:center;' +
     'padding:20px 0 24px;border-bottom:1px solid rgba(255,255,255,0.07);margin-bottom:24px">';
@@ -14313,20 +14365,17 @@ function openInsightsPanel() {
     'style="background:none;border:none;cursor:pointer;font-size:24px;' +
     'color:rgba(200,220,240,0.4);padding:4px">×</button></div>';
 
-  // ── Section 1: Overview ──────────────────────────────────────────────────
+  // Section 1: Overview
   s += '<div style="margin-bottom:28px">';
   s += '<div style="font-size:10px;letter-spacing:1.5px;text-transform:uppercase;' +
     'color:rgba(200,220,240,0.4);margin-bottom:14px">overview · ' + dateMin + ' – ' + dateMax + '</div>';
   s += '<div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px;margin-bottom:14px">';
-  // mean BG
   s += '<div style="background:rgba(255,255,255,0.04);border-radius:10px;padding:14px;text-align:center">';
   s += '<div style="font-size:24px;font-weight:500;color:rgba(62,180,160,0.9)">' + meanBG.toFixed(1) + '</div>';
   s += '<div style="font-size:9px;color:rgba(200,220,240,0.4);margin-top:4px">mean mmol</div></div>';
-  // TIR
   s += '<div style="background:rgba(255,255,255,0.04);border-radius:10px;padding:14px;text-align:center">';
   s += '<div style="font-size:24px;font-weight:500;color:rgba(62,180,120,' + (tirPct>=70?'0.9':'0.6') + ')">' + tirPct + '%</div>';
   s += '<div style="font-size:9px;color:rgba(200,220,240,0.4);margin-top:4px">in range</div></div>';
-  // eA1C
   s += '<div style="background:rgba(255,255,255,0.04);border-radius:10px;padding:14px;text-align:center">';
   s += '<div style="font-size:24px;font-weight:500;color:rgba(200,180,120,0.8)">' + eA1C + '</div>';
   s += '<div style="font-size:9px;color:rgba(200,220,240,0.4);margin-top:4px">est. A1c%</div></div>';
@@ -14342,9 +14391,10 @@ function openInsightsPanel() {
   s += '<span style="font-size:16px;font-weight:500;color:rgba(255,180,60,0.9)">' + abvPct + '%</span></div>';
   s += '</div>';
   s += '<div style="font-size:9px;color:rgba(200,220,240,0.3);margin-top:10px">' +
-    total + ' readings · eA1c is a formula estimate, not a calibrated GMI</div></div>';
+    total + ' readings · ' + (sbReadings.length ? sbReadings.length + ' from supabase' : 'local cache only') +
+    ' · eA1c is a formula estimate, not a calibrated GMI</div></div>';
 
-  // ── Section 2: 24-hour profile ───────────────────────────────────────────
+  // Section 2: 24-hour profile
   s += '<div style="margin-bottom:28px">';
   s += '<div style="font-size:10px;letter-spacing:1.5px;text-transform:uppercase;' +
     'color:rgba(200,220,240,0.4);margin-bottom:14px">24-hour profile</div>';
@@ -14352,7 +14402,7 @@ function openInsightsPanel() {
     'border-radius:8px;background:rgba(255,255,255,0.03)"></canvas>';
   s += '</div>';
 
-  // ── Section 3: Meal response ─────────────────────────────────────────────
+  // Section 3: Meal response
   s += '<div style="margin-bottom:28px">';
   s += '<div style="font-size:10px;letter-spacing:1.5px;text-transform:uppercase;' +
     'color:rgba(200,220,240,0.4);margin-bottom:14px">meal response</div>';
@@ -14361,30 +14411,26 @@ function openInsightsPanel() {
     s += '<div style="background:rgba(255,255,255,0.04);border-radius:8px;padding:10px 14px">';
     s += '<div style="font-size:18px;font-weight:500;color:rgba(255,160,60,0.9)">+' + avgRise + '</div>';
     s += '<div style="font-size:9px;color:rgba(200,220,240,0.4);margin-top:2px">avg rise (mmol)</div></div>';
-    s += '<div style="background:rgba(255,255,255,0.04);border-radius:8px;padding:10px 14px">';
-    s += '<div style="font-size:18px;font-weight:500;color:rgba(120,180,255,0.9)">' + avgPeak + 'min</div>';
-    s += '<div style="font-size:9px;color:rgba(200,220,240,0.4);margin-top:2px">avg time to peak</div></div>';
     s += '</div>';
     s += '<div style="border-radius:8px;overflow:hidden;border:1px solid rgba(255,255,255,0.06)">';
     mealStats.forEach(function(m, i){
       var rise = m.peakRise || 0;
       var col  = rise < 2.5 ? 'rgba(62,180,120,0.8)' : rise < 4.5 ? 'rgba(255,180,60,0.8)' : 'rgba(255,100,80,0.8)';
-      s += '<div style="display:grid;grid-template-columns:1fr auto auto;gap:12px;align-items:center;' +
+      s += '<div style="display:grid;grid-template-columns:1fr auto;gap:12px;align-items:center;' +
         'padding:10px 14px;' + (i % 2 === 0 ? 'background:rgba(255,255,255,0.02)' : '') + '">';
       s += '<div style="font-size:10px;color:rgba(200,220,240,0.7);white-space:nowrap;overflow:hidden;' +
         'text-overflow:ellipsis">' + (m.name||'').split('·')[0].trim() + '</div>';
       s += '<div style="font-size:12px;font-weight:500;color:' + col + ';min-width:40px;text-align:right">+' + rise + '</div>';
-      s += '<div style="font-size:10px;color:rgba(200,220,240,0.4);min-width:36px;text-align:right">' + (m.timeToPeak||'—') + 'm</div>';
       s += '</div>';
     });
     s += '</div>';
   } else {
     s += '<div style="padding:20px;text-align:center;font-size:11px;color:rgba(200,220,240,0.3);' +
-      'border-radius:8px;border:1px dashed rgba(255,255,255,0.08)">no meal data yet — log meals to see response patterns</div>';
+      'border-radius:8px;border:1px dashed rgba(255,255,255,0.08)">no meal data yet</div>';
   }
   s += '</div>';
 
-  // ── Section 4: Sensor lag ─────────────────────────────────────────────────
+  // Section 4: Sensor lag
   s += '<div style="margin-bottom:28px">';
   s += '<div style="font-size:10px;letter-spacing:1.5px;text-transform:uppercase;' +
     'color:rgba(200,220,240,0.4);margin-bottom:14px">sensor lag · prick vs cgm</div>';
@@ -14397,20 +14443,12 @@ function openInsightsPanel() {
     s += '<div style="font-size:18px;font-weight:500;color:rgba(200,220,240,0.6)">±' + sdLag + '</div>';
     s += '<div style="font-size:9px;color:rgba(200,220,240,0.4);margin-top:2px">variability (SD)</div></div>';
     s += '</div>';
-    if (Math.abs(parseFloat(meanLag)) > 1.0) {
-      s += '<div style="padding:10px 14px;border-radius:8px;background:rgba(255,180,60,0.07);' +
-        'border:1px solid rgba(255,180,60,0.15);font-size:10px;color:rgba(255,180,60,0.8);' +
-        'margin-bottom:14px">CGM reading ' + (parseFloat(meanLag) > 0 ? 'lower' : 'higher') +
-        ' than prick by ~' + Math.abs(parseFloat(meanLag)).toFixed(1) +
-        ' mmol on average. Lag is more pronounced when BG is rising rapidly.</div>';
-    }
     s += '<div style="border-radius:8px;overflow:hidden;border:1px solid rgba(255,255,255,0.06)">';
     lagPairs.slice(0,8).forEach(function(p, i){
       var col = Math.abs(p.delta) < 1.0 ? 'rgba(62,180,120,0.8)' : Math.abs(p.delta) < 2.0 ? 'rgba(255,180,60,0.8)' : 'rgba(255,100,80,0.8)';
       s += '<div style="display:grid;grid-template-columns:1fr auto auto auto;gap:10px;align-items:center;' +
         'padding:9px 14px;' + (i % 2 === 0 ? 'background:rgba(255,255,255,0.02)' : '') + '">';
-      s += '<div style="font-size:10px;color:rgba(200,220,240,0.4)">' +
-        new Date(pricks[i] && pricks[i].t || Date.now()).toLocaleTimeString('en-GB',{hour:'2-digit',minute:'2-digit'}) + '</div>';
+      s += '<div style="font-size:10px;color:rgba(200,220,240,0.4)">' + new Date(p.t).toLocaleTimeString('en-GB',{hour:'2-digit',minute:'2-digit'}) + '</div>';
       s += '<div style="font-size:11px;color:rgba(255,200,100,0.8)">' + p.prick.toFixed(1) + '</div>';
       s += '<div style="font-size:11px;color:rgba(120,200,255,0.7)">' + p.cgm.toFixed(1) + '</div>';
       s += '<div style="font-size:11px;font-weight:500;color:' + col + '">' + (p.delta > 0 ? '+' : '') + p.delta + '</div>';
@@ -14419,11 +14457,11 @@ function openInsightsPanel() {
     s += '</div>';
   } else {
     s += '<div style="padding:20px;text-align:center;font-size:11px;color:rgba(200,220,240,0.3);' +
-      'border-radius:8px;border:1px dashed rgba(255,255,255,0.08)">no finger prick readings yet — log pricks via the radial menu to build your personal lag profile</div>';
+      'border-radius:8px;border:1px dashed rgba(255,255,255,0.08)">no finger prick readings yet</div>';
   }
   s += '</div>';
 
-  // ── Section 5: Clinic export ──────────────────────────────────────────────
+  // Section 5: Clinic export
   s += '<div style="margin-bottom:40px">';
   s += '<div style="font-size:10px;letter-spacing:1.5px;text-transform:uppercase;' +
     'color:rgba(200,220,240,0.4);margin-bottom:14px">clinic export</div>';
@@ -14436,10 +14474,10 @@ function openInsightsPanel() {
   s += '</div>';
 
   s += '</div>'; // end max-width wrapper
-  el.innerHTML = s;
-  document.body.appendChild(el);
 
-  // ── Draw 24-hour canvas ───────────────────────────────────────────────────
+  el.innerHTML = s;
+
+  // Draw 24-hour canvas
   requestAnimationFrame(function(){
     var cv = document.getElementById('insights-hour-canvas');
     if (!cv) return;
@@ -14451,11 +14489,9 @@ function openInsightsPanel() {
     function xOf(h){ return PAD.l + (h / 23) * CW; }
     function yOf(v){ return PAD.t + (1 - (v - bgMin) / (bgMax - bgMin)) * CH; }
 
-    // target zone band
     cx.fillStyle = 'rgba(62,180,120,0.06)';
     cx.fillRect(PAD.l, yOf(10.0), CW, yOf(3.9) - yOf(10.0));
 
-    // percentile band
     var pts10 = [], pts90 = [];
     for (var h = 0; h < 24; h++) {
       if (hourP10[h] !== null) pts10.push({x: xOf(h), y: yOf(hourP10[h])});
@@ -14471,7 +14507,6 @@ function openInsightsPanel() {
       cx.fill();
     }
 
-    // mean line
     var meanPts = hourMeans.map(function(v, h){ return v !== null ? {x: xOf(h), y: yOf(v)} : null; }).filter(Boolean);
     if (meanPts.length > 1) {
       cx.beginPath();
@@ -14482,21 +14517,19 @@ function openInsightsPanel() {
       cx.stroke();
     }
 
-    // x-axis labels
     cx.fillStyle = 'rgba(180,200,220,0.4)';
     cx.font = '9px "DM Mono",monospace';
     cx.textAlign = 'center';
     [0, 6, 12, 18, 23].forEach(function(h){
       cx.fillText(h + ':00', xOf(h), H - 6);
     });
-
-    // y-axis labels
     cx.textAlign = 'right';
     [4, 7, 10, 13].forEach(function(v){
       cx.fillText(v, PAD.l - 4, yOf(v) + 3);
     });
   });
 }
+
 
 // ═══════════════════════════════════════════════════════════════════
 //  PATTERN EXPLORER — unknown forces review screen
@@ -15159,488 +15192,380 @@ async function openPatternExplorer() {
   _loadAllPanes();
 }
 
-function insightsExport() {
-  // ── Data assembly ─────────────────────────────────────────────────────────
-  var allReadings = HISTORY_RAW.filter(function(r){ return r && r.bg > 0; });
-  var pricks = (function(){ try{ return JSON.parse(localStorage.getItem('river_pricks')||'[]'); }catch(e){ return []; } })();
+async function insightsExport() {
+  showToast('fetching from supabase…');
 
-  // Report window: last 7 days (or full range if shorter)
-  var reportEnd   = Date.now();
-  var reportStart = reportEnd - 7 * 24 * 3600000;
-  // Include overnight before first full day
-  var windowStart = reportStart - 8 * 3600000;
+  // ── Report window: last 7 days ────────────────────────────────────────────
+  var now = Date.now();
+  var reportEnd   = now;
+  var reportStart = now - 7 * 24 * 3600000;
+  var windowStart = reportStart - 8 * 3600000; // overnight buffer
 
-  var readings = allReadings.filter(function(r){ return r.t >= windowStart && r.t <= reportEnd; });
-  var total    = readings.length || 1;
+  // ── Fetch all data from Supabase ──────────────────────────────────────────
+  var sbReadings = [], sbEvents = [], sbMeals = [], sbGhosts = [], sbPricks = [];
 
-  // Stats
+  try {
+    var r1 = await _sbFetch(
+      'events?t=gte.' + windowStart + '&t=lte.' + reportEnd + '&bg=gt.0&select=t,bg&order=t.asc&limit=50000',
+      { method: 'GET' }
+    );
+    if (Array.isArray(r1)) sbReadings = r1;
+  } catch(e) { console.warn('[export] CGM fetch:', e.message); }
+
+  try {
+    var r2 = await _sbFetch(
+      'events?t=gte.' + windowStart + '&t=lte.' + reportEnd + '&select=t,c,u,note,items,iob,logged_by&order=t.asc&limit=5000',
+      { method: 'GET' }
+    );
+    if (Array.isArray(r2)) sbEvents = r2;
+  } catch(e) { console.warn('[export] events fetch:', e.message); }
+
+  try {
+    var r3 = await _sbFetch(
+      'meal_history?t=gte.' + windowStart + '&t=lte.' + reportEnd +
+      '&select=t,name,total_carbs,items,bolus_u,pre_bg,peak_bg,therapy_snapshot,iob_at_meal,wait_mins,source&order=t.asc&limit=500',
+      { method: 'GET' }
+    );
+    if (Array.isArray(r3)) sbMeals = r3;
+  } catch(e) { console.warn('[export] meals fetch:', e.message); }
+
+  try {
+    var r4 = await _sbFetch(
+      'ghost_events?t=gte.' + windowStart + '&t=lte.' + reportEnd +
+      '&select=t,ghost_type,bg_at_detect,implied_units,implied_carbs,confidence,carer_context,confirmed,confirmed_note&order=t.asc&limit=200',
+      { method: 'GET' }
+    );
+    if (Array.isArray(r4)) sbGhosts = r4;
+  } catch(e) { console.warn('[export] ghosts fetch:', e.message); }
+
+  try {
+    var r5 = await _sbFetch(
+      'events?t=gte.' + windowStart + '&t=lte.' + reportEnd + '&note=eq.prick&select=t,gi,cgm_reading&order=t.asc&limit=500',
+      { method: 'GET' }
+    );
+    if (Array.isArray(r5)) sbPricks = r5.filter(function(e){ return e.gi > 0; });
+  } catch(e) { console.warn('[export] pricks fetch:', e.message); }
+
+  // ── Merge Supabase CGM with in-memory for gaps ────────────────────────────
+  var sbReadingTs = new Set(sbReadings.map(function(r){ return r.t; }));
+  var readings = sbReadings.slice();
+  HISTORY_RAW.forEach(function(r){
+    if (r && r.bg > 0 && r.t >= windowStart && r.t <= reportEnd && !sbReadingTs.has(r.t))
+      readings.push({ t: r.t, bg: r.bg });
+  });
+  readings.sort(function(a,b){ return a.t - b.t; });
+
+  var pricks = sbPricks.map(function(e){ return { t: e.t, bg: e.gi, cgm_reading: e.cgm_reading }; });
+  var localPricks = (function(){ try{ return JSON.parse(localStorage.getItem('river_pricks')||'[]'); }catch(e){ return []; } })();
+  var sbPrickTs = new Set(pricks.map(function(p){ return p.t; }));
+  localPricks.forEach(function(p){ if(p && p.bg && p.t >= windowStart && !sbPrickTs.has(p.t)) pricks.push(p); });
+
+  var total = readings.length || 1;
   var meanBG     = readings.reduce(function(s,r){return s+r.bg;},0) / total;
   var inRange    = readings.filter(function(r){ return r.bg >= 3.9 && r.bg <= 10.0; }).length;
   var belowRange = readings.filter(function(r){ return r.bg < 3.9; }).length;
   var aboveRange = readings.filter(function(r){ return r.bg > 10.0; }).length;
-  var below54    = readings.filter(function(r){ return r.bg < 5.4; }).length;
   var eA1C       = ((meanBG + 2.59) / 1.59).toFixed(1);
   var tirPct     = Math.round(100 * inRange / total);
   var belPct     = Math.round(100 * belowRange / total);
   var abvPct     = Math.round(100 * aboveRange / total);
-  var below54Pct = Math.round(100 * below54 / total);
   var cvArr      = readings.map(function(r){ return r.bg; });
-  var sdBG       = cvArr.length > 1 ? (function(){
-    var m2 = cvArr.reduce(function(s,v){return s+v;},0)/cvArr.length;
-    return Math.sqrt(cvArr.reduce(function(s,v){return s+Math.pow(v-m2,2);},0)/cvArr.length);
-  })() : 0;
+  var sdBG       = cvArr.length > 1 ? (function(){ var m2=cvArr.reduce(function(s,v){return s+v;},0)/cvArr.length; return Math.sqrt(cvArr.reduce(function(s,v){return s+Math.pow(v-m2,2);},0)/cvArr.length); })() : 0;
   var cv         = meanBG > 0 ? Math.round(100*sdBG/meanBG) : 0;
-
   var dateMinStr = readings.length ? new Date(readings[0].t).toLocaleDateString('en-GB',{day:'numeric',month:'short',year:'numeric'}) : '—';
   var dateMaxStr = readings.length ? new Date(readings[readings.length-1].t).toLocaleDateString('en-GB',{day:'numeric',month:'short',year:'numeric'}) : '—';
 
   // Hypos & near-misses from CGM
-  var hypoEvents = [];
-  var nearMissEvents = [];
-  var inHypo = false, inNear = false;
-  var hypoStart = null, nearStart = null;
+  var hypoEvents = [], nearMissEvents = [];
+  var inHypo = false, inNear = false, hypoStart = null, nearStart = null;
   readings.forEach(function(r) {
     if (r.bg < 3.9) {
-      if (!inHypo) { inHypo = true; hypoStart = r.t; }
-      inNear = false; nearStart = null;
+      if (!inHypo) { inHypo = true; hypoStart = r.t; } inNear = false; nearStart = null;
     } else {
       if (inHypo) { hypoEvents.push({ t: hypoStart, end: r.t, nadir: Math.min.apply(null, readings.filter(function(x){return x.t>=hypoStart&&x.t<r.t;}).map(function(x){return x.bg;})) }); inHypo = false; }
-      if (r.bg < 5.4) {
-        if (!inNear) { inNear = true; nearStart = r.t; }
-      } else {
-        if (inNear) { nearMissEvents.push({ t: nearStart, end: r.t, nadir: Math.min.apply(null, readings.filter(function(x){return x.t>=nearStart&&x.t<r.t;}).map(function(x){return x.bg;})) }); inNear = false; }
-      }
+      if (r.bg < 5.4) { if (!inNear) { inNear = true; nearStart = r.t; } }
+      else { if (inNear) { nearMissEvents.push({ t: nearStart, end: r.t, nadir: Math.min.apply(null, readings.filter(function(x){return x.t>=nearStart&&x.t<r.t;}).map(function(x){return x.bg;})) }); inNear = false; } }
     }
   });
 
-  // Events in window
-  var events = (LOGGED_EVENTS||[]).filter(function(e){ return e.t >= windowStart && e.t <= reportEnd; });
-  var mealEvents = events.filter(function(e){ return e.c > 0; });
-  var bolusEvents = events.filter(function(e){ return e.u > 0; });
-  var hypoTreatments = events.filter(function(e){ return e.note && e.note.indexOf('hypo')===0; });
-  var totalCarbs = mealEvents.reduce(function(s,e){return s+(e.c||0);},0);
-  var totalBolus = bolusEvents.reduce(function(s,e){return s+(e.u||0);},0);
+  // Events
+  var mealEvents = sbEvents.filter(function(e){ return e.c > 0; });
+  var bolusEvents = sbEvents.filter(function(e){ return e.u > 0; });
+  var totalCarbs  = mealEvents.reduce(function(s,e){return s+(e.c||0);},0);
+  var totalBolus  = bolusEvents.reduce(function(s,e){return s+(e.u||0);},0);
 
-  // Meal history in window
-  var meals = (MEAL_HISTORY||[]).filter(function(m){ return m.t >= windowStart && m.t <= reportEnd; });
-
-  // Ghost events in window
-  var ghosts = (_ghostPebbles||[]).filter(function(g){ return g.t >= windowStart && g.t <= reportEnd; });
-
-  // Hourly profile
+  // Hourly buckets
   var hourBuckets = [];
-  for (var h2 = 0; h2 < 24; h2++) hourBuckets.push([]);
+  for (var hb = 0; hb < 24; hb++) hourBuckets.push([]);
   readings.forEach(function(r){ hourBuckets[new Date(r.t).getHours()].push(r.bg); });
-  pricks.forEach(function(p){ if(p&&p.bg&&p.t&&p.t>=windowStart) hourBuckets[new Date(p.t).getHours()].push(p.bg); });
 
-  // CGM trace data as JSON for chart
-  var cgmPoints = readings.map(function(r){ return { x: r.t, y: +r.bg.toFixed(2) }; });
-  var prickPoints = pricks.filter(function(p){ return p&&p.bg&&p.t>=windowStart&&p.t<=reportEnd; }).map(function(p){ return { x: p.t, y: +p.bg.toFixed(2) }; });
+  // CGM chart data
+  var cgmPoints  = readings.map(function(r){ return { x: r.t, y: +r.bg.toFixed(2) }; });
+  var prickPoints = pricks.map(function(p){ return { x: p.t, y: +p.bg.toFixed(2) }; });
 
-  // Event markers
-  var mealMarkers = mealEvents.map(function(e){
+  // Build meal markers from Supabase meals
+  var mealMarkers = sbMeals.map(function(m){
+    var nearby = readings.filter(function(r){ return Math.abs(r.t-m.t)<600000; });
+    var bg = nearby.length ? nearby.reduce(function(best,r){ return Math.abs(r.t-m.t)<Math.abs(best.t-m.t)?r:best; }, nearby[0]).bg : (m.pre_bg||null);
+    return { x: m.t, y: bg, type:'meal', carbs: m.total_carbs, bolus: m.bolus_u };
+  });
+  var corrMarkers = sbEvents.filter(function(e){ return e.u > 0 && (!e.c || e.c === 0); }).map(function(e){
     var nearby = readings.filter(function(r){ return Math.abs(r.t-e.t)<600000; });
     var bg = nearby.length ? nearby.reduce(function(best,r){ return Math.abs(r.t-e.t)<Math.abs(best.t-e.t)?r:best; }, nearby[0]).bg : null;
-    return { x: e.t, y: bg, label: (e.c||0)+'g '+(e.u?e.u+'U':''), type:'meal' };
+    return { x: e.t, y: bg, type:'corr' };
   });
-  var corrMarkers = bolusEvents.filter(function(e){ return !e.c || e.c===0; }).map(function(e){
-    var nearby = readings.filter(function(r){ return Math.abs(r.t-e.t)<600000; });
-    var bg = nearby.length ? nearby.reduce(function(best,r){ return Math.abs(r.t-e.t)<Math.abs(best.t-e.t)?r:best; }, nearby[0]).bg : null;
-    return { x: e.t, y: bg, label: (e.u||0)+'U corr', type:'corr' };
-  });
-  var ghostMarkers = ghosts.map(function(g){
+  var ghostMarkers = sbGhosts.map(function(g){
     var nearby = readings.filter(function(r){ return Math.abs(r.t-g.t)<600000; });
     var bg = nearby.length ? nearby.reduce(function(best,r){ return Math.abs(r.t-g.t)<Math.abs(best.t-g.t)?r:best; }, nearby[0]).bg : null;
-    return { x: g.t, y: bg, label: '?', type:'ghost', ghost_type: g.ghost_type||'', implied: g.implied_units||g.implied_carbs||null };
+    return { x: g.t, y: bg, type:'ghost', ghost_type: g.ghost_type||'' };
   });
-  var hypoMarkers = hypoEvents.map(function(h3){ return { x: h3.t, y: h3.nadir, label: h3.nadir.toFixed(1), type:'hypo' }; });
+  var hypoMarkers = hypoEvents.map(function(h){ return { x: h.t, y: h.nadir, type:'hypo' }; });
 
-  // Build day-by-day meal log for table
-  var dayMap = {};
+  // Day map for event log
   function _dayKey(t){ return new Date(t).toLocaleDateString('en-GB',{weekday:'short',day:'numeric',month:'short'}); }
-  events.forEach(function(e){
+  var dayMap = {};
+  sbMeals.forEach(function(m){
+    var dk = _dayKey(m.t);
+    if (!dayMap[dk]) dayMap[dk] = { meals:[], corrections:[], ghosts:[], t_first: m.t };
+    var time = new Date(m.t).toLocaleTimeString('en-GB',{hour:'2-digit',minute:'2-digit'});
+    var nearby = readings.filter(function(r){ return Math.abs(r.t-m.t)<600000; });
+    var bg = nearby.length ? nearby.reduce(function(best,r){ return Math.abs(r.t-m.t)<Math.abs(best.t-m.t)?r:best; }, nearby[0]).bg : (m.pre_bg||null);
+    var items = m.items;
+    if (typeof items === 'string') { try { items = JSON.parse(items); } catch(e2) { items = null; } }
+    dayMap[dk].meals.push({ time:time, carbs:m.total_carbs, bolus:m.bolus_u, bg:bg, items:items, name:m.name, iob:m.iob_at_meal||0, t:m.t });
+  });
+  sbEvents.filter(function(e){ return e.u > 0 && (!e.c || e.c===0); }).forEach(function(e){
     var dk = _dayKey(e.t);
-    if (!dayMap[dk]) dayMap[dk] = { meals:[], corrections:[], ghosts:[], hypos:[] };
+    if (!dayMap[dk]) dayMap[dk] = { meals:[], corrections:[], ghosts:[], t_first: e.t };
     var time = new Date(e.t).toLocaleTimeString('en-GB',{hour:'2-digit',minute:'2-digit'});
     var nearby = readings.filter(function(r){ return Math.abs(r.t-e.t)<600000; });
     var bg = nearby.length ? nearby.reduce(function(best,r){ return Math.abs(r.t-e.t)<Math.abs(best.t-e.t)?r:best; }, nearby[0]).bg : null;
-    if (e.c > 0) {
-      // Find meal_history entry for items
-      var mh = (MEAL_HISTORY||[]).find(function(m){ return Math.abs(m.t-e.t)<120000; });
-      dayMap[dk].meals.push({ time:time, carbs:e.c, bolus:e.u, bg:bg, note:e.note, items: mh&&mh.items ? mh.items : null, name: mh&&mh.name ? mh.name : null, pre_bg: mh&&mh.pre_bg ? mh.pre_bg : bg, iob: e.iob||0, t:e.t });
-    } else if (e.u > 0) {
-      dayMap[dk].corrections.push({ time:time, bolus:e.u, bg:bg, note:e.note, t:e.t });
-    }
-    if (e.note && e.note.indexOf('hypo')===0) {
-      dayMap[dk].hypos.push({ time:time, carbs:e.c, t:e.t });
-    }
+    dayMap[dk].corrections.push({ time:time, bolus:e.u, bg:bg, note:e.note, t:e.t });
   });
-  ghosts.forEach(function(g){
+  sbGhosts.forEach(function(g){
     var dk = _dayKey(g.t);
-    if (!dayMap[dk]) dayMap[dk] = { meals:[], corrections:[], ghosts:[], hypos:[] };
+    if (!dayMap[dk]) dayMap[dk] = { meals:[], corrections:[], ghosts:[], t_first: g.t };
     var time = new Date(g.t).toLocaleTimeString('en-GB',{hour:'2-digit',minute:'2-digit'});
     dayMap[dk].ghosts.push({ time:time, ghost_type:g.ghost_type, implied_units:g.implied_units, implied_carbs:g.implied_carbs, confidence:g.confidence, confirmed:g.confirmed, t:g.t });
   });
 
-  // ── HTML report ───────────────────────────────────────────────────────────
+  // ── Build HTML ─────────────────────────────────────────────────────────────
   var gen = new Date().toLocaleString('en-GB',{day:'2-digit',month:'short',year:'numeric',hour:'2-digit',minute:'2-digit'});
 
   var H = '<!DOCTYPE html><html lang="en"><head><meta charset="utf-8">';
   H += '<title>Oskar Anderson-King — River Clinical Report ' + dateMaxStr + '</title>';
   H += '<style>';
-  H += '*{box-sizing:border-box;margin:0;padding:0}';
-  H += 'html{font-size:13px}';
+  H += '*{box-sizing:border-box;margin:0;padding:0}html{font-size:13px}';
   H += 'body{font-family:"DM Mono",ui-monospace,monospace;background:#03050f;color:rgba(200,220,240,0.85);line-height:1.6;padding:0}';
-  H += '@import url("https://fonts.googleapis.com/css2?family=DM+Mono:wght@300;400;500&family=Fraunces:ital,wght@1,200;1,300&display=swap");';
   H += '.page{max-width:820px;margin:0 auto;padding:40px 24px 80px}';
   H += '.rh{display:flex;justify-content:space-between;align-items:flex-end;border-bottom:1px solid rgba(255,255,255,0.08);padding-bottom:20px;margin-bottom:32px}';
-  H += '.rh-title{font-family:"Fraunces",serif;font-style:italic;font-weight:200;font-size:28px;color:rgba(200,220,240,0.9);line-height:1.2}';
-  H += '.rh-sub{font-size:10px;color:rgba(200,220,240,0.35);margin-top:4px;letter-spacing:0.5px}';
+  H += '.rh-title{font-size:28px;font-style:italic;font-weight:200;color:rgba(200,220,240,0.9);line-height:1.2}';
   H += '.rh-meta{text-align:right;font-size:10px;color:rgba(200,220,240,0.3);line-height:1.8}';
   H += '.sec-label{font-size:9px;letter-spacing:1.5px;text-transform:uppercase;color:rgba(200,220,240,0.35);margin-bottom:14px;border-bottom:1px solid rgba(255,255,255,0.05);padding-bottom:6px}';
   H += '.sec{margin-bottom:36px}';
   H += '.stat-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-bottom:16px}';
   H += '.stat{background:rgba(255,255,255,0.04);border-radius:10px;padding:14px 12px;text-align:center}';
-  H += '.stat-val{font-size:26px;font-weight:500;line-height:1}';
-  H += '.stat-lbl{font-size:9px;color:rgba(200,220,240,0.35);margin-top:5px;letter-spacing:0.5px}';
-  H += '.stat-sub{font-size:9px;color:rgba(200,220,240,0.25);margin-top:2px}';
+  H += '.stat-val{font-size:26px;font-weight:500;line-height:1}.stat-lbl{font-size:9px;color:rgba(200,220,240,0.35);margin-top:5px}.stat-sub{font-size:9px;color:rgba(200,220,240,0.25);margin-top:2px}';
   H += '.tir-row{display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;margin-bottom:16px}';
   H += '.tir-bar{border-radius:6px;padding:9px 12px;display:flex;justify-content:space-between;align-items:center}';
   H += '.chart-wrap{position:relative;width:100%;height:300px;background:rgba(255,255,255,0.02);border-radius:10px;overflow:hidden;margin-bottom:8px}';
   H += '.chart-leg{display:flex;flex-wrap:wrap;gap:14px;font-size:10px;color:rgba(200,220,240,0.4);margin-bottom:28px}';
-  H += '.chart-leg span{display:flex;align-items:center;gap:5px}';
-  H += '.dot{width:7px;height:7px;border-radius:50%;flex-shrink:0}';
-  H += '.line{width:18px;height:2px;flex-shrink:0}';
+  H += '.chart-leg span{display:flex;align-items:center;gap:5px}.dot{width:7px;height:7px;border-radius:50%;flex-shrink:0}.line{width:18px;height:2px;flex-shrink:0}';
   H += '.day-block{border:1px solid rgba(255,255,255,0.06);border-radius:10px;overflow:hidden;margin-bottom:12px}';
-  H += '.day-hdr{background:rgba(255,255,255,0.04);padding:8px 14px;font-size:10px;letter-spacing:0.5px;color:rgba(200,220,240,0.5);display:flex;gap:16px;align-items:center}';
-  H += '.day-hdr b{color:rgba(200,220,240,0.8);font-weight:500;font-size:11px;letter-spacing:0}';
-  H += '.ev-row{display:grid;grid-template-columns:48px 64px 1fr auto;gap:8px;align-items:start;padding:8px 14px;border-bottom:1px solid rgba(255,255,255,0.04);font-size:11px}';
+  H += '.day-hdr{background:rgba(255,255,255,0.04);padding:8px 14px;font-size:10px;color:rgba(200,220,240,0.5);display:flex;gap:16px;flex-wrap:wrap}';
+  H += '.day-hdr b{color:rgba(200,220,240,0.8);font-weight:500;font-size:11px}';
+  H += '.ev-row{display:grid;grid-template-columns:48px 66px 1fr auto;gap:8px;align-items:start;padding:8px 14px;border-bottom:1px solid rgba(255,255,255,0.04);font-size:11px}';
   H += '.ev-row:last-child{border-bottom:none}';
   H += '.ev-time{color:rgba(200,220,240,0.35);font-size:10px;padding-top:1px;font-variant-numeric:tabular-nums}';
   H += '.badge{display:inline-block;font-size:9px;font-weight:500;padding:2px 6px;border-radius:4px;white-space:nowrap}';
-  H += '.b-meal{background:rgba(62,180,120,0.15);color:rgba(62,200,140,0.9)}';
-  H += '.b-corr{background:rgba(255,180,60,0.12);color:rgba(255,180,60,0.8)}';
-  H += '.b-ghost{background:rgba(140,120,240,0.12);color:rgba(180,160,240,0.8)}';
-  H += '.b-hypo{background:rgba(255,80,80,0.12);color:rgba(255,120,100,0.85)}';
-  H += '.b-near{background:rgba(255,160,40,0.12);color:rgba(255,160,40,0.8)}';
-  H += '.ev-main{color:rgba(200,220,240,0.8);font-weight:500;margin-bottom:2px}';
-  H += '.ev-sub{color:rgba(200,220,240,0.35);font-size:10px}';
-  H += '.ev-sub span{margin-right:8px}';
-  H += '.ev-items{color:rgba(200,220,240,0.3);font-size:10px;margin-top:3px;font-style:italic}';
-  H += '.ev-note{color:rgba(255,180,80,0.5);font-size:10px;margin-top:3px}';
+  H += '.b-meal{background:rgba(62,180,120,0.15);color:rgba(62,200,140,0.9)}.b-corr{background:rgba(255,180,60,0.12);color:rgba(255,180,60,0.8)}.b-ghost{background:rgba(140,120,240,0.12);color:rgba(180,160,240,0.8)}.b-hypo{background:rgba(255,80,80,0.12);color:rgba(255,120,100,0.85)}.b-near{background:rgba(255,160,40,0.12);color:rgba(255,160,40,0.8)}';
+  H += '.ev-main{color:rgba(200,220,240,0.8);font-weight:500;margin-bottom:2px}.ev-sub{color:rgba(200,220,240,0.35);font-size:10px}.ev-items{color:rgba(200,220,240,0.3);font-size:10px;margin-top:3px;font-style:italic}';
   H += '.bg-num{font-variant-numeric:tabular-nums;font-weight:500;font-size:13px;white-space:nowrap;padding-top:1px}';
   H += '.bg-high{color:rgba(255,160,60,0.85)}.bg-ok{color:rgba(62,200,140,0.85)}.bg-low{color:rgba(255,100,80,0.9)}.bg-dim{color:rgba(200,220,240,0.3)}';
-  H += '.ghost-block{border:1px solid rgba(140,120,240,0.2);border-radius:10px;padding:14px;margin-bottom:10px;background:rgba(140,120,240,0.04)}';
-  H += '.ghost-title{font-size:10px;color:rgba(180,160,240,0.8);letter-spacing:0.5px;margin-bottom:6px}';
-  H += '.ghost-detail{font-size:10px;color:rgba(200,220,240,0.4);line-height:1.8}';
-  H += '.hour-grid{display:grid;grid-template-columns:repeat(24,1fr);gap:2px;margin-bottom:8px}';
-  H += '.hour-cell{height:36px;border-radius:3px;position:relative}';
-  H += '.hour-label{font-size:8px;color:rgba(200,220,240,0.3);text-align:center;margin-top:2px}';
-  H += '.footer{border-top:1px solid rgba(255,255,255,0.06);padding-top:20px;font-size:9px;color:rgba(200,220,240,0.25);line-height:2;text-align:center}';
-  H += '.compound-flag{background:rgba(100,140,255,0.1);border-left:2px solid rgba(100,140,255,0.4)}';
-  H += '.hypo-flag{background:rgba(255,80,60,0.07);border-left:2px solid rgba(255,80,60,0.4)}';
+  H += '.compound-flag{background:rgba(100,140,255,0.06);border-left:2px solid rgba(100,140,255,0.3)}';
   H += '.iob-pill{display:inline-block;background:rgba(100,160,255,0.12);color:rgba(140,190,255,0.8);font-size:9px;padding:1px 5px;border-radius:3px;margin-left:4px}';
-  H += '.cob-pill{display:inline-block;background:rgba(80,200,120,0.12);color:rgba(80,200,120,0.8);font-size:9px;padding:1px 5px;border-radius:3px;margin-left:4px}';
-  H += '@media print{body{background:#fff;color:#111}.page{padding:20px}.stat{background:#f5f5f5;border:1px solid #ddd}.chart-wrap{border:1px solid #ddd}.day-block{border:1px solid #ddd}.ev-row{border-bottom:1px solid #eee}.rh{border-bottom:1px solid #ccc}}';
+  H += '.ghost-block{border:1px solid rgba(140,120,240,0.2);border-radius:10px;padding:14px;margin-bottom:10px;background:rgba(140,120,240,0.04)}';
+  H += '.footer{border-top:1px solid rgba(255,255,255,0.06);padding-top:20px;font-size:9px;color:rgba(200,220,240,0.25);line-height:2;text-align:center}';
+  H += '@media print{body{background:#fff;color:#111}.stat,.day-block,.ghost-block{border:1px solid #ddd;background:#f9f9f9}.chart-wrap{border:1px solid #ddd}}';
   H += '</style></head><body><div class="page">';
 
-  // Header
-  H += '<div class="rh">';
-  H += '<div><div class="rh-title">Oskar\'s River</div>';
-  H += '<div class="rh-sub">clinical summary · ' + dateMinStr + ' – ' + dateMaxStr + '</div></div>';
-  H += '<div class="rh-meta">Oskar Anderson-King · DOB 12 Jan 2014<br>T1D · MDI (Degludec + MyLife)<br>CGM: Libre 3 / Dexcom G7<br>Generated ' + gen + '</div>';
-  H += '</div>';
+  H += '<div class="rh"><div><div class="rh-title">Oskar\'s River</div>';
+  H += '<div style="font-size:10px;color:rgba(200,220,240,0.3);margin-top:4px">clinical summary · ' + dateMinStr + ' – ' + dateMaxStr + '</div></div>';
+  H += '<div class="rh-meta">Oskar Anderson-King · DOB 12 Jan 2014<br>T1D · MDI (Degludec + MyLife)<br>CGM: Libre 3 / Dexcom G7<br>Generated ' + gen + '<br>' + sbReadings.length + ' readings from Supabase</div></div>';
 
-  // Warning
-  H += '<div style="font-size:9px;background:rgba(255,160,40,0.07);border:1px solid rgba(255,160,40,0.15);border-radius:8px;padding:8px 12px;color:rgba(255,160,40,0.6);margin-bottom:28px;letter-spacing:0.3px">';
-  H += 'NOT A CLINICAL DOCUMENT — generated by River, Oskar\'s glucose visualisation tool. For conversation with your care team only. All times BST (UTC+1).';
-  H += '</div>';
+  H += '<div style="font-size:9px;background:rgba(255,160,40,0.07);border:1px solid rgba(255,160,40,0.15);border-radius:8px;padding:8px 12px;color:rgba(255,160,40,0.6);margin-bottom:28px">';
+  H += 'NOT A CLINICAL DOCUMENT — generated by River. For conversation with your care team only. All times BST (UTC+1).</div>';
 
-  // Overview stats
-  H += '<div class="sec">';
-  H += '<div class="sec-label">glucose summary</div>';
-  H += '<div class="stat-grid">';
-  var meanCol = meanBG < 8 ? 'rgba(62,200,140,0.9)' : meanBG < 10 ? 'rgba(255,180,60,0.9)' : 'rgba(255,100,80,0.85)';
-  H += '<div class="stat"><div class="stat-val" style="color:' + meanCol + '">' + meanBG.toFixed(1) + '</div><div class="stat-lbl">mean mmol/L</div></div>';
-  var tirCol = tirPct >= 70 ? 'rgba(62,200,140,0.9)' : tirPct >= 50 ? 'rgba(255,180,60,0.9)' : 'rgba(255,100,80,0.85)';
-  H += '<div class="stat"><div class="stat-val" style="color:' + tirCol + '">' + tirPct + '%</div><div class="stat-lbl">in range 3.9–10</div><div class="stat-sub">(' + inRange + '/' + total + ')</div></div>';
-  H += '<div class="stat"><div class="stat-val" style="color:rgba(200,180,120,0.85)">' + eA1C + '%</div><div class="stat-lbl">est. A1c (formula)</div><div class="stat-sub">not GMI</div></div>';
+  // Stats
+  H += '<div class="sec"><div class="sec-label">glucose summary</div><div class="stat-grid">';
+  var meanCol2 = meanBG < 8 ? 'rgba(62,200,140,0.9)' : meanBG < 10 ? 'rgba(255,180,60,0.9)' : 'rgba(255,100,80,0.85)';
+  H += '<div class="stat"><div class="stat-val" style="color:' + meanCol2 + '">' + meanBG.toFixed(1) + '</div><div class="stat-lbl">mean mmol/L</div></div>';
+  var tirCol2 = tirPct >= 70 ? 'rgba(62,200,140,0.9)' : tirPct >= 50 ? 'rgba(255,180,60,0.9)' : 'rgba(255,100,80,0.85)';
+  H += '<div class="stat"><div class="stat-val" style="color:' + tirCol2 + '">' + tirPct + '%</div><div class="stat-lbl">in range 3.9–10</div><div class="stat-sub">' + inRange + '/' + total + '</div></div>';
+  H += '<div class="stat"><div class="stat-val" style="color:rgba(200,180,120,0.85)">' + eA1C + '%</div><div class="stat-lbl">est. A1c</div><div class="stat-sub">formula, not GMI</div></div>';
   H += '<div class="stat"><div class="stat-val" style="color:rgba(180,200,220,0.7)">' + cv + '%</div><div class="stat-lbl">coeff. variation</div><div class="stat-sub">target &lt;36%</div></div>';
+  H += '</div><div class="tir-row">';
+  H += '<div class="tir-bar" style="background:rgba(255,80,80,0.06)"><span style="font-size:10px;color:rgba(255,130,100,0.6)">below 3.9</span><span style="font-size:18px;font-weight:500;color:rgba(255,130,100,0.9)">' + belPct + '%</span></div>';
+  H += '<div class="tir-bar" style="background:rgba(62,180,120,0.06)"><span style="font-size:10px;color:rgba(62,180,120,0.6)">3.9–10.0</span><span style="font-size:18px;font-weight:500;color:rgba(62,200,140,0.9)">' + tirPct + '%</span></div>';
+  H += '<div class="tir-bar" style="background:rgba(255,180,60,0.06)"><span style="font-size:10px;color:rgba(255,180,60,0.6)">above 10.0</span><span style="font-size:18px;font-weight:500;color:rgba(255,180,60,0.9)">' + abvPct + '%</span></div>';
   H += '</div>';
-  // TIR breakdown
-  H += '<div class="tir-row">';
-  H += '<div class="tir-bar" style="background:rgba(255,80,80,0.06)"><span style="font-size:10px;color:rgba(255,130,100,0.6)">below 3.9 mmol</span><span style="font-size:18px;font-weight:500;color:rgba(255,130,100,0.9)">' + belPct + '%</span></div>';
-  H += '<div class="tir-bar" style="background:rgba(62,180,120,0.06)"><span style="font-size:10px;color:rgba(62,180,120,0.6)">3.9–10.0 mmol</span><span style="font-size:18px;font-weight:500;color:rgba(62,200,140,0.9)">' + tirPct + '%</span></div>';
-  H += '<div class="tir-bar" style="background:rgba(255,180,60,0.06)"><span style="font-size:10px;color:rgba(255,180,60,0.6)">above 10.0 mmol</span><span style="font-size:18px;font-weight:500;color:rgba(255,180,60,0.9)">' + abvPct + '%</span></div>';
-  H += '</div>';
-  H += '<div style="font-size:9px;color:rgba(200,220,240,0.25)">' + total + ' CGM readings · ' + prickPoints.length + ' finger prick(s) · ' + mealEvents.length + ' meal boluses · ' + (bolusEvents.length - mealEvents.length) + ' corrections · ' + hypoEvents.length + ' hypo episode(s) · ' + ghosts.length + ' unexplained ghost event(s)</div>';
-  H += '</div>';
+  H += '<div style="font-size:9px;color:rgba(200,220,240,0.25)">' + total + ' CGM readings · ' + sbMeals.length + ' meals · ' + (bolusEvents.length - mealEvents.length) + ' corrections · ' + hypoEvents.length + ' hypo episode(s) · ' + sbGhosts.length + ' ghost event(s)</div></div>';
 
-  // CGM chart — rendered as inline Canvas via script
-  H += '<div class="sec">';
-  H += '<div class="sec-label">continuous glucose trace · ' + dateMinStr + ' – ' + dateMaxStr + '</div>';
+  // CGM chart
+  H += '<div class="sec"><div class="sec-label">continuous glucose trace · ' + dateMinStr + ' – ' + dateMaxStr + '</div>';
   H += '<div class="chart-wrap"><canvas id="cgm-main" style="width:100%;height:100%"></canvas></div>';
   H += '<div class="chart-leg">';
-  H += '<span><span class="line" style="background:rgba(62,180,160,0.8)"></span>CGM trace</span>';
-  H += '<span><span class="dot" style="background:rgba(255,200,100,0.9)"></span>finger prick</span>';
-  H += '<span><span class="dot" style="background:rgba(62,200,120,0.85)"></span>meal bolus</span>';
+  H += '<span><span class="line" style="background:rgba(62,180,160,0.8)"></span>CGM</span>';
+  H += '<span><span class="dot" style="background:rgba(255,200,100,0.9)"></span>prick</span>';
+  H += '<span><span class="dot" style="background:rgba(62,200,120,0.85)"></span>meal</span>';
   H += '<span><span class="dot" style="background:rgba(255,160,40,0.85)"></span>correction</span>';
-  H += '<span><span class="dot" style="background:rgba(180,140,255,0.85)"></span>ghost ? event</span>';
+  H += '<span><span class="dot" style="background:rgba(180,140,255,0.85)"></span>ghost ?</span>';
   H += '<span><span class="dot" style="background:rgba(255,80,80,0.9)"></span>hypo ≤3.9</span>';
-  H += '<span><span class="line" style="background:rgba(62,180,120,0.25);border-top:1px dashed rgba(62,180,120,0.4)"></span>target 4.0–7.0</span>';
-  H += '</div>';
-  H += '</div>';
+  H += '</div></div>';
 
-  // Hourly profile (24hr heatmap via canvas)
-  H += '<div class="sec">';
-  H += '<div class="sec-label">24-hour pattern</div>';
-  H += '<canvas id="hr-chart" width="760" height="120" style="width:100%;height:auto;border-radius:8px;background:rgba(255,255,255,0.02)"></canvas>';
-  H += '</div>';
+  // Hourly heatmap
+  H += '<div class="sec"><div class="sec-label">24-hour pattern</div>';
+  H += '<canvas id="hr-chart" width="760" height="120" style="width:100%;height:auto;border-radius:8px;background:rgba(255,255,255,0.02)"></canvas></div>';
 
-  // Hypo & near-miss events
+  // Hypos & near-misses
   if (hypoEvents.length || nearMissEvents.length) {
-    H += '<div class="sec">';
-    H += '<div class="sec-label">hypos & near-misses</div>';
-    hypoEvents.forEach(function(hv) {
+    H += '<div class="sec"><div class="sec-label">hypos & near-misses</div>';
+    hypoEvents.forEach(function(hv){
       var ts = new Date(hv.t).toLocaleString('en-GB',{weekday:'short',day:'numeric',month:'short',hour:'2-digit',minute:'2-digit'});
-      var dur = Math.round((hv.end - hv.t) / 60000);
-      H += '<div class="ev-row hypo-flag"><div class="ev-time">' + new Date(hv.t).toLocaleTimeString('en-GB',{hour:'2-digit',minute:'2-digit'}) + '</div>';
+      H += '<div class="ev-row" style="border-left:2px solid rgba(255,80,80,0.4);background:rgba(255,80,60,0.05)">';
+      H += '<div class="ev-time">' + new Date(hv.t).toLocaleTimeString('en-GB',{hour:'2-digit',minute:'2-digit'}) + '</div>';
       H += '<div><span class="badge b-hypo">HYPO</span></div>';
-      H += '<div class="ev-main">' + ts + ' · nadir ' + hv.nadir.toFixed(1) + ' mmol/L · ~' + dur + ' min</div>';
+      H += '<div class="ev-main">' + ts + ' · nadir ' + hv.nadir.toFixed(1) + ' mmol/L</div>';
       H += '<div class="bg-num bg-low">' + hv.nadir.toFixed(1) + '</div></div>';
     });
-    nearMissEvents.forEach(function(nm) {
+    nearMissEvents.forEach(function(nm){
       var ts = new Date(nm.t).toLocaleString('en-GB',{weekday:'short',day:'numeric',month:'short',hour:'2-digit',minute:'2-digit'});
       H += '<div class="ev-row"><div class="ev-time">' + new Date(nm.t).toLocaleTimeString('en-GB',{hour:'2-digit',minute:'2-digit'}) + '</div>';
       H += '<div><span class="badge b-near">near</span></div>';
-      H += '<div class="ev-main">' + ts + ' · nadir ' + nm.nadir.toFixed(1) + ' mmol/L · BG ≤5.4 falling</div>';
+      H += '<div class="ev-main">' + ts + ' · nadir ' + nm.nadir.toFixed(1) + ' mmol/L · falling ≤5.4</div>';
       H += '<div class="bg-num" style="color:rgba(255,160,40,0.8)">' + nm.nadir.toFixed(1) + '</div></div>';
     });
     H += '</div>';
   }
 
-  // Ghost / unexplained events
-  if (ghosts.length) {
-    H += '<div class="sec">';
-    H += '<div class="sec-label">unexplained ghost events</div>';
-    H += '<div style="font-size:10px;color:rgba(200,220,240,0.3);margin-bottom:12px">River detected these BG patterns with no matching log entry. Tap ? pebbles in the app to confirm or explain.</div>';
-    ghosts.forEach(function(g) {
+  // Ghost events
+  if (sbGhosts.length) {
+    H += '<div class="sec"><div class="sec-label">unexplained ghost events</div>';
+    H += '<div style="font-size:10px;color:rgba(200,220,240,0.3);margin-bottom:12px">BG patterns with no matching log entry detected by River.</div>';
+    sbGhosts.forEach(function(g){
       var ts = new Date(g.t).toLocaleString('en-GB',{weekday:'short',day:'numeric',month:'short',hour:'2-digit',minute:'2-digit'});
       var typeLabel = (g.ghost_type||'unknown').replace(/_/g,' ');
       var confPct = g.confidence ? Math.round(g.confidence*100)+'%' : '—';
       var status = g.confirmed === null ? 'unreviewed' : g.confirmed === false ? 'dismissed' : 'confirmed';
       H += '<div class="ghost-block">';
-      H += '<div class="ghost-title">? ' + ts + ' · ' + typeLabel + ' · confidence ' + confPct + ' · ' + status + '</div>';
-      H += '<div class="ghost-detail">';
+      H += '<div style="font-size:10px;color:rgba(180,160,240,0.8);margin-bottom:6px">? ' + ts + ' · ' + typeLabel + ' · ' + confPct + ' confidence · ' + status + '</div>';
+      H += '<div style="font-size:10px;color:rgba(200,220,240,0.4)">';
       if (g.implied_units) H += 'Implied correction ≈ ' + g.implied_units + 'U<br>';
       if (g.implied_carbs) H += 'Implied carbs ≈ ' + g.implied_carbs + 'g<br>';
+      if (g.carer_context) H += 'Context: ' + g.carer_context.replace(/_/g,' ');
       H += '</div></div>';
     });
     H += '</div>';
   }
 
-  // Day-by-day event log
-  H += '<div class="sec">';
-  H += '<div class="sec-label">day-by-day event log</div>';
-
-  var dayKeys = Object.keys(dayMap);
-  dayKeys.forEach(function(dk) {
+  // Day-by-day log
+  H += '<div class="sec"><div class="sec-label">day-by-day event log</div>';
+  var dayKeys = Object.keys(dayMap).sort(function(a,b){ return dayMap[a].t_first - dayMap[b].t_first; });
+  dayKeys.forEach(function(dk){
     var d = dayMap[dk];
-    var allEv = d.meals.concat(d.corrections).concat(d.ghosts).concat(d.hypos);
-    if (!allEv.length) return;
-    // Day stats
     var dayCarbs = d.meals.reduce(function(s,m){return s+(m.carbs||0);},0);
     var dayBolus = d.meals.reduce(function(s,m){return s+(m.bolus||0);},0) + d.corrections.reduce(function(s,c){return s+(c.bolus||0);},0);
     var dayBgs = d.meals.map(function(m){return m.bg;}).concat(d.corrections.map(function(c){return c.bg;})).filter(Boolean);
     var dayMin = dayBgs.length ? Math.min.apply(null,dayBgs).toFixed(1) : '—';
     var dayMax = dayBgs.length ? Math.max.apply(null,dayBgs).toFixed(1) : '—';
-
-    H += '<div class="day-block">';
-    H += '<div class="day-hdr"><b>' + dk + '</b>';
-    H += '<span>' + dayCarbs.toFixed(0) + 'g carbs</span>';
-    H += '<span>' + dayBolus.toFixed(1) + 'U bolus</span>';
+    H += '<div class="day-block"><div class="day-hdr"><b>' + dk + '</b>';
+    H += '<span>' + dayCarbs.toFixed(0) + 'g carbs</span><span>' + dayBolus.toFixed(1) + 'U</span>';
     H += '<span>BG ' + dayMin + '–' + dayMax + ' mmol</span>';
     if (d.ghosts.length) H += '<span style="color:rgba(180,140,255,0.7)">?' + d.ghosts.length + ' ghost</span>';
-    if (d.hypos.length) H += '<span style="color:rgba(255,100,80,0.8)">⚡ hypo treatment</span>';
     H += '</div>';
 
-    // Sort all events by time
     var allRows = [];
-    d.meals.forEach(function(m){ allRows.push({ t:m.t, type:'meal', data:m }); });
-    d.corrections.forEach(function(c){ allRows.push({ t:c.t, type:'corr', data:c }); });
-    d.ghosts.forEach(function(g){ allRows.push({ t:g.t, type:'ghost', data:g }); });
-    d.hypos.forEach(function(h4){ allRows.push({ t:h4.t, type:'hypo_tx', data:h4 }); });
-    allRows.sort(function(a,b){ return a.t - b.t; });
+    d.meals.forEach(function(m){ allRows.push({t:m.t,type:'meal',data:m}); });
+    d.corrections.forEach(function(c){ allRows.push({t:c.t,type:'corr',data:c}); });
+    d.ghosts.forEach(function(g){ allRows.push({t:g.t,type:'ghost',data:g}); });
+    allRows.sort(function(a,b){ return a.t-b.t; });
 
-    allRows.forEach(function(row) {
-      var isCompound = false;
-      if (row.type === 'meal' && row.data.iob > 0.5) isCompound = true;
-      if (row.type === 'corr' && row.data.iob > 0) isCompound = true;
-      var rowClass = 'ev-row' + (isCompound ? ' compound-flag' : '');
-
-      H += '<div class="' + rowClass + '">';
+    allRows.forEach(function(row){
+      var isCompound = (row.type==='meal' && row.data.iob > 0.5) || (row.type==='corr' && row.data.iob > 0);
+      H += '<div class="ev-row' + (isCompound?' compound-flag':'') + '">';
       H += '<div class="ev-time">' + row.data.time + '</div>';
-
-      if (row.type === 'meal') {
-        var bgCol = !row.data.bg ? 'bg-dim' : row.data.bg < 3.9 ? 'bg-low' : row.data.bg < 5.5 ? 'bg-ok' : row.data.bg < 10 ? 'bg-ok' : 'bg-high';
-        H += '<div><span class="badge b-meal">meal</span></div>';
-        H += '<div>';
-        H += '<div class="ev-main">' + (row.data.carbs||0) + 'g carbs · ' + (row.data.bolus||0) + 'U';
+      if (row.type==='meal') {
+        var bgCol = !row.data.bg?'bg-dim':row.data.bg<3.9?'bg-low':row.data.bg>10?'bg-high':'bg-ok';
+        H += '<div><span class="badge b-meal">meal</span></div><div>';
+        H += '<div class="ev-main">' + (row.data.carbs||0) + 'g · ' + (row.data.bolus||0) + 'U';
         if (row.data.iob > 0) H += '<span class="iob-pill">IOB ' + row.data.iob.toFixed(1) + 'U</span>';
         H += '</div>';
         if (row.data.name) H += '<div class="ev-sub">' + row.data.name + '</div>';
         if (row.data.items && row.data.items.length) {
-          H += '<div class="ev-items">' + row.data.items.map(function(it){ return (it.name||'') + ' ' + (it.carbs||0) + 'g'; }).join(' · ') + '</div>';
+          var itemArr = Array.isArray(row.data.items) ? row.data.items : [];
+          H += '<div class="ev-items">' + itemArr.map(function(it){ return (it.name||'')+(it.carbs?' '+it.carbs+'g':''); }).join(' · ') + '</div>';
         }
-        if (row.data.note && ['bolus','correction','free','hypo','snack'].indexOf(row.data.note)<0) {
-          H += '<div class="ev-note">' + row.data.note + '</div>';
-        }
-        H += '</div>';
-        H += '<div class="bg-num ' + bgCol + '">' + (row.data.bg ? row.data.bg.toFixed(1) : '—') + '</div>';
-
-      } else if (row.type === 'corr') {
-        var bgColC = !row.data.bg ? 'bg-dim' : row.data.bg < 3.9 ? 'bg-low' : row.data.bg > 10 ? 'bg-high' : 'bg-ok';
+        H += '</div><div class="bg-num ' + bgCol + '">' + (row.data.bg?row.data.bg.toFixed(1):'—') + '</div>';
+      } else if (row.type==='corr') {
+        var bgColC = !row.data.bg?'bg-dim':row.data.bg<3.9?'bg-low':row.data.bg>10?'bg-high':'bg-ok';
         H += '<div><span class="badge b-corr">correction</span></div>';
-        H += '<div>';
-        H += '<div class="ev-main">' + (row.data.bolus||0) + 'U</div>';
-        if (row.data.note && ['bolus','correction','free','hypo','snack'].indexOf(row.data.note)<0) {
-          H += '<div class="ev-note">' + row.data.note + '</div>';
-        }
-        H += '</div>';
-        H += '<div class="bg-num ' + bgColC + '">' + (row.data.bg ? row.data.bg.toFixed(1) : '—') + '</div>';
-
-      } else if (row.type === 'ghost') {
-        var gl = (row.data.ghost_type||'').replace(/_/g,' ');
-        var conf = row.data.confidence ? Math.round(row.data.confidence*100)+'%' : '';
+        H += '<div><div class="ev-main">' + (row.data.bolus||0) + 'U</div></div>';
+        H += '<div class="bg-num ' + bgColC + '">' + (row.data.bg?row.data.bg.toFixed(1):'—') + '</div>';
+      } else if (row.type==='ghost') {
         H += '<div><span class="badge b-ghost">? ghost</span></div>';
-        H += '<div>';
-        H += '<div class="ev-main">' + gl + (conf ? ' · ' + conf + ' confidence' : '') + '</div>';
-        if (row.data.implied_units) H += '<div class="ev-sub"><span>implied ≈' + row.data.implied_units + 'U</span></div>';
-        if (row.data.implied_carbs) H += '<div class="ev-sub"><span>implied ≈' + row.data.implied_carbs + 'g carbs</span></div>';
-        var statusStr = row.data.confirmed === null ? 'unreviewed' : row.data.confirmed === false ? 'dismissed' : 'confirmed';
-        H += '<div class="ev-sub" style="color:rgba(200,220,240,0.25)">' + statusStr + '</div>';
+        H += '<div><div class="ev-main">' + (row.data.ghost_type||'').replace(/_/g,' ');
+        if (row.data.confidence) H += ' · ' + Math.round(row.data.confidence*100) + '%';
         H += '</div>';
-        H += '<div class="bg-num bg-dim">?</div>';
-
-      } else if (row.type === 'hypo_tx') {
-        H += '<div><span class="badge b-hypo">hypo tx</span></div>';
-        H += '<div><div class="ev-main">' + (row.data.carbs||0) + 'g treatment</div></div>';
-        H += '<div></div>';
+        if (row.data.implied_units) H += '<div class="ev-sub">implied ≈' + row.data.implied_units + 'U</div>';
+        H += '</div><div class="bg-num bg-dim">?</div>';
       }
-
-      H += '</div>'; // ev-row
+      H += '</div>';
     });
-
-    H += '</div>'; // day-block
+    H += '</div>';
   });
-  H += '</div>'; // sec
-
-  // Footer
-  H += '<div class="footer">';
-  H += "Oskar's River · glucose observation and pattern memory · not a clinical decision pathway<br>";
-  H += 'CGM: Libre 3 via Nightscout · MDI · Oskar Anderson-King, T1D, diagnosed Aug 2025<br>';
-  H += 'River build ' + (window['__BUILD'+'_ID__'] || 'dev') + ' · report generated ' + gen;
   H += '</div>';
 
-  // Charts script
+  H += '<div class="footer">Oskar\'s River · glucose observation and pattern memory · not a clinical decision pathway<br>';
+  H += 'CGM: Libre 3 via Nightscout · MDI · Oskar Anderson-King, T1D, diagnosed Aug 2025<br>';
+  H += 'River build ' + (window['__BUILD'+'_ID__']||'dev') + ' · ' + sbReadings.length + ' Supabase readings · generated ' + gen + '</div>';
+
+  // Inline charts script
   H += '<scr'+'ipt>';
-  // Embed data
   H += 'var cgmPts=' + JSON.stringify(cgmPoints) + ';';
   H += 'var prickPts=' + JSON.stringify(prickPoints) + ';';
   H += 'var mealMkr=' + JSON.stringify(mealMarkers) + ';';
   H += 'var corrMkr=' + JSON.stringify(corrMarkers) + ';';
   H += 'var ghostMkr=' + JSON.stringify(ghostMarkers) + ';';
   H += 'var hypoMkr=' + JSON.stringify(hypoMarkers) + ';';
-  H += 'var hourBkts=' + JSON.stringify(hourBuckets.map(function(b){ return b.length ? +(b.reduce(function(s,v){return s+v;},0)/b.length).toFixed(2) : null; })) + ';';
+  H += 'var hourBkts=' + JSON.stringify(hourBuckets.map(function(b){ return b.length?+(b.reduce(function(s,v){return s+v;},0)/b.length).toFixed(2):null; })) + ';';
   H += 'var hourCnts=' + JSON.stringify(hourBuckets.map(function(b){ return b.length; })) + ';';
-
   H += '(function(){';
-  // Main CGM chart
-  H += 'var cv=document.getElementById("cgm-main");';
-  H += 'if(!cv)return;';
-  H += 'var par=cv.parentElement;';
-  H += 'cv.width=par.offsetWidth||760;cv.height=par.offsetHeight||300;';
-  H += 'var ctx=cv.getContext("2d");';
-  H += 'var W=cv.width,H2=cv.height;';
+  H += 'var cv=document.getElementById("cgm-main");if(!cv)return;';
+  H += 'var par=cv.parentElement;cv.width=par.offsetWidth||760;cv.height=par.offsetHeight||300;';
+  H += 'var ctx=cv.getContext("2d");var W=cv.width,H2=cv.height;';
   H += 'var pad={t:20,r:16,b:32,l:44};';
   H += 'var tMin=cgmPts.length?cgmPts[0].x:Date.now()-7*86400000;';
   H += 'var tMax=cgmPts.length?cgmPts[cgmPts.length-1].x:Date.now();';
   H += 'var bgMin=2.0,bgMax=20.0;';
   H += 'function tx(t){return pad.l+(t-tMin)/(tMax-tMin)*(W-pad.l-pad.r);}';
   H += 'function ty(bg){return pad.t+(1-(bg-bgMin)/(bgMax-bgMin))*(H2-pad.t-pad.b);}';
-  // target band
-  H += 'ctx.fillStyle="rgba(62,180,120,0.08)";';
-  H += 'ctx.fillRect(pad.l,ty(10),W-pad.l-pad.r,ty(3.9)-ty(10));';
-  // grid lines
-  H += '[4,6,8,10,14,18].forEach(function(v){';
-  H += 'ctx.strokeStyle=v===4||v===10?"rgba(255,255,255,0.12)":"rgba(255,255,255,0.05)";';
-  H += 'ctx.lineWidth=v===4||v===10?1:0.5;';
-  H += 'ctx.setLineDash([]);';
-  H += 'ctx.beginPath();ctx.moveTo(pad.l,ty(v));ctx.lineTo(W-pad.r,ty(v));ctx.stroke();';
-  H += 'ctx.fillStyle="rgba(200,220,240,0.3)";ctx.font="9px monospace";ctx.textAlign="right";';
-  H += 'ctx.fillText(v,pad.l-4,ty(v)+3);';
-  H += '});';
-  // time axis labels (day marks)
-  H += 'var day=86400000;var d0=Math.ceil(tMin/day)*day;';
-  H += 'for(var td=d0;td<=tMax;td+=day){';
-  H += 'var xd=tx(td);';
-  H += 'ctx.strokeStyle="rgba(255,255,255,0.08)";ctx.lineWidth=0.5;ctx.setLineDash([3,4]);';
-  H += 'ctx.beginPath();ctx.moveTo(xd,pad.t);ctx.lineTo(xd,H2-pad.b);ctx.stroke();';
-  H += 'ctx.setLineDash([]);';
-  H += 'ctx.fillStyle="rgba(200,220,240,0.35)";ctx.font="9px monospace";ctx.textAlign="center";';
-  H += 'ctx.fillText(new Date(td).toLocaleDateString("en-GB",{weekday:"short",day:"numeric",month:"short"}),xd,H2-pad.b+14);';
-  H += '}';
-  // CGM line
-  H += 'if(cgmPts.length>1){';
-  H += 'ctx.beginPath();ctx.strokeStyle="rgba(62,180,160,0.75)";ctx.lineWidth=1.5;ctx.setLineDash([]);';
-  H += 'var gap=15*60000;';
-  H += 'ctx.moveTo(tx(cgmPts[0].x),ty(cgmPts[0].y));';
-  H += 'for(var i=1;i<cgmPts.length;i++){';
-  H += 'if(cgmPts[i].x-cgmPts[i-1].x>gap){ctx.stroke();ctx.beginPath();ctx.moveTo(tx(cgmPts[i].x),ty(cgmPts[i].y));}';
-  H += 'else ctx.lineTo(tx(cgmPts[i].x),ty(cgmPts[i].y));';
-  H += '}ctx.stroke();}';
-  // prick dots
+  H += 'ctx.fillStyle="rgba(62,180,120,0.08)";ctx.fillRect(pad.l,ty(10),W-pad.l-pad.r,ty(3.9)-ty(10));';
+  H += '[4,6,8,10,14,18].forEach(function(v){ctx.strokeStyle=v===4||v===10?"rgba(255,255,255,0.12)":"rgba(255,255,255,0.05)";ctx.lineWidth=v===4||v===10?1:0.5;ctx.setLineDash([]);ctx.beginPath();ctx.moveTo(pad.l,ty(v));ctx.lineTo(W-pad.r,ty(v));ctx.stroke();ctx.fillStyle="rgba(200,220,240,0.3)";ctx.font="9px monospace";ctx.textAlign="right";ctx.fillText(v,pad.l-4,ty(v)+3);});';
+  H += 'var day=86400000;var d0=Math.ceil(tMin/day)*day;for(var td=d0;td<=tMax;td+=day){var xd=tx(td);ctx.strokeStyle="rgba(255,255,255,0.08)";ctx.lineWidth=0.5;ctx.setLineDash([3,4]);ctx.beginPath();ctx.moveTo(xd,pad.t);ctx.lineTo(xd,H2-pad.b);ctx.stroke();ctx.setLineDash([]);ctx.fillStyle="rgba(200,220,240,0.35)";ctx.font="9px monospace";ctx.textAlign="center";ctx.fillText(new Date(td).toLocaleDateString("en-GB",{weekday:"short",day:"numeric",month:"short"}),xd,H2-pad.b+14);}';
+  H += 'if(cgmPts.length>1){ctx.beginPath();ctx.strokeStyle="rgba(62,180,160,0.75)";ctx.lineWidth=1.5;ctx.setLineDash([]);var gap=15*60000;ctx.moveTo(tx(cgmPts[0].x),ty(cgmPts[0].y));for(var i=1;i<cgmPts.length;i++){if(cgmPts[i].x-cgmPts[i-1].x>gap){ctx.stroke();ctx.beginPath();ctx.moveTo(tx(cgmPts[i].x),ty(cgmPts[i].y));}else ctx.lineTo(tx(cgmPts[i].x),ty(cgmPts[i].y));}ctx.stroke();}';
   H += 'prickPts.forEach(function(p){ctx.beginPath();ctx.arc(tx(p.x),ty(p.y),4,0,Math.PI*2);ctx.fillStyle="rgba(255,200,100,0.9)";ctx.fill();});';
-  // meal markers
-  H += 'mealMkr.forEach(function(m){if(!m.y)return;var x=tx(m.x),y=ty(m.y);ctx.beginPath();ctx.arc(x,y,5,0,Math.PI*2);ctx.fillStyle="rgba(62,200,120,0.85)";ctx.fill();});';
-  // corr markers
-  H += 'corrMkr.forEach(function(m){if(!m.y)return;var x=tx(m.x),y=ty(m.y);ctx.beginPath();ctx.arc(x,y,4,0,Math.PI*2);ctx.fillStyle="rgba(255,160,40,0.85)";ctx.fill();});';
-  // ghost markers
-  H += 'ghostMkr.forEach(function(m){if(!m.y)return;var x=tx(m.x),y=ty(m.y);ctx.beginPath();ctx.arc(x,y,5,0,Math.PI*2);ctx.fillStyle="rgba(180,140,255,0.8)";ctx.fill();ctx.fillStyle="rgba(255,255,255,0.7)";ctx.font="bold 8px monospace";ctx.textAlign="center";ctx.fillText("?",x,y+3);});';
-  // hypo markers
-  H += 'hypoMkr.forEach(function(m){var x=tx(m.x),y=ty(m.y||3.9);ctx.beginPath();ctx.arc(x,y,5,0,Math.PI*2);ctx.fillStyle="rgba(255,80,80,0.9)";ctx.fill();});';
+  H += 'mealMkr.forEach(function(m){if(!m.y)return;ctx.beginPath();ctx.arc(tx(m.x),ty(m.y),5,0,Math.PI*2);ctx.fillStyle="rgba(62,200,120,0.85)";ctx.fill();});';
+  H += 'corrMkr.forEach(function(m){if(!m.y)return;ctx.beginPath();ctx.arc(tx(m.x),ty(m.y),4,0,Math.PI*2);ctx.fillStyle="rgba(255,160,40,0.85)";ctx.fill();});';
+  H += 'ghostMkr.forEach(function(m){if(!m.y)return;ctx.beginPath();ctx.arc(tx(m.x),ty(m.y),5,0,Math.PI*2);ctx.fillStyle="rgba(180,140,255,0.8)";ctx.fill();ctx.fillStyle="rgba(255,255,255,0.7)";ctx.font="bold 8px monospace";ctx.textAlign="center";ctx.fillText("?",tx(m.x),ty(m.y)+3);});';
+  H += 'hypoMkr.forEach(function(m){ctx.beginPath();ctx.arc(tx(m.x),ty(m.y||3.9),5,0,Math.PI*2);ctx.fillStyle="rgba(255,80,80,0.9)";ctx.fill();});';
   H += '})();';
-
-  // Hourly canvas
-  H += '(function(){';
-  H += 'var hcv=document.getElementById("hr-chart");if(!hcv)return;';
-  H += 'var hctx=hcv.getContext("2d");';
-  H += 'var W2=hcv.width,H3=hcv.height;';
-  H += 'var cellW=Math.floor((W2-32)/24);var cellH=H3-28;var offX=16;var offY=8;';
-  H += 'hourBkts.forEach(function(mean,h){';
-  H += 'var x=offX+h*cellW;';
-  H += 'if(mean===null){hctx.fillStyle="rgba(255,255,255,0.03)";hctx.fillRect(x,offY,cellW-2,cellH);return;}';
-  H += 'var t=Math.max(0,Math.min(1,(mean-3.9)/(14-3.9)));';
-  H += 'var r,g,b;';
-  H += 'if(mean<3.9){r=255;g=80;b=80;}';
-  H += 'else if(mean<=7){r=62;g=Math.round(180+20*(1-(mean-3.9)/3.1));b=Math.round(120+40*(1-(mean-3.9)/3.1));}';
-  H += 'else if(mean<=10){r=Math.round(60+200*((mean-7)/3));g=Math.round(200-140*((mean-7)/3));b=Math.round(120-60*((mean-7)/3));}';
-  H += 'else{r=255;g=Math.round(160-80*Math.min(1,(mean-10)/4));b=40;}';
-  H += 'var alpha=hourCnts[h]>0?0.7:0.1;';
-  H += 'hctx.fillStyle="rgba("+r+","+g+","+b+","+alpha+")";';
-  H += 'hctx.fillRect(x,offY,cellW-2,cellH);';
-  H += 'if(hourCnts[h]>0){hctx.fillStyle="rgba(255,255,255,0.5)";hctx.font="8px monospace";hctx.textAlign="center";hctx.fillText(mean.toFixed(1),x+cellW/2-1,offY+cellH/2+3);}';
-  H += '});';
-  H += '[0,3,6,9,12,15,18,21].forEach(function(h){';
-  H += 'hctx.fillStyle="rgba(200,220,240,0.3)";hctx.font="8px monospace";hctx.textAlign="center";';
-  H += 'hctx.fillText(h.toString().padStart(2,"0"),offX+h*cellW+cellW/2-1,H3-6);';
-  H += '});';
+  H += '(function(){var hcv=document.getElementById("hr-chart");if(!hcv)return;var hctx=hcv.getContext("2d");var W2=hcv.width,H3=hcv.height;var cellW=Math.floor((W2-32)/24);var cellH=H3-28;var offX=16;var offY=8;';
+  H += 'hourBkts.forEach(function(mean,h){var x=offX+h*cellW;if(mean===null){hctx.fillStyle="rgba(255,255,255,0.03)";hctx.fillRect(x,offY,cellW-2,cellH);return;}var r,g,b;if(mean<3.9){r=255;g=80;b=80;}else if(mean<=7){r=62;g=200;b=140;}else if(mean<=10){r=Math.round(62+200*((mean-7)/3));g=Math.round(200-140*((mean-7)/3));b=100;}else{r=255;g=Math.round(160-80*Math.min(1,(mean-10)/4));b=40;}var alpha=hourCnts[h]>0?0.7:0.1;hctx.fillStyle="rgba("+r+","+g+","+b+","+alpha+")";hctx.fillRect(x,offY,cellW-2,cellH);if(hourCnts[h]>0){hctx.fillStyle="rgba(255,255,255,0.6)";hctx.font="8px monospace";hctx.textAlign="center";hctx.fillText(mean.toFixed(1),x+cellW/2-1,offY+cellH/2+3);}});';
+  H += '[0,3,6,9,12,15,18,21].forEach(function(h){hctx.fillStyle="rgba(200,220,240,0.3)";hctx.font="8px monospace";hctx.textAlign="center";hctx.fillText(h.toString().padStart(2,"0"),offX+h*cellW+cellW/2-1,H3-6);});';
   H += '})();';
   H += '</'+'script>';
-
   H += '</div></body></html>';
 
-  // Download
   var blob = new Blob([H], { type: 'text/html;charset=utf-8' });
   var url  = URL.createObjectURL(blob);
   var a    = document.createElement('a');
@@ -15650,6 +15575,7 @@ function insightsExport() {
   URL.revokeObjectURL(url);
   showToast('clinic report downloaded');
 }
+
 
 // ═══════════════════════════════════════════════════════════════════════════
 // PAD SCAN — Photo of handwritten meal notes → food log import
