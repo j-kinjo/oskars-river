@@ -12124,7 +12124,7 @@ async function _bootstrapPatternLibrary() {
     if (SUPABASE_READY) {
       try {
         var evRows = await _sbFetch(
-          'events?override_type=eq.direction&select=t,override_dir,period&limit=300',
+          'events?override_type=eq.direction&select=t,override_dir&limit=300',
           { method: 'GET' }
         );
         if (Array.isArray(evRows)) {
@@ -15543,7 +15543,7 @@ function insightsExport() {
   H += '</div>';
 
   // Charts script
-  H += '<scr'+'ipt>';
+  H += '<script>';
   // Embed data
   H += 'var cgmPts=' + JSON.stringify(cgmPoints) + ';';
   H += 'var prickPts=' + JSON.stringify(prickPoints) + ';';
@@ -15636,7 +15636,7 @@ function insightsExport() {
   H += 'hctx.fillText(h.toString().padStart(2,"0"),offX+h*cellW+cellW/2-1,H3-6);';
   H += '});';
   H += '})();';
-  H += '</'+'script>';
+  H += '</script>';
 
   H += '</div></body></html>';
 
