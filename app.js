@@ -426,6 +426,7 @@ async function syncNow(silent) {
     await syncMealHistoryFromSupabase();
     await _bootstrapPatternLibrary(); // seed pattern library on first sync after session 7
     await loadObservedISF(); // refresh adaptive ISF from bolus_outcomes
+    _derivePersonalRamp();   // refresh personalised absorption ramp from meal outcomes
     await _syncTimerEvents(); // cross-device timer state sync
 
     _lastSyncT  = Date.now();
@@ -1413,10 +1414,71 @@ function _getActiveBolusEvents() {
   return events.sort(function(a,b){ return a.t-b.t; });
 }
 
+// ── PERSONALISED ABSORPTION RAMP ─────────────────────────────────────────
+// Derived from meal_history: for each GI band, compare predicted peak_t
+// (from therapy_snapshot + GI formula) vs actual peak_t from actual_curve.
+// Returns a multiplier on the default peakMin formula: >1 = slower absorber,
+// <1 = faster. Cached and refreshed after each sync.
+// Minimum 3 outcomes per band before adapting. Blended 70% observed / 30% default.
+
+var _personalRampCache = {};  // { 'fast'|'medium'|'slow': multiplier }
+var _personalRampUpdated = 0;
+
+function _giToBand(gi) {
+  return gi >= 70 ? 'fast' : gi >= 45 ? 'medium' : 'slow';
+}
+
+function _getPersonalRamp(gi) {
+  var band = _giToBand(gi);
+  return _personalRampCache[band] || 1.0;
+}
+
+function _derivePersonalRamp() {
+  if (Date.now() - _personalRampUpdated < 10 * 60000) return; // max every 10min
+  _personalRampUpdated = Date.now();
+
+  var meals = (MEAL_HISTORY || []).filter(function(m) {
+    return m.actual_curve && m.actual_curve.length > 3 && m.items && m.items.length > 0 && m.peak_t;
+  });
+
+  if (meals.length < 3) return; // not enough data
+
+  var bandData = { fast: [], medium: [], slow: [] };
+
+  meals.forEach(function(m) {
+    // Dominant GI band of this meal (weighted by carbs)
+    var totalC = m.items.reduce(function(s,i){ return s+(i.carbs||0); }, 0);
+    if (!totalC) return;
+    var avgGI = m.items.reduce(function(s,i){ return s+(i.gi||55)*(i.carbs||0); }, 0) / totalC;
+    var band = _giToBand(avgGI);
+
+    // Default predicted peak mins from formula
+    var defPeakMins = Math.max(15, 95 - avgGI);
+    // Actual peak from stored peak_t
+    var actualPeakMins = m.peak_t ? (m.peak_t - m.t) / 60000 : null;
+    if (!actualPeakMins || actualPeakMins < 5 || actualPeakMins > 180) return;
+
+    bandData[band].push(actualPeakMins / defPeakMins);
+  });
+
+  ['fast', 'medium', 'slow'].forEach(function(band) {
+    var obs = bandData[band];
+    if (obs.length < 3) return; // need minimum 3 per band
+    var median = obs.slice().sort(function(a,b){return a-b;})[Math.floor(obs.length/2)];
+    // Blend: 70% observed, 30% default (1.0) — prevents wild swings from sparse data
+    var blended = median * 0.7 + 1.0 * 0.3;
+    // Clamp: don't allow more than ±40% shift from default
+    _personalRampCache[band] = Math.max(0.6, Math.min(1.4, blended));
+  });
+}
+
+
 function _cobFgi(mins, gi) {
   gi = gi || 55;
   if (mins <= 0) return 1; if (mins >= 240) return 0;
-  var pk = Math.max(15, 95 - gi), s = pk / 2.2, z = (mins - pk) / s;
+  // Apply personalised peak-mins multiplier if available
+  var rampMult = _getPersonalRamp(gi);
+  var pk = Math.max(15, (95 - gi) * rampMult), s = pk / 2.2, z = (mins - pk) / s;
   return Math.max(0, 1 - Math.min(1, 0.5*(1+Math.tanh(0.7978845608*(z+0.044715*z*z*z)))));
 }
 
@@ -1504,6 +1566,49 @@ function _drawCOBReservoir() {
       }
       CX.strokeStyle='rgba('+rv+','+gv+','+bv+','+(0.35+remaining*0.45)+')';
       CX.lineWidth=1.2; CX.stroke();
+
+      // ── Fast-sugar highlight layer (GI ≥ 80) ───────────────────────
+      // High-GI foods (glucose tabs, jelly babies, white bread, fruit juice)
+      // get a bright inner spike to distinguish fast sugar from slow starch.
+      // Shows the rapid-rise character that makes them useful for hypos
+      // and risky if over-dosed.
+      if (gi >= 80 && remaining > 0.05) {
+        var fastPeakMin = Math.max(10, 95 - gi) * 0.6; // faster peak than full bell
+        var fastPeakT   = meal.t + fastPeakMin * 60000;
+        var fastSigmaM  = fastPeakMin / 1.6;
+        var fastMaxD    = maxD * 0.55 * remaining;
+        function fastBellH(px2) {
+          var t_px2 = viewTime + (px2 - NOW_X*W) / W * viewSpan;
+          if (t_px2 < mealT_local) return 0;
+          var ramp2 = Math.min(1, (t_px2 - mealT_local) / (4 * 60000));
+          var md2 = (t_px2 - fastPeakT) / 60000;
+          return Math.exp(-0.5 * Math.pow(md2 / fastSigmaM, 2)) * fastMaxD * ramp2;
+        }
+        CX.beginPath();
+        CX.moveTo(0, H);
+        for (var fi = 0; fi <= 280; fi++) {
+          var fpx = (fi/280)*W;
+          CX.lineTo(fpx, H - fastBellH(fpx));
+        }
+        CX.lineTo(W, H); CX.closePath();
+        // Gold/white inner fill — fast sugar is warm and urgent
+        var fgr = CX.createLinearGradient(0, H, 0, H - fastMaxD);
+        fgr.addColorStop(0,   'rgba(255,220,80,' + (0.35 * remaining) + ')');
+        fgr.addColorStop(0.6, 'rgba(255,220,80,' + (0.12 * remaining) + ')');
+        fgr.addColorStop(1,   'rgba(255,220,80,0)');
+        CX.fillStyle = fgr;
+        CX.fill();
+        // Fast-sugar rim: brighter, narrower
+        CX.beginPath();
+        for (var fi2 = 0; fi2 <= 280; fi2++) {
+          var fpx2 = (fi2/280)*W;
+          var fpy2 = H - fastBellH(fpx2);
+          fi2 === 0 ? CX.moveTo(fpx2, fpy2) : CX.lineTo(fpx2, fpy2);
+        }
+        CX.strokeStyle = 'rgba(255,230,100,' + (0.5 * remaining) + ')';
+        CX.lineWidth = 0.8;
+        CX.stroke();
+      }
 
       // Food label — at peak if on screen, else at visible maximum
       if (food.carbs >= 2 && maxD > 14) {
@@ -2092,7 +2197,82 @@ function drawUnknownForce(pal) {
   CX.restore();
 }
 
-// ── FUTURE CLOUDS — projected gas beyond now ─────────────────────────
+// ── FORECAST TRACE — navigable prediction line beyond CGM_END ────────────
+// When the user scrubs forward past "now", the BG trace has no data.
+// This draws the buildSmartForecast() output as a dashed line with
+// uncertainty envelope — letting carers see what River expects to happen.
+function drawForecastTrace(pal) {
+  if (!CGM_END) return;
+  var nowX = tX(CGM_END);
+  // Only draw if the forecast region is visible
+  if (nowX > W) return;
+
+  var pts = buildSmartForecast();
+  if (!pts || pts.length < 2) return;
+
+  CX.save();
+
+  // ── Uncertainty envelope ─────────────────────────────────────────
+  // Widens over time: ±0.3mmol at 5min → ±1.5mmol at 3h
+  var R = pal.bgLine[0], G = pal.bgLine[1], B = pal.bgLine[2];
+  CX.beginPath();
+  pts.forEach(function(p, i) {
+    var uncert = 0.3 + (p.mins / 180) * 1.2;
+    var yHi = bgToY(Math.min(22, p.bg + uncert));
+    if (i === 0) CX.moveTo(p.x, yHi); else CX.lineTo(p.x, yHi);
+  });
+  for (var i = pts.length - 1; i >= 0; i--) {
+    var p2 = pts[i];
+    var uncert2 = 0.3 + (p2.mins / 180) * 1.2;
+    var yLo = bgToY(Math.max(2, p2.bg - uncert2));
+    CX.lineTo(p2.x, yLo);
+  }
+  CX.closePath();
+  CX.fillStyle = 'rgba(' + R + ',' + G + ',' + B + ',0.06)';
+  CX.fill();
+
+  // ── Dashed forecast line ─────────────────────────────────────────
+  CX.beginPath();
+  pts.forEach(function(p, i) {
+    if (i === 0) CX.moveTo(p.x, p.y); else CX.lineTo(p.x, p.y);
+  });
+  CX.strokeStyle = 'rgba(' + R + ',' + G + ',' + B + ',0.45)';
+  CX.lineWidth   = 1.5;
+  CX.setLineDash([4, 6]);
+  CX.stroke();
+  CX.setLineDash([]);
+
+  // ── BG value labels at 30min intervals ──────────────────────────
+  CX.font = "400 9px 'DM Mono',monospace";
+  CX.textAlign = 'center';
+  pts.forEach(function(p) {
+    if (p.mins % 30 !== 0) return;
+    if (p.x < 0 || p.x > W) return;
+    var col = p.bg < 3.9 ? 'rgba(255,210,40,0.8)' : p.bg > 10 ? 'rgba(220,100,40,0.7)' : 'rgba(' + R + ',' + G + ',' + B + ',0.6)';
+    CX.fillStyle = col;
+    CX.fillText(p.bg.toFixed(1), p.x, p.y - 8);
+    // Small tick
+    CX.beginPath();
+    CX.arc(p.x, p.y, 2.5, 0, Math.PI * 2);
+    CX.fillStyle = col;
+    CX.fill();
+  });
+
+  // ── "forecast" label near the now line ──────────────────────────
+  if (nowX > 10 && nowX < W - 40) {
+    CX.save();
+    CX.font = "400 8px 'DM Mono',monospace";
+    CX.textAlign = 'left';
+    CX.fillStyle = 'rgba(' + R + ',' + G + ',' + B + ',0.3)';
+    CX.fillText('forecast ›', nowX + 6, 16);
+    CX.restore();
+  }
+
+  CX.globalAlpha = 1;
+  CX.restore();
+}
+
+
 function drawFutureClouds(cobPts, iobPts, d, pal) {
   const nowX = NOW_X * W;
 
@@ -2507,6 +2687,10 @@ function drawBolusMarkers(pal) {
   // Concatenating SESSION caused duplicates (and surfaced stale previous-day chips).
   const allEvents = [...BOLUS_EVENTS];
 
+  // ── Pass 1: collect chip positions for arc linking ─────────────────
+  // Key: event timestamp → {x, carbY, bolusY} for drawing arcs between paired chips
+  var _chipPos = {};
+
   for (var _bIdx = 0; _bIdx < allEvents.length; _bIdx++) {
     const b = allEvents[_bIdx];
     const x   = tX(b.t);
@@ -2515,24 +2699,19 @@ function drawBolusMarkers(pal) {
     const bgY = bgToY(d.bg);
 
     if (b.c > 1) {
-      // Hypo treatment events get the blue hypo colour, not the carb orange
       var _isHypo = b.note && typeof b.note === 'string' && b.note.indexOf('hypo') === 0;
-      // Hypo chips use the same golden yellow as the dock button (COL_HYPO)
       const r = _isHypo ? 255 : pal.cobR[0],
             g = _isHypo ? 210 : pal.cobR[1],
             bv= _isHypo ?  40 : pal.cobR[2];
       const cardY = bgY - 30 - Math.min(b.c * 0.4, 36);
-      // Stem
       CX.globalAlpha = 0.35;
       CX.strokeStyle = 'rgba(' + r + ',' + g + ',' + bv + ',0.7)';
       CX.lineWidth   = 0.8; CX.setLineDash([2,5]);
       CX.beginPath(); CX.moveTo(x, bgY - 5); CX.lineTo(x, cardY + 12); CX.stroke();
       CX.setLineDash([]);
-      // Dot on trace
       CX.globalAlpha = 0.9; CX.fillStyle = 'rgba(' + r + ',' + g + ',' + bv + ',1)';
       CX.shadowColor = 'rgba(' + r + ',' + g + ',' + bv + ',0.8)'; CX.shadowBlur = 5;
       CX.beginPath(); CX.arc(x, bgY, 3.2, 0, Math.PI*2); CX.fill(); CX.shadowBlur = 0;
-      // Pill label
       const lbl = b.c + 'g';
       const who = b.logged_by ? getPersonInitial(b.logged_by) : '';
       CX.font = "500 11px 'DM Mono',monospace";
@@ -2553,6 +2732,7 @@ function drawBolusMarkers(pal) {
         CX.globalAlpha = 1;
       }
       window._eventCards.push({x:x, y:cardY+8, w:lw+4, h:17, data:b, idx:_bIdx, type:'carb'});
+      _chipPos[b.t] = Object.assign(_chipPos[b.t] || {}, { cx: x, carbY: cardY + 8 });
     }
 
     if (b.u > 0.1) {
@@ -2580,8 +2760,62 @@ function drawBolusMarkers(pal) {
       CX.textAlign   = 'center';
       CX.fillText(lbl, x, cardY + 11);
       window._eventCards.push({x:x, y:cardY+7, w:lw+4, h:17, data:b, idx:_bIdx, type:'insulin'});
+      _chipPos[b.t] = Object.assign(_chipPos[b.t] || {}, { bx: x, bolusY: cardY + 7 });
     }
   }
+
+  // ── Pass 2: draw bolus→carb arc links ─────────────────────────────
+  // For each pure bolus event (u>0, c=0), find a carb event within 30min after it.
+  // Draw a subtle curved arc from the bolus chip bottom to the carb chip bottom.
+  CX.save();
+  for (var _ai = 0; _ai < allEvents.length; _ai++) {
+    var _ab = allEvents[_ai];
+    if (!(_ab.u > 0 && !_ab.c)) continue; // only pure bolus events
+    var _abPos = _chipPos[_ab.t];
+    if (!_abPos || _abPos.bolusY == null) continue;
+    var _abx = _abPos.bx;
+    var _aby = _abPos.bolusY;
+    // Find paired carb within 30 min after
+    for (var _ci2 = 0; _ci2 < allEvents.length; _ci2++) {
+      var _ac = allEvents[_ci2];
+      if (!(_ac.c > 0 && !_ac.u)) continue;
+      var gap = _ac.t - _ab.t;
+      if (gap <= 0 || gap > 30 * 60000) continue;
+      var _acPos = _chipPos[_ac.t];
+      if (!_acPos || _acPos.carbY == null) continue;
+      var _acx = _acPos.cx;
+      var _acy = _acPos.carbY;
+      // Draw a gentle quadratic arc from bolus chip to carb chip
+      // Control point below both chips, curving outward
+      var midX = (_abx + _acx) / 2;
+      var arcDepth = Math.max(18, Math.abs(_aby - _acy) * 0.3 + 12);
+      var cpY = Math.max(_aby, _acy) + arcDepth;
+      CX.globalAlpha = 0.18;
+      CX.strokeStyle = 'rgba(160,200,255,0.9)';
+      CX.lineWidth = 1;
+      CX.setLineDash([2, 4]);
+      CX.beginPath();
+      CX.moveTo(_abx, _aby);
+      CX.quadraticCurveTo(midX, cpY, _acx, _acy);
+      CX.stroke();
+      CX.setLineDash([]);
+      // Small wait label on arc midpoint
+      var waitM = Math.round(gap / 60000);
+      if (waitM > 0) {
+        var lblX = midX;
+        var lblY = cpY + 2;
+        CX.globalAlpha = 0.22;
+        CX.font = "400 7px 'DM Mono',monospace";
+        CX.fillStyle = 'rgba(160,200,255,1)';
+        CX.textAlign = 'center';
+        CX.fillText(waitM + 'min', lblX, lblY + 8);
+      }
+      break; // one link per bolus
+    }
+  }
+  CX.setLineDash([]);
+  CX.globalAlpha = 1; CX.restore();
+
   CX.globalAlpha = 1; CX.restore();
 }
 
@@ -4104,6 +4338,7 @@ function frame(ts) {
   // ── CONTEXT ─────────────────────────────────────────────────────
   drawTransition(pal);
   drawFutureClouds(cobPts, iobPts, d, pal);
+  drawForecastTrace(pal);   // forecast BG line beyond now (navigable)
   drawTimeLabels(pal);
 
   // ── THE ORB — buoyant on BG line ────────────────────────────────
@@ -4197,7 +4432,7 @@ function _onDragMoveActive(e) {
   if(e.target.closest&&e.target.closest('#sheet,#flow-dock,.dock-btn,#whisper-overlay,#food-mgr-overlay,#hypo-overlay,#corr-overlay,#food-add-overlay,[id$=-overlay],button,input,textarea,select')) return;
   if(e.touches.length===1 && drag.on) {
     e.preventDefault();
-    viewTime=Math.max(CGM_END - 30*86400000, Math.min(CGM_END, drag.t0-(e.touches[0].clientX-drag.x0)*(viewSpan/W))); _isAtNow=false;
+    viewTime=Math.max(CGM_END - 30*86400000, Math.min(CGM_END + 3*3600000, drag.t0-(e.touches[0].clientX-drag.x0)*(viewSpan/W))); _isAtNow=false;
     _maybeLoadOlderHistory();
   } else if(pinch.on&&e.touches.length===2) {
     e.preventDefault();
@@ -4242,10 +4477,130 @@ CV.addEventListener('touchend',()=>{
 },{passive:true});
 let md={on:false,x0:0,t0:0};
 CV.addEventListener('mousedown',e=>{if(!e.target.closest('#sheet,#flow-dock,.dock-btn,#whisper-overlay,#food-mgr-overlay,#hypo-overlay,#corr-overlay,#food-add-overlay,[id$=-overlay],button,input,textarea,select'))md={on:true,x0:e.clientX,t0:viewTime}});
-CV.addEventListener('mousemove',e=>{if(md.on){viewTime=Math.max(CGM_END - 30*86400000, Math.min(CGM_END,md.t0-(e.clientX-md.x0)*(viewSpan/W))); _maybeLoadOlderHistory();}});
+CV.addEventListener('mousemove',e=>{if(md.on){viewTime=Math.max(CGM_END - 30*86400000, Math.min(CGM_END + 3*3600000, md.t0-(e.clientX-md.x0)*(viewSpan/W))); _maybeLoadOlderHistory();}});
 CV.addEventListener('mouseup',()=>md.on=false);
 
-// ── INFINITE SCROLL — lazy-load older history ─────────────────────────
+// ── QUICK JUMP DAY STRIP ──────────────────────────────────────────────────
+// Floating bottom strip: last 14 days as tappable date pills.
+// Each pill shows a mini TIR bar. Tap to jump to midday of that date.
+// Appears on long-press of the canvas background (no chip hit), or via
+// the calendar button (injected into debug tray). Auto-hides after 4s.
+
+var _dayStripVisible = false;
+var _dayStripHideTimer = null;
+
+function showDayStrip() {
+  var ex = document.getElementById('day-strip');
+  if (ex) { ex.remove(); _dayStripVisible = false; return; } // toggle
+
+  _dayStripVisible = true;
+  var strip = document.createElement('div');
+  strip.id = 'day-strip';
+  strip.style.cssText = 'position:fixed;bottom:80px;left:0;right:0;z-index:70;' +
+    'display:flex;justify-content:center;pointer-events:none;padding:0 8px';
+  strip.addEventListener('touchstart', function(e){ e.stopPropagation(); }, {passive:true});
+
+  var inner = document.createElement('div');
+  inner.style.cssText = 'display:flex;gap:5px;overflow-x:auto;padding:8px 10px;' +
+    'background:rgba(6,10,24,0.94);backdrop-filter:blur(12px);border-radius:14px;' +
+    'border:1px solid rgba(255,255,255,0.07);pointer-events:auto;' +
+    '-webkit-overflow-scrolling:touch;scrollbar-width:none;max-width:100%';
+
+  var today = new Date();
+  today.setHours(0,0,0,0);
+  var DAYS = 21; // 3 weeks back
+
+  for (var di = DAYS - 1; di >= 0; di--) {
+    var dayT = today.getTime() - di * 86400000;
+    var dayDate = new Date(dayT);
+    var dateStr = dayDate.toISOString().slice(0,10);
+    var isToday = di === 0;
+
+    // Mini TIR for this day from HISTORY_RAW
+    var dayReadings = HISTORY_RAW.filter(function(r){ return r.t >= dayT && r.t < dayT + 86400000 && r.bg > 0; });
+    var tirPct = 0, lowPct = 0, highPct = 0, hasData = dayReadings.length >= 4;
+    if (hasData) {
+      tirPct  = Math.round(dayReadings.filter(function(r){ return r.bg >= 3.9 && r.bg <= 10; }).length / dayReadings.length * 100);
+      lowPct  = Math.round(dayReadings.filter(function(r){ return r.bg < 3.9; }).length / dayReadings.length * 100);
+      highPct = 100 - tirPct - lowPct;
+    }
+
+    // Day label
+    var dayLabel = isToday ? 'today' :
+      di === 1 ? 'yest' :
+      dayDate.toLocaleDateString('en-GB', {weekday:'short'}).toLowerCase() +
+      ' ' + dayDate.getDate();
+
+    // Has events?
+    var hasEvents = BOLUS_EVENTS.some(function(e){ return e.t >= dayT && e.t < dayT + 86400000; });
+
+    var pill = document.createElement('button');
+    pill.style.cssText = 'flex:0 0 auto;display:flex;flex-direction:column;align-items:center;' +
+      'gap:2px;padding:5px 8px;border-radius:9px;border:1px solid ' +
+      (isToday ? 'rgba(62,180,120,0.4)' : hasData ? 'rgba(255,255,255,0.08)' : 'rgba(255,255,255,0.04)') + ';' +
+      'background:' + (isToday ? 'rgba(62,180,120,0.08)' : 'rgba(255,255,255,0.03)') + ';' +
+      'cursor:pointer;touch-action:manipulation;min-width:38px';
+
+    // TIR bar
+    var barHtml = hasData
+      ? '<div style="width:32px;height:3px;border-radius:2px;overflow:hidden;display:flex;background:rgba(255,255,255,0.05)">' +
+          '<div style="width:' + lowPct + '%;background:rgba(255,210,40,0.8)"></div>' +
+          '<div style="width:' + tirPct + '%;background:rgba(62,180,120,0.8)"></div>' +
+          '<div style="width:' + highPct + '%;background:rgba(220,100,40,0.7)"></div>' +
+        '</div>'
+      : '<div style="width:32px;height:3px;border-radius:2px;background:rgba(255,255,255,0.05)"></div>';
+
+    var dotHtml = hasEvents
+      ? '<div style="width:3px;height:3px;border-radius:50%;background:rgba(62,180,120,0.6)"></div>'
+      : '<div style="width:3px;height:3px"></div>';
+
+    pill.innerHTML =
+      '<span style="font-family:DM Mono,monospace;font-size:8px;color:' +
+        (isToday ? 'rgba(62,180,120,0.9)' : hasData ? 'rgba(180,200,220,0.6)' : 'rgba(120,140,160,0.35)') +
+        ';white-space:nowrap">' + dayLabel + '</span>' +
+      barHtml +
+      (hasData ? '<span style="font-family:DM Mono,monospace;font-size:7px;color:rgba(62,180,120,0.6)">' + tirPct + '%</span>' : '') +
+      dotHtml;
+
+    (function(jumpT) {
+      pill.addEventListener('click', function() {
+        viewTime = jumpT + 12 * 3600000;
+        _isAtNow = false;
+        hideDayStrip();
+      });
+    })(dayT);
+
+    inner.appendChild(pill);
+  }
+
+  strip.appendChild(inner);
+  document.body.appendChild(strip);
+
+  // Scroll to end (today)
+  requestAnimationFrame(function(){ inner.scrollLeft = inner.scrollWidth; });
+
+  // Auto-hide after 6s
+  if (_dayStripHideTimer) clearTimeout(_dayStripHideTimer);
+  _dayStripHideTimer = setTimeout(hideDayStrip, 6000);
+}
+
+function hideDayStrip() {
+  var el = document.getElementById('day-strip');
+  if (el) el.remove();
+  _dayStripVisible = false;
+  if (_dayStripHideTimer) { clearTimeout(_dayStripHideTimer); _dayStripHideTimer = null; }
+}
+
+// Long-press on canvas background (no chip hit) → show day strip
+// Reuse the _canvasTapTimer mechanism: if long press fires with no chip, open strip
+var _canvasLongPressNoChip = false;
+(function() {
+  var _orig = _handleCanvasHit;
+  // Patch the long-press path: if no chip found, show day strip
+  window._handleCanvasHitNoChip = function() { showDayStrip(); };
+})();
+
+
 // When the user scrubs back past what we have, fetch the next chunk.
 // Readings: from Supabase (7-day retention) — falls back gracefully if not available.
 // Events: same — pulls a wider window from Supabase.
@@ -4569,17 +4924,22 @@ function _handleCanvasHit(mx, my, isLongPress) {
     }
   }
   // Event chips
-  if (!window._eventCards || _eventCards.length === 0) return;
-  for (var ci = 0; ci < _eventCards.length; ci++) {
-    var c = _eventCards[ci];
-    if (mx >= c.x - c.w/2 && mx <= c.x + c.w/2 && my >= c.y - 12 && my <= c.y + 12) {
-      if (isLongPress) {
-        openEventEditor(c.idx);
-      } else {
-        openContextCard(c.idx, c.data);
+  if (window._eventCards && _eventCards.length > 0) {
+    for (var ci = 0; ci < _eventCards.length; ci++) {
+      var c = _eventCards[ci];
+      if (mx >= c.x - c.w/2 && mx <= c.x + c.w/2 && my >= c.y - 12 && my <= c.y + 12) {
+        if (isLongPress) {
+          openEventEditor(c.idx);
+        } else {
+          openContextCard(c.idx, c.data);
+        }
+        return;
       }
-      return;
     }
+  }
+  // Nothing hit — long-press on background shows day strip
+  if (isLongPress) {
+    showDayStrip();
   }
 }
 // wheel zoom disabled — fixed 2h view
@@ -12367,7 +12727,8 @@ function openDebugPanel() {
     '<div style="font-size:8px;letter-spacing:1px;text-transform:uppercase;color:var(--rv-text-dim);margin-bottom:6px">backfill progress</div>' +
     '<canvas id="backfill-bar-canvas" width="400" height="16" style="width:100%;height:16px;border-radius:4px;cursor:pointer"></canvas>' +
     '<div id="backfill-bar-stats" style="font-size:8px;color:rgba(180,200,180,0.5);margin-top:4px"></div>' +
-    '<button onclick="_jumpToNextGap()" style="margin-top:6px;padding:3px 8px;border-radius:5px;border:1px solid rgba(80,160,220,0.3);background:rgba(80,160,220,0.06);color:rgba(80,160,220,0.7);font-family:monospace;font-size:8px;cursor:pointer">jump to next gap ○</button>';
+    '<button onclick="_jumpToNextGap()" style="margin-top:6px;padding:3px 8px;border-radius:5px;border:1px solid rgba(80,160,220,0.3);background:rgba(80,160,220,0.06);color:rgba(80,160,220,0.7);font-family:monospace;font-size:8px;cursor:pointer">jump to next gap ○</button>' +
+    '<button onclick="showDayStrip();document.getElementById(\'debug-panel\').remove()" style="margin-top:4px;padding:3px 8px;border-radius:5px;border:1px solid rgba(62,180,120,0.3);background:rgba(62,180,120,0.06);color:rgba(62,180,120,0.7);font-family:monospace;font-size:8px;cursor:pointer">📅 day strip</button>';
   el.appendChild(bpDiv);
   _renderBackfillBar(bpDiv.querySelector('#backfill-bar-canvas'), bpDiv.querySelector('#backfill-bar-stats'));
 
@@ -13031,33 +13392,134 @@ function openContextCard(eventIdx, chipData) {
       '</div>';
   }
 
-  // ── Meal items table (GI, GL per item) ───────────────────────────
-  var mealItems = ev.items || (mealRec && mealRec.items) || [];
+  // ── Prediction confidence per item ───────────────────────────────
+  // Derived from: (1) whether GI is user-confirmed vs estimated,
+  // (2) how many times this food appears in MEAL_HISTORY with outcome data,
+  // (3) RMSE across those meals
+  function _itemConfidence(item) {
+    var name = (item.name || '').toLowerCase();
+    var gi   = item.gi || 55;
+    // Find food in library
+    var libEntry = (FOOD_LIBRARY || []).find(function(f){ return (f.name||'').toLowerCase() === name; }) ||
+                   (FOOD_DB || []).find(function(f){ return (f.name||'').toLowerCase() === name; });
+    var giConfirmed = libEntry && libEntry.gi_confirmed;
+    // Find historical outcomes for this food
+    var withOutcomes = (MEAL_HISTORY || []).filter(function(m) {
+      return m.rmse != null && m.items && m.items.some(function(i){ return (i.name||'').toLowerCase() === name; });
+    });
+    var count = withOutcomes.length;
+    var avgRmse = count > 0 ? withOutcomes.reduce(function(s,m){ return s+(m.rmse||0); },0)/count : null;
+    // Score: confirmed GI + outcome history
+    var conf = giConfirmed ? 0.6 : 0.3;
+    if (count >= 10) conf += 0.4;
+    else if (count >= 5) conf += 0.3;
+    else if (count >= 2) conf += 0.15;
+    conf = Math.min(1, conf);
+    var label = conf >= 0.8 ? 'high' : conf >= 0.5 ? 'medium' : 'low';
+    var color = conf >= 0.8 ? 'rgba(62,180,120,0.8)' : conf >= 0.5 ? 'rgba(200,140,30,0.8)' : 'rgba(180,100,80,0.7)';
+    var note  = giConfirmed ? 'GI confirmed' : 'GI estimated';
+    if (count > 0) note += ' · ' + count + ' meals logged';
+    if (avgRmse != null) note += ' · avg error ' + avgRmse.toFixed(2);
+    return { conf: conf, label: label, color: color, note: note };
+  }
+
+  // ── Hypo-specific context ─────────────────────────────────────────
+  // How long was BG below threshold? What was the nadir? How fast did it recover?
+  var hypoContextHtml = '';
+  if (isHypo) {
+    var hypoBand = (HISTORY_RAW || []).filter(function(r){ return r.bg < 3.9 && Math.abs(r.t - t) < 60*60000; });
+    var hypoNadir = hypoBand.length > 0 ? Math.min.apply(null, hypoBand.map(function(r){ return r.bg; })) : bgNow;
+    var hypoDurMins = hypoBand.length > 0 ? Math.round(hypoBand.length * 5) : 0; // approx 5min readings
+    var hypoType = ev.note ? ev.note.replace('hypo:', '').replace(/_/g,' ') : 'treatment';
+    var recoveryReading = (HISTORY_RAW || []).find(function(r){ return r.t > t + 15*60000 && r.bg >= 4.0; });
+    var recoveryMins = recoveryReading ? Math.round((recoveryReading.t - t) / 60000) : null;
+    hypoContextHtml =
+      '<div style="display:grid;grid-template-columns:1fr 1fr ' + (recoveryMins ? '1fr' : '') + ';gap:6px;margin-bottom:8px">' +
+        _miniStat('nadir', hypoNadir.toFixed(1) + ' mmol', 'rgba(255,210,40,0.9)') +
+        _miniStat('below 3.9', hypoDurMins > 0 ? '~' + hypoDurMins + ' min' : '< 5 min', 'rgba(255,210,40,0.7)') +
+        (recoveryMins ? _miniStat('back to 4+', recoveryMins + ' min', 'rgba(62,180,120,0.8)') : '') +
+      '</div>' +
+      '<div style="font-size:9px;color:rgba(180,200,220,0.5);font-family:DM Mono,monospace;padding:4px 0">' +
+        'treatment: ' + hypoType + ' · ' + ev.c + 'g fast carbs' +
+      '</div>';
+  }
+
+  // ── Prick-specific context ────────────────────────────────────────
+  var prickContextHtml = '';
+  if (isPrick) {
+    var prickBG  = ev.gi || ev.c; // pricks stored as gi field
+    var cgmAtPrick = bgNow; // dataAt(t).bg
+    var lagDelta = prickBG && cgmAtPrick > 0 ? +(prickBG - cgmAtPrick).toFixed(1) : null;
+    var lagLabel = lagDelta == null ? '—'
+      : lagDelta > 1.5  ? 'CGM lagging ↓ ' + lagDelta + ' mmol behind'
+      : lagDelta < -1.5 ? 'CGM reading ↑ ' + Math.abs(lagDelta) + ' mmol above prick'
+      : 'good agreement (< 1.5 mmol)';
+    var lagColor = lagDelta == null ? 'rgba(180,200,220,0.4)'
+      : Math.abs(lagDelta) > 1.5 ? 'rgba(200,140,30,0.8)' : 'rgba(62,180,120,0.8)';
+    prickContextHtml =
+      '<div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-bottom:8px">' +
+        _miniStat('finger prick', prickBG ? prickBG.toFixed(1) + ' mmol' : '—', prickBG < 3.9 ? 'rgba(255,210,40,0.9)' : prickBG > 10 ? 'rgba(220,100,40,0.9)' : 'rgba(62,180,120,0.9)') +
+        _miniStat('CGM at same time', cgmAtPrick > 0 ? cgmAtPrick.toFixed(1) + ' mmol' : '—', 'rgba(180,200,220,0.6)') +
+      '</div>' +
+      '<div style="padding:6px 8px;border-radius:8px;background:rgba(255,255,255,0.03);font-family:DM Mono,monospace;font-size:9px;color:' + lagColor + '">' + lagLabel + '</div>';
+  }
+
+  // ── Correction-specific context ───────────────────────────────────
+  var corrContextHtml = '';
+  if (isCorrection) {
+    var corrIsf    = getISF ? getISF(t) : null;
+    var corrTarget = getTarget ? getTarget(t) : 6.0;
+    var corrExpectedDrop = (corrIsf && ev.u) ? +(ev.u * corrIsf).toFixed(1) : null;
+    var corrExpectedNadir = (corrExpectedDrop && bgNow) ? +(bgNow - corrExpectedDrop).toFixed(1) : null;
+    // Find actual nadir in next 3h
+    var corrActualNadir = null;
+    var nadirReadings = (HISTORY_RAW || []).filter(function(r){ return r.t > t && r.t <= t + 3*3600000; });
+    if (nadirReadings.length > 0) {
+      corrActualNadir = Math.min.apply(null, nadirReadings.map(function(r){ return r.bg; }));
+    }
+    corrContextHtml =
+      '<div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:6px;margin-bottom:8px">' +
+        _miniStat('dose', ev.u ? ev.u.toFixed(1) + 'U' : '—', 'rgba(60,130,220,0.9)') +
+        _miniStat('ISF used', corrIsf ? corrIsf.toFixed(1) : '—', 'rgba(180,200,220,0.6)') +
+        _miniStat('target', corrTarget ? corrTarget.toFixed(1) + ' mmol' : '—', 'rgba(180,200,220,0.6)') +
+      '</div>' +
+      (corrExpectedDrop ?
+        '<div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-bottom:8px">' +
+          _miniStat('expected drop', '−' + corrExpectedDrop + ' mmol', 'rgba(60,130,220,0.7)') +
+          _miniStat('expected nadir', corrExpectedNadir ? corrExpectedNadir.toFixed(1) + ' mmol' : '—',
+            corrExpectedNadir < 3.9 ? 'rgba(255,210,40,0.9)' : corrExpectedNadir < 5.0 ? 'rgba(200,140,30,0.8)' : 'rgba(62,180,120,0.8)') +
+        '</div>'
+      : '') +
+      (corrActualNadir != null ?
+        '<div style="padding:6px 8px;border-radius:8px;background:rgba(255,255,255,0.03);font-family:DM Mono,monospace;font-size:9px;margin-bottom:6px">' +
+          '<span style="color:rgba(160,180,200,0.4)">actual nadir: </span>' +
+          '<span style="color:' + (corrActualNadir < 3.9 ? 'rgba(255,210,40,0.9)' : 'rgba(62,180,120,0.8)') + '">' + corrActualNadir.toFixed(1) + ' mmol</span>' +
+          (corrExpectedNadir ? '<span style="color:rgba(160,180,200,0.3)"> · error ' + (corrActualNadir - corrExpectedNadir).toFixed(1) + ' mmol</span>' : '') +
+        '</div>'
+      : '');
+  }
+
+
   var itemsHtml = '';
   if (mealItems.length > 0) {
-    // Check MEAL_HISTORY for food occurrence count
-    var foodCounts = {};
-    (MEAL_HISTORY || []).forEach(function(m) {
-      if (!m.items) return;
-      m.items.forEach(function(item) {
-        var key = (item.name||'').toLowerCase();
-        foodCounts[key] = (foodCounts[key] || 0) + 1;
-      });
-    });
     itemsHtml = mealItems.map(function(item) {
-      var gi  = item.gi  || 55;
+      var gi    = item.gi || 55;
       var carbs = item.carbs || 0;
-      var grams = item.g || item.grams || 0;
-      var gl  = grams > 0 ? Math.round((gi * carbs) / 100) : Math.round((gi * carbs) / 100);
-      var giC = gi >= 70 ? 'rgba(210,80,40,0.8)' : gi >= 55 ? 'rgba(200,140,30,0.8)' : 'rgba(62,180,120,0.8)';
-      var count = foodCounts[(item.name||'').toLowerCase()] || 1;
-      return '<div style="display:grid;grid-template-columns:1fr 38px 38px 38px 50px;gap:4px;align-items:center;padding:5px 6px;border-radius:6px;background:rgba(255,255,255,0.025);margin-bottom:3px">' +
-        '<span style="font-family:DM Mono,monospace;font-size:10px;color:rgba(200,220,240,0.8)">' + (item.name||'—') + '</span>' +
-        '<span style="font-family:DM Mono,monospace;font-size:9px;color:rgba(255,140,50,0.85);text-align:right">' + carbs.toFixed(1) + 'g</span>' +
-        '<span style="font-family:DM Mono,monospace;font-size:9px;color:' + giC + ';text-align:right">GI ' + gi + '</span>' +
-        '<span style="font-family:DM Mono,monospace;font-size:9px;color:rgba(180,200,220,0.6);text-align:right">GL ' + gl + '</span>' +
-        '<span style="font-family:DM Mono,monospace;font-size:8px;color:rgba(160,180,200,0.35);text-align:right">' + count + '× seen</span>' +
-        '</div>';
+      var gl    = Math.round((gi * carbs) / 100);
+      var giC   = gi >= 70 ? 'rgba(210,80,40,0.8)' : gi >= 55 ? 'rgba(200,140,30,0.8)' : 'rgba(62,180,120,0.8)';
+      var conf  = _itemConfidence(item);
+      return '<div style="padding:5px 6px;border-radius:6px;background:rgba(255,255,255,0.025);margin-bottom:3px">' +
+        '<div style="display:grid;grid-template-columns:1fr 36px 40px 36px;gap:4px;align-items:center">' +
+          '<span style="font-family:DM Mono,monospace;font-size:10px;color:rgba(200,220,240,0.85)">' + (item.name||'—') + '</span>' +
+          '<span style="font-family:DM Mono,monospace;font-size:9px;color:rgba(255,140,50,0.85);text-align:right">' + carbs.toFixed(1) + 'g</span>' +
+          '<span style="font-family:DM Mono,monospace;font-size:9px;color:' + giC + ';text-align:right">GI ' + gi + '</span>' +
+          '<span style="font-family:DM Mono,monospace;font-size:9px;color:rgba(180,200,220,0.6);text-align:right">GL ' + gl + '</span>' +
+        '</div>' +
+        '<div style="display:flex;align-items:center;gap:5px;margin-top:3px">' +
+          '<span style="font-size:7px;padding:1px 5px;border-radius:6px;background:' + conf.color.replace('0.8','0.12') + ';color:' + conf.color + ';font-family:DM Mono,monospace">confidence: ' + conf.label + '</span>' +
+          '<span style="font-size:7px;color:rgba(160,180,200,0.3);font-family:DM Mono,monospace">' + conf.note + '</span>' +
+        '</div>' +
+      '</div>';
     }).join('');
   }
 
@@ -13206,18 +13668,26 @@ function openContextCard(eventIdx, chipData) {
     var avgGI = mealItems.length > 0 ? Math.round(mealItems.reduce(function(s,i){ return s+(i.gi||55)*(i.carbs||0); },0) / Math.max(1,totalCarbs)) : 0;
     var totalGL = Math.round((avgGI * totalCarbs) / 100);
     contextHTML += _section('Meal breakdown · ' + totalCarbs.toFixed(0) + 'g · GI avg ' + avgGI + ' · GL ' + totalGL,
-      '<div style="display:grid;grid-template-columns:1fr 38px 38px 38px 50px;gap:4px;padding:0 2px;margin-bottom:4px">' +
-        '<span style="font-size:7px;color:rgba(160,180,200,0.3);font-family:DM Mono,monospace">item</span>' +
-        '<span style="font-size:7px;color:rgba(255,140,50,0.4);font-family:DM Mono,monospace;text-align:right">carbs</span>' +
-        '<span style="font-size:7px;color:rgba(180,200,220,0.3);font-family:DM Mono,monospace;text-align:right">GI</span>' +
-        '<span style="font-size:7px;color:rgba(180,200,220,0.3);font-family:DM Mono,monospace;text-align:right">GL</span>' +
-        '<span style="font-size:7px;color:rgba(160,180,200,0.3);font-family:DM Mono,monospace;text-align:right">history</span>' +
-      '</div>' +
       itemsHtml
     , true);
   }
 
-  // COGNITIVE LOAD — collapsible
+  // HYPO-SPECIFIC SECTION
+  if (isHypo && hypoContextHtml) {
+    contextHTML += _section('Hypo detail', hypoContextHtml, true);
+  }
+
+  // PRICK-SPECIFIC SECTION
+  if (isPrick && prickContextHtml) {
+    contextHTML += _section('Sensor accuracy', prickContextHtml, true);
+  }
+
+  // CORRECTION-SPECIFIC SECTION
+  if (isCorrection && corrContextHtml) {
+    contextHTML += _section('Correction detail', corrContextHtml, true);
+  }
+
+  // COGNITIVE LOAD
   var clBar = '<div style="height:4px;border-radius:2px;background:rgba(255,255,255,0.08);margin-bottom:10px;overflow:hidden"><div style="height:100%;width:'+Math.round(clScore*10)+'%;background:'+clColor+';border-radius:2px;transition:width .3s"></div></div>';
   var clRows = clFactors.length > 0
     ? clFactors.map(function(f) {
@@ -13262,6 +13732,7 @@ function openContextCard(eventIdx, chipData) {
     '<button onclick="document.getElementById(\'ctx-card-overlay\').remove()" ' +
       'style="padding:11px 18px;border-radius:10px;border:none;background:transparent;font-family:DM Mono,monospace;font-size:10px;color:rgba(140,160,180,0.4);cursor:pointer;touch-action:manipulation">close</button>' +
     '</div>';
+
 
   // ── Build overlay ────────────────────────────────────────────────
   var el = document.createElement('div');
