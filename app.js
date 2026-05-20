@@ -4496,12 +4496,59 @@ async function _bulkFetchHistory(fromDate) {
   showToast('history loaded\n' + totalAdded + ' readings added');
 }
 
+// ── CANVAS LONG-PRESS DETECTION ──────────────────────────────────────────
+// Short tap (<400ms) → context card  |  long press (≥400ms) → edit overlay
+var _canvasTapStart = 0;
+var _canvasTapTimer = null;
+var _canvasTapMx = 0;
+var _canvasTapMy = 0;
+var _canvasTapMoved = false;
+
+CV.addEventListener('touchstart', function(e) {
+  if (e.touches.length !== 1) return;
+  _canvasTapStart = Date.now();
+  _canvasTapMoved = false;
+  var rect = CV.getBoundingClientRect();
+  _canvasTapMx = e.touches[0].clientX - rect.left;
+  _canvasTapMy = e.touches[0].clientY - rect.top;
+  // Long-press: fire edit after 450ms if not moved
+  if (_canvasTapTimer) clearTimeout(_canvasTapTimer);
+  _canvasTapTimer = setTimeout(function() {
+    if (_canvasTapMoved) return;
+    _handleCanvasHit(_canvasTapMx, _canvasTapMy, true);
+  }, 450);
+}, {passive: true});
+
+CV.addEventListener('touchmove', function(e) {
+  if (e.touches.length !== 1) return;
+  var rect = CV.getBoundingClientRect();
+  var dx = (e.touches[0].clientX - rect.left) - _canvasTapMx;
+  var dy = (e.touches[0].clientY - rect.top) - _canvasTapMy;
+  if (Math.sqrt(dx*dx + dy*dy) > 8) {
+    _canvasTapMoved = true;
+    if (_canvasTapTimer) { clearTimeout(_canvasTapTimer); _canvasTapTimer = null; }
+  }
+}, {passive: true});
+
+CV.addEventListener('touchend', function(e) {
+  if (_canvasTapTimer) { clearTimeout(_canvasTapTimer); _canvasTapTimer = null; }
+  if (_canvasTapMoved) return;
+  var held = Date.now() - _canvasTapStart;
+  if (held < 450) {
+    _handleCanvasHit(_canvasTapMx, _canvasTapMy, false);
+  }
+}, {passive: true});
+
 CV.addEventListener('click', function(e) {
+  // Mouse clicks always go to context card (short-tap equivalent)
   var rect = CV.getBoundingClientRect();
   var mx = e.clientX - rect.left;
   var my = e.clientY - rect.top;
+  _handleCanvasHit(mx, my, false);
+});
 
-  // Check ghost pebbles
+function _handleCanvasHit(mx, my, isLongPress) {
+  // Ghost pebbles → always ghost sheet
   if (window._ghostPebbleCards && _ghostPebbleCards.length > 0) {
     for (var _gi2 = 0; _gi2 < _ghostPebbleCards.length; _gi2++) {
       var _gc = _ghostPebbleCards[_gi2];
@@ -4511,7 +4558,7 @@ CV.addEventListener('click', function(e) {
       }
     }
   }
-  // Check prick diamonds first
+  // Prick diamonds
   if (window._prickCards && _prickCards.length > 0) {
     for (var pi = 0; pi < _prickCards.length; pi++) {
       var pc = _prickCards[pi];
@@ -4521,17 +4568,20 @@ CV.addEventListener('click', function(e) {
       }
     }
   }
-
-  // Then event chips
+  // Event chips
   if (!window._eventCards || _eventCards.length === 0) return;
   for (var ci = 0; ci < _eventCards.length; ci++) {
     var c = _eventCards[ci];
     if (mx >= c.x - c.w/2 && mx <= c.x + c.w/2 && my >= c.y - 12 && my <= c.y + 12) {
-      openEventEditor(c.idx);
+      if (isLongPress) {
+        openEventEditor(c.idx);
+      } else {
+        openContextCard(c.idx, c.data);
+      }
       return;
     }
   }
-});
+}
 // wheel zoom disabled — fixed 2h view
 
 // ── LOG SHEET ────────────────────────────────────────────────
@@ -12767,6 +12817,385 @@ async function deployToGitHub() {
 }
 
 // ── EVENT EDITOR — edit or delete a logged event ─────────────────────
+// ═══════════════════════════════════════════════════════════════════════
+//  CONTEXT CARD — full event story panel
+//  Tap any chip on the river to see the full context of that moment:
+//  what led up to it, what happened next, cognitive load breakdown,
+//  meal items with GI/GL, prediction vs actual curves, ghosts, and
+//  what River suggested at that point.
+// ═══════════════════════════════════════════════════════════════════════
+
+function openContextCard(eventIdx, chipData) {
+  var ev = LOGGED_EVENTS[eventIdx];
+  if (!ev) return;
+
+  // Remove any existing context card
+  var ex = document.getElementById('ctx-card-overlay');
+  if (ex) ex.remove();
+
+  var t = ev.t;
+  var dt = new Date(t);
+  var timeStr = dt.toLocaleTimeString('en-GB', {hour:'2-digit', minute:'2-digit'});
+  var dateStr = dt.toLocaleDateString('en-GB', {weekday:'short', day:'numeric', month:'short'});
+  var h = dt.getHours();
+  var period = h < 6 ? 'Overnight' : h < 10 ? 'Breakfast' : h < 14 ? 'Lunch' : h < 18 ? 'Afternoon' : h < 22 ? 'Evening' : 'Overnight';
+
+  // ── Classify event type ────────────────────────────────────────────
+  var isHypo       = ev.note && ev.note.indexOf('hypo') === 0;
+  var isMealBolus  = ev.c > 0 && ev.u > 0;
+  var isCarbOnly   = ev.c > 0 && !ev.u;
+  var isBolus      = ev.u > 0 && !ev.c;
+  var isCorrection = isBolus && (ev.note === 'correction' || ev.note === 'bolus');
+  var isMeal       = isMealBolus || (isCarbOnly && !isHypo);
+  var isPrick      = ev.note === 'prick';
+
+  var typeLabel, typeIcon, typeColor;
+  if (isHypo)       { typeLabel='Hypo Treatment'; typeIcon='🍬'; typeColor='rgba(255,210,40,0.9)'; }
+  else if (isMealBolus) { typeLabel='Meal + Bolus'; typeIcon='🍽'; typeColor='rgba(255,140,50,0.9)'; }
+  else if (isCarbOnly)  { typeLabel='Snack'; typeIcon='🍎'; typeColor='rgba(255,160,60,0.8)'; }
+  else if (isCorrection){ typeLabel='Correction'; typeIcon='💉'; typeColor='rgba(60,130,220,0.9)'; }
+  else if (isBolus)     { typeLabel='Bolus'; typeIcon='💉'; typeColor='rgba(60,130,220,0.9)'; }
+  else if (isPrick)     { typeLabel='Blood Prick'; typeIcon='🩸'; typeColor='rgba(220,60,60,0.9)'; }
+  else                  { typeLabel='Event'; typeIcon='·'; typeColor='rgba(180,200,220,0.8)'; }
+
+  // ── Context data ───────────────────────────────────────────────────
+  var d        = dataAt(t);
+  var bgNow    = d.bg;
+  var iobNow   = d.iob;
+  var cobNow   = d.cob;
+
+  // Preceding and following events (±90 min)
+  var lookback = 90 * 60000;
+  var lookahead = 90 * 60000;
+  var precedingEvts = BOLUS_EVENTS.filter(function(e) {
+    return e.t < t && e.t >= t - lookback && (e.c > 0 || e.u > 0);
+  }).sort(function(a,b){ return b.t - a.t; });
+
+  var followingEvts = BOLUS_EVENTS.filter(function(e) {
+    return e.t > t && e.t <= t + lookahead && (e.c > 0 || e.u > 0);
+  }).sort(function(a,b){ return a.t - b.t; });
+
+  // Ghosts within ±60min
+  var nearbyGhosts = (_ghostPebbles || []).filter(function(g) {
+    return Math.abs(g.t - t) <= 60 * 60000;
+  });
+
+  // MEAL_HISTORY enrichment (peak_bg, rmse, items, therapy_snapshot)
+  var mealRec = null;
+  if (isMeal || isMealBolus) {
+    mealRec = (MEAL_HISTORY || []).find(function(m) { return Math.abs(m.t - t) < 5 * 60000; });
+  }
+
+  // ── Cognitive load score ─────────────────────────────────────────
+  var clFactors = [];
+  var clScore = 0;
+  if (h < 6 || h >= 22)                     { clFactors.push({label:'Overnight', val:1, color:'rgba(120,140,220,0.7)'}); clScore+=1; }
+  var corrIob = iobNow; // rough — actual correction IOB not split here
+  if (iobNow > 1.0)                          { clFactors.push({label:'IOB stacking risk (>1U)', val:2, color:'rgba(60,130,220,0.8)'}); clScore+=2; }
+  else if (iobNow > 0.3)                     { clFactors.push({label:'Correction IOB active', val:2, color:'rgba(60,130,220,0.6)'}); clScore+=2; }
+  if (bgNow < 3.9)                           { clFactors.push({label:'Hypo active', val:2, color:'rgba(255,210,40,0.9)'}); clScore+=2; }
+  var recentCorr = precedingEvts.find(function(e){ return e.u>0 && !e.c && (t-e.t)<90*60000; });
+  if (recentCorr)                            { clFactors.push({label:'Correction in last 90min', val:1, color:'rgba(60,130,220,0.6)'}); clScore+=1; }
+  if (nearbyGhosts.length > 0)              { clFactors.push({label:'Ghost event nearby', val:1, color:'rgba(180,160,240,0.7)'}); clScore+=1; }
+  if (cobNow > 30)                           { clFactors.push({label:'High COB (>30g absorbing)', val:1, color:'rgba(255,140,50,0.7)'}); clScore+=1; }
+  clScore = Math.min(10, clScore);
+  var clColor = clScore >= 7 ? 'rgba(220,60,60,0.8)' : clScore >= 4 ? 'rgba(200,140,30,0.8)' : 'rgba(62,180,120,0.8)';
+
+  // ── Suggested / audit trail ───────────────────────────────────────
+  var hasSuggestion = ev.suggested_units || ev.override_type;
+  var suggHtml = '';
+  if (hasSuggestion) {
+    var sug = ev.suggested_units ? ev.suggested_units.toFixed(1) + 'U' : '—';
+    var del = ev.u ? ev.u.toFixed(1) + 'U' : '—';
+    var overrideTxt = '';
+    if (ev.override_type === 'forced')    overrideTxt = '<span style="color:rgba(62,180,120,0.7)">· rounding only</span>';
+    if (ev.override_type === 'direction') overrideTxt = '<span style="color:rgba(200,140,30,0.7)">· chose ' + (ev.override_dir||'') + ' rounding</span>';
+    if (ev.override_type === 'true')      overrideTxt = '<span style="color:rgba(220,80,60,0.8)">· deliberate override ' + (ev.override_dir==='up'?'↑':'↓') + (ev.override_mag?(' '+ev.override_mag+'U'):'') + '</span>';
+    suggHtml = '<div style="margin-bottom:4px"><span style="color:rgba(180,200,220,0.5);font-size:9px">suggested </span><span style="color:rgba(180,200,220,0.85)">' + sug + '</span>'
+      + '&nbsp;&nbsp;<span style="color:rgba(180,200,220,0.5);font-size:9px">given </span><span style="color:rgba(180,200,220,0.85)">' + del + '</span>'
+      + '&nbsp;&nbsp;' + overrideTxt + '</div>';
+    // Wait suggestion
+    if (ev.waitMins != null) {
+      var ws = typeof suggestEatWait === 'function' ? suggestEatWait(bgNow, ev.gi) : null;
+      if (ws != null) {
+        suggHtml += '<div style="font-size:9px;color:rgba(180,200,220,0.4)">wait suggested: ' + ws + 'min · actual: ' + (ev.waitMins||0) + 'min</div>';
+      }
+    }
+  }
+
+  // ── Inline CGM curve SVG (−60min to +90min window) ───────────────
+  function _buildCurveSVG() {
+    var winBack = 60 * 60000, winFwd = 90 * 60000;
+    var pts = (HISTORY_RAW || []).filter(function(r){ return r.t >= t - winBack && r.t <= t + winFwd && r.bg > 0; });
+    if (pts.length < 3) return '';
+    var W3 = 290, H5 = 52, PAD3 = 6;
+    var tMin3 = t - winBack, tMax3 = t + winFwd;
+    var bgVals = pts.map(function(p){ return p.bg; });
+    var bgMin3 = Math.max(2, Math.min.apply(null,bgVals) - 0.5);
+    var bgMax3 = Math.min(18, Math.max.apply(null,bgVals) + 0.5);
+    if (bgMax3 === bgMin3) bgMax3 = bgMin3 + 2;
+    function sx3(ts){ return PAD3 + (ts-tMin3)/(tMax3-tMin3)*(W3-PAD3*2); }
+    function sy3(bg){ return PAD3 + (1-(bg-bgMin3)/(bgMax3-bgMin3))*(H5-PAD3*2); }
+    var pathD3 = pts.map(function(p,i){ return (i===0?'M':'L')+sx3(p.t).toFixed(1)+','+sy3(p.bg).toFixed(1); }).join(' ');
+    var evX = sx3(t).toFixed(1);
+    var bandY1 = sy3(Math.min(bgMax3,10)).toFixed(1);
+    var bandY2 = sy3(Math.max(bgMin3,3.9)).toFixed(1);
+    // Predicted curve from meal record
+    var predPath = '';
+    if (mealRec && mealRec.predicted_curve && mealRec.predicted_curve.length > 1) {
+      var predPts = mealRec.predicted_curve.filter(function(p){ return p.mins != null && p.predicted_bg != null; });
+      if (predPts.length > 1) {
+        predPath = predPts.map(function(p,i){
+          var ptT = t + p.mins * 60000;
+          return (i===0?'M':'L') + sx3(ptT).toFixed(1) + ',' + sy3(p.predicted_bg).toFixed(1);
+        }).join(' ');
+      }
+    }
+    return '<svg width="'+W3+'" height="'+H5+'" style="display:block;overflow:visible;margin-top:4px">' +
+      '<rect x="'+PAD3+'" y="'+bandY1+'" width="'+(W3-PAD3*2)+'" height="'+(parseFloat(bandY2)-parseFloat(bandY1))+'" fill="rgba(62,180,120,0.07)" rx="2"/>' +
+      (predPath ? '<path d="'+predPath+'" fill="none" stroke="rgba(140,180,240,0.35)" stroke-width="1.5" stroke-dasharray="3,3"/>' : '') +
+      '<path d="'+pathD3+'" fill="none" stroke="rgba(62,180,120,0.8)" stroke-width="1.5" stroke-linecap="round"/>' +
+      '<line x1="'+evX+'" y1="'+PAD3+'" x2="'+evX+'" y2="'+(H5-PAD3)+'" stroke="rgba(255,255,255,0.25)" stroke-width="1" stroke-dasharray="2,3"/>' +
+      '<text x="'+PAD3+'" y="'+(H5-1)+'" font-size="7" fill="rgba(160,180,200,0.4)" font-family="DM Mono,monospace">−60min</text>' +
+      '<text x="'+(W3-PAD3)+'" y="'+(H5-1)+'" font-size="7" fill="rgba(160,180,200,0.4)" font-family="DM Mono,monospace" text-anchor="end">+90min</text>' +
+      '</svg>';
+  }
+
+  // ── Helper: render a linked event row ─────────────────────────────
+  function _evRow(e, relation) {
+    var eDt   = new Date(e.t);
+    var eTime = eDt.toLocaleTimeString('en-GB',{hour:'2-digit',minute:'2-digit'});
+    var diffMins = Math.round(Math.abs(e.t - t) / 60000);
+    var diffLabel = relation === 'before' ? diffMins + 'min before' : diffMins + 'min after';
+    var isEHypo   = e.note && e.note.indexOf('hypo') === 0;
+    var eType = (e.u > 0 && e.c > 0) ? 'meal+bolus' : e.u > 0 ? (e.note==='correction'?'correction':'bolus') : isEHypo ? 'hypo' : 'snack';
+    var eBadge = eType === 'correction' ? 'rgba(60,130,220,0.7)' :
+                 eType === 'bolus'      ? 'rgba(60,130,220,0.7)' :
+                 eType === 'hypo'       ? 'rgba(255,210,40,0.8)' :
+                 'rgba(255,140,50,0.7)';
+    var eDetail = '';
+    if (e.c > 0) eDetail += e.c + 'g';
+    if (e.u > 0) eDetail += (eDetail?'·':'')+e.u.toFixed(1)+'U';
+    var eBg = dataAt(e.t);
+    if (eBg && eBg.bg > 0) eDetail += (eDetail?' · ':'')+eBg.bg.toFixed(1)+' mmol';
+    return '<div style="display:flex;align-items:center;gap:8px;padding:5px 0;border-bottom:1px solid rgba(255,255,255,0.04)">' +
+      '<span style="font-family:DM Mono,monospace;font-size:9px;color:rgba(180,200,220,0.4);min-width:42px">' + eTime + '</span>' +
+      '<span style="font-size:8px;padding:1px 6px;border-radius:8px;background:' + eBadge + ';color:rgba(255,255,255,0.85);font-family:DM Mono,monospace;white-space:nowrap">' + eType + '</span>' +
+      '<span style="font-family:DM Mono,monospace;font-size:9px;color:rgba(180,200,220,0.7);flex:1">' + eDetail + '</span>' +
+      '<span style="font-family:DM Mono,monospace;font-size:8px;color:rgba(160,180,200,0.35)">' + diffLabel + '</span>' +
+      '</div>';
+  }
+
+  // ── Meal items table (GI, GL per item) ───────────────────────────
+  var mealItems = ev.items || (mealRec && mealRec.items) || [];
+  var itemsHtml = '';
+  if (mealItems.length > 0) {
+    // Check MEAL_HISTORY for food occurrence count
+    var foodCounts = {};
+    (MEAL_HISTORY || []).forEach(function(m) {
+      if (!m.items) return;
+      m.items.forEach(function(item) {
+        var key = (item.name||'').toLowerCase();
+        foodCounts[key] = (foodCounts[key] || 0) + 1;
+      });
+    });
+    itemsHtml = mealItems.map(function(item) {
+      var gi  = item.gi  || 55;
+      var carbs = item.carbs || 0;
+      var grams = item.g || item.grams || 0;
+      var gl  = grams > 0 ? Math.round((gi * carbs) / 100) : Math.round((gi * carbs) / 100);
+      var giC = gi >= 70 ? 'rgba(210,80,40,0.8)' : gi >= 55 ? 'rgba(200,140,30,0.8)' : 'rgba(62,180,120,0.8)';
+      var count = foodCounts[(item.name||'').toLowerCase()] || 1;
+      return '<div style="display:grid;grid-template-columns:1fr 38px 38px 38px 50px;gap:4px;align-items:center;padding:5px 6px;border-radius:6px;background:rgba(255,255,255,0.025);margin-bottom:3px">' +
+        '<span style="font-family:DM Mono,monospace;font-size:10px;color:rgba(200,220,240,0.8)">' + (item.name||'—') + '</span>' +
+        '<span style="font-family:DM Mono,monospace;font-size:9px;color:rgba(255,140,50,0.85);text-align:right">' + carbs.toFixed(1) + 'g</span>' +
+        '<span style="font-family:DM Mono,monospace;font-size:9px;color:' + giC + ';text-align:right">GI ' + gi + '</span>' +
+        '<span style="font-family:DM Mono,monospace;font-size:9px;color:rgba(180,200,220,0.6);text-align:right">GL ' + gl + '</span>' +
+        '<span style="font-family:DM Mono,monospace;font-size:8px;color:rgba(160,180,200,0.35);text-align:right">' + count + '× seen</span>' +
+        '</div>';
+    }).join('');
+  }
+
+  // ── What happened next — outcome ─────────────────────────────────
+  var outcomeHtml = '';
+  if (mealRec && mealRec.peak_bg) {
+    var peakErr = mealRec.peak_error != null ? mealRec.peak_error.toFixed(1) : null;
+    var peakErrTxt = peakErr ? (parseFloat(peakErr) > 0 ? '↑ over by '+peakErr : '↓ under by '+Math.abs(peakErr)) : '';
+    var peakErrCol = !peakErr ? '' : Math.abs(parseFloat(peakErr)) < 1 ? 'rgba(62,180,120,0.8)' : Math.abs(parseFloat(peakErr)) < 2 ? 'rgba(200,140,30,0.8)' : 'rgba(220,60,60,0.8)';
+    outcomeHtml += '<div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-bottom:8px">' +
+      _miniStat('peak BG', mealRec.peak_bg.toFixed(1) + ' mmol', 'rgba(255,140,50,0.8)') +
+      _miniStat('predicted', (mealRec.predicted_curve && mealRec.predicted_curve.length ? '~' + (mealRec.predicted_curve[Math.floor(mealRec.predicted_curve.length*0.6)] && mealRec.predicted_curve[Math.floor(mealRec.predicted_curve.length*0.6)].predicted_bg ? mealRec.predicted_curve[Math.floor(mealRec.predicted_curve.length*0.6)].predicted_bg.toFixed(1) : '—') : '—') + ' mmol', 'rgba(140,180,240,0.7)') +
+      _miniStat('peak error', peakErrTxt || '—', peakErrCol || 'rgba(180,200,220,0.4)') +
+      _miniStat('RMSE', mealRec.rmse != null ? mealRec.rmse.toFixed(2) : '—', 'rgba(180,200,220,0.4)') +
+      '</div>';
+  }
+  // Following linked events
+  if (followingEvts.length > 0) {
+    outcomeHtml += followingEvts.map(function(e){ return _evRow(e, 'after'); }).join('');
+  }
+  if (!outcomeHtml) outcomeHtml = '<div style="font-size:9px;color:rgba(160,180,200,0.3);padding:6px 0">no outcome data yet</div>';
+
+  // ── Ghost section ────────────────────────────────────────────────
+  var ghostHtml = nearbyGhosts.length > 0
+    ? nearbyGhosts.map(function(g) {
+        var gTime = new Date(g.t).toLocaleTimeString('en-GB',{hour:'2-digit',minute:'2-digit'});
+        var diffM = Math.round(Math.abs(g.t - t)/60000);
+        var gType = (g.ghost_type||'unexplained').replace(/_/g,' ');
+        var gDetail = '';
+        if (g.implied_carbs) gDetail += 'implied ' + g.implied_carbs + 'g carbs';
+        if (g.implied_units) gDetail += (gDetail?' · ':'') + 'implied ' + g.implied_units + 'U';
+        if (g.bg_at_detect)  gDetail += (gDetail?' · ':'') + g.bg_at_detect.toFixed(1) + ' mmol at detect';
+        return '<div style="padding:6px 8px;border-radius:8px;background:rgba(180,160,240,0.06);border:1px solid rgba(180,160,240,0.15);margin-bottom:5px">' +
+          '<div style="display:flex;justify-content:space-between;margin-bottom:2px">' +
+            '<span style="font-size:9px;font-family:DM Mono,monospace;color:rgba(180,160,240,0.8)">? ' + gType + '</span>' +
+            '<span style="font-size:8px;color:rgba(160,180,200,0.4);font-family:DM Mono,monospace">' + gTime + ' · ' + diffM + 'min ' + (g.t < t ? 'before' : 'after') + '</span>' +
+          '</div>' +
+          (gDetail ? '<div style="font-size:9px;color:rgba(180,160,240,0.6);font-family:DM Mono,monospace">' + gDetail + '</div>' : '') +
+          (g.confirmed_note ? '<div style="font-size:9px;color:rgba(160,180,200,0.4);font-family:DM Mono,monospace;margin-top:3px">' + g.confirmed_note + '</div>' : '') +
+          '</div>';
+      }).join('')
+    : '<div style="font-size:9px;color:rgba(160,180,200,0.3);padding:4px 0">no unexplained events nearby</div>';
+
+  // ── Build collapsible section helper ─────────────────────────────
+  var _secCount = 0;
+  function _section(title, content, defaultOpen) {
+    var id = 'ctx-sec-' + (++_secCount);
+    return '<div style="border-bottom:1px solid rgba(255,255,255,0.05);padding-bottom:2px;margin-bottom:2px">' +
+      '<button onclick="(function(){var c=document.getElementById(\''+id+'\');var a=document.getElementById(\''+id+'-arrow\');c.style.display=c.style.display===\'none\'?\'block\':\'none\';a.textContent=c.style.display===\'none\'?\'▸\':\'▾\';})()" ' +
+        'style="width:100%;background:none;border:none;cursor:pointer;display:flex;justify-content:space-between;align-items:center;padding:9px 0 5px;touch-action:manipulation">' +
+        '<span style="font-family:DM Mono,monospace;font-size:8px;letter-spacing:1.2px;text-transform:uppercase;color:rgba(180,200,220,0.4)">' + title + '</span>' +
+        '<span id="'+id+'-arrow" style="font-size:9px;color:rgba(180,200,220,0.3)">' + (defaultOpen?'▾':'▸') + '</span>' +
+      '</button>' +
+      '<div id="'+id+'" style="display:' + (defaultOpen?'block':'none') + '">' + content + '</div>' +
+      '</div>';
+  }
+
+  function _miniStat(label, val, color) {
+    return '<div style="background:rgba(255,255,255,0.03);border-radius:6px;padding:6px 8px">' +
+      '<div style="font-family:DM Mono,monospace;font-size:7px;letter-spacing:0.8px;text-transform:uppercase;color:rgba(160,180,200,0.35);margin-bottom:2px">' + label + '</div>' +
+      '<div style="font-family:DM Mono,monospace;font-size:13px;font-weight:600;color:' + (color||'rgba(200,220,240,0.8)') + '">' + val + '</div>' +
+      '</div>';
+  }
+
+  // ── Build HTML ────────────────────────────────────────────────────
+  var contextHTML = '';
+
+  // HEADER
+  contextHTML += '<div style="display:flex;align-items:center;gap:10px;margin-bottom:16px">' +
+    '<span style="font-size:24px">' + typeIcon + '</span>' +
+    '<div style="flex:1">' +
+      '<div style="font-family:Fraunces,serif;font-style:italic;font-weight:200;font-size:18px;color:' + typeColor + '">' + typeLabel + '</div>' +
+      '<div style="font-family:DM Mono,monospace;font-size:9px;color:rgba(160,180,200,0.4);letter-spacing:0.5px;margin-top:2px">' + dateStr + ' · ' + timeStr + ' · ' + period + '</div>' +
+    '</div>' +
+    '<button onclick="document.getElementById(\'ctx-card-overlay\').remove()" style="background:none;border:none;font-size:22px;color:rgba(160,180,200,0.4);cursor:pointer;padding:4px;line-height:1">×</button>' +
+    '</div>';
+
+  // AT THIS MOMENT — always open
+  contextHTML += _section('At this moment',
+    '<div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:6px;margin-bottom:4px">' +
+      _miniStat('BG', bgNow > 0 ? bgNow.toFixed(1) + ' mmol' : '—', bgNow < 3.9 ? 'rgba(255,210,40,0.9)' : bgNow > 10 ? 'rgba(220,100,40,0.9)' : 'rgba(62,180,120,0.9)') +
+      _miniStat('IOB', iobNow > 0 ? iobNow.toFixed(2) + 'U' : '0U', 'rgba(60,130,220,0.8)') +
+      _miniStat('COB', cobNow > 0 ? cobNow.toFixed(0) + 'g' : '0g', 'rgba(255,140,50,0.8)') +
+    '</div>' +
+    (ev.c > 0 || ev.u > 0 ?
+      '<div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-top:4px">' +
+        (ev.c > 0 ? _miniStat('carbs', ev.c + 'g', 'rgba(255,140,50,0.9)') : '') +
+        (ev.u > 0 ? _miniStat('insulin', ev.u.toFixed(1) + 'U', 'rgba(60,130,220,0.9)') : '') +
+        (ev.waitMins > 0 ? _miniStat('wait', ev.waitMins + ' min', 'rgba(180,200,220,0.6)') : '') +
+        (mealRec && mealRec.therapy_snapshot && mealRec.therapy_snapshot.ratios ?
+          (function() {
+            var r = (mealRec.therapy_snapshot.ratios || []).find(function(rx){ return rx.period === period; });
+            return r ? _miniStat('IC ratio', '1:' + r.ic, 'rgba(180,200,220,0.6)') + _miniStat('ISF', r.isf, 'rgba(180,200,220,0.6)') : '';
+          })()
+        : '') +
+      '</div>'
+    : '') +
+    _buildCurveSVG()
+  , true);
+
+  // MEAL ITEMS — open if has items
+  if (mealItems.length > 0) {
+    var totalCarbs = mealItems.reduce(function(s,i){ return s+(i.carbs||0); }, 0);
+    var avgGI = mealItems.length > 0 ? Math.round(mealItems.reduce(function(s,i){ return s+(i.gi||55)*(i.carbs||0); },0) / Math.max(1,totalCarbs)) : 0;
+    var totalGL = Math.round((avgGI * totalCarbs) / 100);
+    contextHTML += _section('Meal breakdown · ' + totalCarbs.toFixed(0) + 'g · GI avg ' + avgGI + ' · GL ' + totalGL,
+      '<div style="display:grid;grid-template-columns:1fr 38px 38px 38px 50px;gap:4px;padding:0 2px;margin-bottom:4px">' +
+        '<span style="font-size:7px;color:rgba(160,180,200,0.3);font-family:DM Mono,monospace">item</span>' +
+        '<span style="font-size:7px;color:rgba(255,140,50,0.4);font-family:DM Mono,monospace;text-align:right">carbs</span>' +
+        '<span style="font-size:7px;color:rgba(180,200,220,0.3);font-family:DM Mono,monospace;text-align:right">GI</span>' +
+        '<span style="font-size:7px;color:rgba(180,200,220,0.3);font-family:DM Mono,monospace;text-align:right">GL</span>' +
+        '<span style="font-size:7px;color:rgba(160,180,200,0.3);font-family:DM Mono,monospace;text-align:right">history</span>' +
+      '</div>' +
+      itemsHtml
+    , true);
+  }
+
+  // COGNITIVE LOAD — collapsible
+  var clBar = '<div style="height:4px;border-radius:2px;background:rgba(255,255,255,0.08);margin-bottom:10px;overflow:hidden"><div style="height:100%;width:'+Math.round(clScore*10)+'%;background:'+clColor+';border-radius:2px;transition:width .3s"></div></div>';
+  var clRows = clFactors.length > 0
+    ? clFactors.map(function(f) {
+        return '<div style="display:flex;justify-content:space-between;align-items:center;padding:4px 0;border-bottom:1px solid rgba(255,255,255,0.03)">' +
+          '<span style="font-family:DM Mono,monospace;font-size:9px;color:rgba(180,200,220,0.6)">' + f.label + '</span>' +
+          '<span style="font-family:DM Mono,monospace;font-size:9px;color:' + f.color + ';font-weight:600">+' + f.val + '</span>' +
+          '</div>';
+      }).join('')
+    : '<div style="font-size:9px;color:rgba(160,180,200,0.35);font-family:DM Mono,monospace">no load factors active</div>';
+  contextHTML += _section('Cognitive load · ' + clScore + '/10',
+    clBar + clRows
+  , false);
+
+  // PRECEDING EVENTS
+  contextHTML += _section('Preceding events (90min)',
+    precedingEvts.length > 0
+      ? precedingEvts.map(function(e){ return _evRow(e, 'before'); }).join('')
+      : '<div style="font-size:9px;color:rgba(160,180,200,0.3);padding:6px 0">nothing logged in prior 90min</div>'
+  , true);
+
+  // WHAT HAPPENED NEXT
+  contextHTML += _section('What happened next',
+    outcomeHtml
+  , true);
+
+  // UNEXPLAINED / GHOSTS
+  contextHTML += _section('Unexplained nearby (' + nearbyGhosts.length + ')',
+    ghostHtml
+  , nearbyGhosts.length > 0);
+
+  // WHAT WAS SUGGESTED
+  contextHTML += _section('What River suggested',
+    hasSuggestion
+      ? suggHtml
+      : '<div style="font-size:9px;color:rgba(160,180,200,0.3);padding:4px 0">no suggestion recorded at this event</div>'
+  , false);
+
+  // EDIT BUTTON
+  contextHTML += '<div style="margin-top:16px;display:flex;gap:8px">' +
+    '<button onclick="document.getElementById(\'ctx-card-overlay\').remove();openEventEditor('+eventIdx+')" ' +
+      'style="flex:1;padding:11px;border-radius:10px;border:1px solid rgba(180,200,220,0.15);background:rgba(255,255,255,0.03);font-family:DM Mono,monospace;font-size:10px;letter-spacing:0.5px;color:rgba(180,200,220,0.5);cursor:pointer;touch-action:manipulation">edit entry</button>' +
+    '<button onclick="document.getElementById(\'ctx-card-overlay\').remove()" ' +
+      'style="padding:11px 18px;border-radius:10px;border:none;background:transparent;font-family:DM Mono,monospace;font-size:10px;color:rgba(140,160,180,0.4);cursor:pointer;touch-action:manipulation">close</button>' +
+    '</div>';
+
+  // ── Build overlay ────────────────────────────────────────────────
+  var el = document.createElement('div');
+  el.id = 'ctx-card-overlay';
+  el.style.cssText = 'position:fixed;inset:0;z-index:80;background:rgba(3,5,20,0.88);' +
+    'backdrop-filter:blur(18px);display:flex;flex-direction:column;align-items:center;' +
+    'justify-content:flex-end;padding:0;pointer-events:auto;touch-action:pan-y';
+  el.addEventListener('click', function(e){ if (e.target === el) el.remove(); });
+  el.addEventListener('touchstart', function(e){ e.stopPropagation(); }, {passive:true});
+
+  var inner = document.createElement('div');
+  inner.style.cssText = 'width:100%;max-width:440px;max-height:88vh;overflow-y:auto;' +
+    'background:rgba(8,12,28,0.99);border-top-left-radius:20px;border-top-right-radius:20px;' +
+    'padding:20px 18px 48px;box-sizing:border-box;-webkit-overflow-scrolling:touch';
+  inner.innerHTML = contextHTML;
+
+  el.appendChild(inner);
+  document.body.appendChild(el);
+}
+
+
 function openEventEditor(eventIdx) {
   // Find by index in LOGGED_EVENTS (BOLUS_EVENTS is a live alias)
   var ev = LOGGED_EVENTS[eventIdx];
