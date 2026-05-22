@@ -1545,16 +1545,30 @@ function _drawCOBReservoir() {
 
       var sigmaFactor = gi >= 70 ? 0.6 : gi >= 55 ? 1.0 : 1.5;
       var sigma  = _bellSigma(sigmaFactor);
-      var lineY  = dataAt ? bgToY(dataAt(viewTime).bg) : H * 0.5;
-      var availableH = H - lineY - 8;
-      var maxD   = Math.min(availableH * 0.92, 90 * (food.carbs / 20));
-      var minD   = Math.min(availableH * 0.12, 18);
-      maxD = Math.max(minD, maxD);
+
+      // Chip Y — origin on CGM line at meal time
+      var baseBG  = (dataAt(meal.t).bg) || (dataAt(viewTime).bg) || 7.0;
+      var chipY   = bgToY(baseBG);
+
+      // ── maxD in mmol-space ────────────────────────────────────────────
+      // Peak predicted BG rise from these carbs alone (no insulin offset):
+      //   peakRise = carbs / IC × 1 (each unit covers IC grams, each unit drops ISF mmol)
+      //   = carbs × (ISF / IC)  ... but ISF is mmol/unit and IC is g/unit
+      //   Simpler: rise_per_gram = ISF / IC
+      // We don't subtract IOB here — the bell shows the carb force alone.
+      // The insulin bell shows the opposing force. The gap is the story.
+      var IC      = getIC(meal.t) || 10;
+      var ISF     = getISF(meal.t) || 7;
+      var risePerGram = ISF / IC;              // mmol rise per gram of carb absorbed
+      var peakRise    = food.carbs * risePerGram; // uninsulinised peak rise in mmol
+      // Cap at sensible visual maximum (22 mmol ceiling, 1 mmol floor)
+      peakRise = Math.max(1.0, Math.min(peakRise, 22 - baseBG));
+      // Convert mmol rise to pixels: height = bgToY(baseBG) - bgToY(baseBG + rise)
+      // bgToY maps higher BG to lower Y — so a rise means moving up (smaller Y)
+      var maxD = Math.max(8, chipY - bgToY(baseBG + peakRise));
 
       var sigmaMins   = peakMin / 2.2;
       var mealT_local = meal.t;
-      // Chip Y — origin point on the CGM line where this bell is born
-      var chipY = bgToY(dataAt(meal.t).bg || dataAt(viewTime).bg);
 
       var bellH = function(px) {
         var t_px = viewTime + (px - NOW_X * W) / W * viewSpan;
@@ -1651,7 +1665,7 @@ function _drawCOBReservoir() {
         var fastPeakMin = Math.max(10, 95 - gi) * 0.6;
         var fastPeakT   = meal.t + fastPeakMin * 60000;
         var fastSigmaM  = fastPeakMin / 1.6;
-        var fastMaxD    = maxD * 0.55;
+        var fastMaxD    = maxD * 0.65; // fast sugar reaches ~65% of full peak quickly
         var fastBellH = function(px2) {
           var t_px2 = viewTime + (px2 - NOW_X * W) / W * viewSpan;
           if (t_px2 < mealT_local) return 0;
@@ -1719,12 +1733,33 @@ function _drawIOBReservoir() {
     var sigmaRMins  = 32;
     var sigmaFMins  = 70;
 
-    // Chip Y — origin on CGM line where this bell is born
-    var chipY     = bgToY(dataAt(bolus.t).bg || dataAt(viewTime).bg);
-    var availableH = Math.max(chipY - 8, 40); // space above chip toward top of canvas
-    var maxD       = Math.min(availableH * 0.90, 110 * (bolus.u / 3));
-    var minD       = Math.min(availableH * 0.12, 18);
-    maxD = Math.max(minD, maxD);
+    // Chip Y — origin on CGM line at bolus time
+    var baseBG_iob = (dataAt(bolus.t).bg) || (dataAt(viewTime).bg) || 7.0;
+    var chipY      = bgToY(baseBG_iob);
+
+    // ── maxD in mmol-space ────────────────────────────────────────────
+    // Peak predicted BG drop from this bolus alone:
+    //   peakDrop = bolus.u × ISF (mmol per unit)
+    // The bell shows the insulin force alone — how much it could suppress.
+    // Cap so it doesn't go below hypo threshold floor.
+    var ISF_iob   = getISF(bolus.t) || 7;
+    var peakDrop  = bolus.u * ISF_iob;
+    var floorBG   = Math.max(2.5, baseBG_iob - peakDrop);
+    peakDrop      = Math.max(1.0, baseBG_iob - floorBG);
+    // Height in pixels: insulin drops BG, so bell extends upward from chipY
+    // bgToY(lower BG) = larger Y (lower on screen)
+    // We want height = bgToY(baseBG - drop) - bgToY(baseBG) ... but inverted
+    // since bell draws ABOVE chipY: maxD = chipY - bgToY(baseBG - peakDrop)
+    // Actually: dropping BG moves DOWN on screen, but IOB bell draws UP from chipY
+    // So we use the same coordinate: height = bgToY(baseBG - peakDrop) - chipY
+    // Wait — bgToY(lower BG) → larger Y (lower screen position)
+    // chipY = bgToY(baseBG). bgToY(baseBG - drop) > chipY (further down).
+    // The IOB bell represents suppression — it draws upward from chipY into the sky.
+    // maxD should be proportional to drop magnitude, expressed as a pixel height.
+    // Use COB as reference: same ISF means same pixel height for equivalent mmol effect.
+    var maxD = Math.max(8, bgToY(baseBG_iob - peakDrop) - bgToY(baseBG_iob));
+    // Cap at space available above chipY
+    maxD = Math.min(maxD, Math.max(chipY - 8, 40));
 
     var bolusT_local = bolus.t;
 
@@ -2238,32 +2273,44 @@ function drawUnknownForce(pal) {
         if (t_px < meal.t) return;
         var rampMins = Math.min(1.0, (t_px - meal.t) / (8 * 60000));
         var ramp     = rampMins * rampMins * (3 - 2 * rampMins);
-        var maxD     = Math.min((H - cgmY - 8) * 0.92, 90 * (food.carbs / 20));
-        var h        = Math.exp(-0.5 * Math.pow((t_px - peakT) / 60000 / sigmaM, 2)) * maxD * ramp;
-        if (h > cobH) cobH = h;
+        // mmol-space maxD — matches _drawCOBReservoir
+        var baseBG_m  = dataAt(meal.t).bg || dataAt(t_px).bg || 7.0;
+        var IC_m      = getIC(meal.t) || 10;
+        var ISF_m     = getISF(meal.t) || 7;
+        var peakRise  = Math.max(1.0, Math.min(food.carbs * ISF_m / IC_m, 22 - baseBG_m));
+        var chipY_m   = bgToY(baseBG_m);
+        var maxD      = Math.max(8, chipY_m - bgToY(baseBG_m + peakRise));
+        var h         = Math.exp(-0.5 * Math.pow((t_px - peakT) / 60000 / sigmaM, 2)) * maxD * ramp;
+        var cobTopCandidate = chipY_m - h;
+        if (cobTopCandidate < cobH || cobH === 0) cobH = cobTopCandidate; // track highest surface (lowest Y)
       });
     });
 
     // IOB bottom surface — deepest IOB bell at this pixel
-    var iobH = 0;
+    var iobTopY = cgmY; // track highest IOB surface (smallest Y = furthest above CGM)
     var bolusEvents = _getActiveBolusEvents();
     bolusEvents.forEach(function(bolus) {
       var peakT    = bolus.t + 75 * 60000;
       var sigmaR   = 32, sigmaF = 70;
-      var diaMins  = (_TREATMENT && _TREATMENT.dia) ? _TREATMENT.dia : 240;
-      var maxD     = Math.min((cgmY - 8) * 0.90, 110 * (bolus.u / 3));
-      var rmpMins  = Math.min(1.0, Math.max(0, (t_px - bolus.t) / (12 * 60000)));
-      var ramp     = rmpMins * rmpMins * (3 - 2 * rmpMins);
-      var md       = (t_px - peakT) / 60000;
-      var sigma    = md < 0 ? sigmaR : sigmaF;
-      var h        = Math.exp(-0.5 * Math.pow(md / sigma, 2)) * maxD * ramp;
-      if (h > iobH) iobH = h;
+      // mmol-space maxD — matches _drawIOBReservoir
+      var baseBG_b  = dataAt(bolus.t).bg || dataAt(t_px).bg || 7.0;
+      var chipY_b   = bgToY(baseBG_b);
+      var ISF_b     = getISF(bolus.t) || 7;
+      var peakDrop  = Math.max(1.0, Math.min(bolus.u * ISF_b, baseBG_b - 2.5));
+      var maxD      = Math.min(Math.max(8, bgToY(baseBG_b - peakDrop) - chipY_b), chipY_b - 8);
+      var rmpMins   = Math.min(1.0, Math.max(0, (t_px - bolus.t) / (12 * 60000)));
+      var ramp      = rmpMins * rmpMins * (3 - 2 * rmpMins);
+      var md        = (t_px - peakT) / 60000;
+      var sigma     = md < 0 ? sigmaR : sigmaF;
+      var h         = Math.exp(-0.5 * Math.pow(md / sigma, 2)) * maxD * ramp;
+      var iobTopCandidate = chipY_b - h;
+      if (iobTopCandidate < iobTopY) iobTopY = iobTopCandidate;
     });
 
-    // Chip Y for COB/IOB origin (use CGM at viewTime as reference for now)
-    var chipY = cgmY;
-    var cobTopY = chipY - cobH;  // COB surface: Y above chip
-    var iobBotY = chipY - iobH; // IOB surface: Y above chip
+    // Mist zone: between COB top surface and IOB top surface, bounded by CGM
+    // cobH now stores cobTopY (Y coord of COB surface); iobTopY is IOB surface Y
+    var cobTopY  = (cobH === 0) ? cgmY : cobH;
+    var iobBotY  = iobTopY;
 
     mistPts.push({ px: px, cgmY: cgmY, cobTopY: cobTopY, iobBotY: iobBotY, cobH: cobH, iobH: iobH });
   }
