@@ -848,10 +848,18 @@ function dataAt(t) {
   return { bg:h.bg, iob:h.iob+si, cob:h.cob+sc, pen:h.pen };
 }
 
+var _iobNormCache = {}; // cache {diaMins: norm} to avoid recomputing every frame
 function iobF(m) {
-  if (m<=0) return 1; if (m>=240) return 0;
-  let d=0; for(let x=0;x<m;x+=2) d+=(x<=70?x/70:Math.max(0,1-(x-70)/170))*2;
-  return Math.max(0,1-Math.min(1,d/105));
+  var diaMins = (_TREATMENT && _TREATMENT.dia) ? _TREATMENT.dia : 240;
+  if (m<=0) return 1; if (m>=diaMins) return 0;
+  var peakM = diaMins * 0.3125;
+  var tailM = diaMins - peakM;
+  if (!_iobNormCache[diaMins]) {
+    var norm=0; for(var x=0;x<diaMins;x+=2) norm+=(x<=peakM?x/peakM:Math.max(0,1-(x-peakM)/tailM))*2;
+    _iobNormCache[diaMins] = norm;
+  }
+  var d=0; for(var x=0;x<m;x+=2) d+=(x<=peakM?x/peakM:Math.max(0,1-(x-peakM)/tailM))*2;
+  return Math.max(0,1-Math.min(1,d/_iobNormCache[diaMins]));
 }
 function cobF(m,gi=60) {
   if (m<=0) return 1; if (m>=240) return 0;
@@ -1386,9 +1394,9 @@ function topUpCOB(grams)  { _cobReservoir = Math.min(1, _cobReservoir + grams / 
 function topUpIOB(units)  { _iobReservoir = Math.min(1, _iobReservoir + units / 6);  }
 
 function _getActiveMealEvents() {
-  // Always use real clock for cutoff — not viewTime which can be scrubbed back.
-  // This prevents old events from appearing when user scrolls left.
-  var cutoff = Date.now() - 6 * 3600000;
+  // 12h cutoff — long enough to cover breakfast-to-evening. Not viewTime-based
+  // to avoid old events reappearing when scrolling back.
+  var cutoff = Date.now() - 12 * 3600000;
   var events = [], seen = {};
   BOLUS_EVENTS.concat(SESSION).forEach(function(ev) {
     if (!ev.c || ev.c <= 0 || ev.t < cutoff) return;
@@ -1402,7 +1410,7 @@ function _getActiveMealEvents() {
 }
 
 function _getActiveBolusEvents() {
-  var cutoff = Date.now() - 6 * 3600000;
+  var cutoff = Date.now() - 12 * 3600000;
   var events = [], seen = {};
   BOLUS_EVENTS.concat(SESSION).forEach(function(ev) {
     if (!ev.u || ev.u <= 0 || ev.t < cutoff) return;
@@ -1482,11 +1490,18 @@ function _cobFgi(mins, gi) {
   return Math.max(0, 1 - Math.min(1, 0.5*(1+Math.tanh(0.7978845608*(z+0.044715*z*z*z)))));
 }
 
-function _iobFn(mins) {
-  if (mins <= 0) return 1; if (mins >= 240) return 0;
+function _iobFn(mins, diaMins) {
+  diaMins = diaMins || 240;
+  if (mins <= 0) return 1; if (mins >= diaMins) return 0;
+  var peakM = diaMins * 0.3125;
+  var tailM = diaMins - peakM;
+  if (!_iobNormCache[diaMins]) {
+    var norm=0; for(var x=0;x<diaMins;x+=2) norm+=(x<=peakM?x/peakM:Math.max(0,1-(x-peakM)/tailM))*2;
+    _iobNormCache[diaMins] = norm;
+  }
   var d = 0;
-  for (var x = 0; x < mins; x += 2) d += (x<=70 ? x/70 : Math.max(0,1-(x-70)/170))*2;
-  return Math.max(0, 1 - Math.min(1, d/105));
+  for (var x = 0; x < mins; x += 2) d += (x <= peakM ? x/peakM : Math.max(0,1-(x-peakM)/tailM))*2;
+  return Math.max(0, 1 - Math.min(1, d / _iobNormCache[diaMins]));
 }
 
 // Zoom-aware sigma: bell width scales with viewSpan so it looks right at any zoom
@@ -1512,7 +1527,7 @@ function _drawCOBReservoir() {
       var peakX      = tX(peakT);  // scroll-aware
       var elapsedMin = (viewTime - meal.t) / 60000;
       var remaining  = _cobFgi(elapsedMin, gi);
-      if (remaining < 0.02) return;
+      // No early return — rim always drawn. Fill fades with remaining.
 
       // GI \u2192 colour via continuous ramp (user-configurable)
       var giCol=giToColour(gi), rv=giCol[0], gv=giCol[1], bv=giCol[2];
@@ -1523,10 +1538,11 @@ function _drawCOBReservoir() {
       // Deeper into the flow — reservoir peaks closer to BG line
       var lineY      = dataAt ? bgToY(dataAt(viewTime).bg) : H * 0.5;
       var availableH = H - lineY - 8;  // space from bottom to just below BG line
-      var maxD  = Math.min(availableH * 0.92, 90 * (food.carbs / 20) * remaining);
-      // Minimum visible height — even 1g carb should be perceptible on the canvas
+      // Bell height is fixed at peak size — doesn't shrink as carbs deplete.
+      // remaining only drives opacity so the shape scrolls past like a fixed river object.
+      var maxD  = Math.min(availableH * 0.92, 90 * (food.carbs / 20));
       var minD  = Math.min(availableH * 0.12, 18);
-      maxD = Math.max(minD * remaining, maxD);
+      maxD = Math.max(minD, maxD);
 
       // Draw bell in TIME-SPACE, not pixel-space.
       // This correctly handles peakT off-screen left or right.
@@ -1555,16 +1571,16 @@ function _drawCOBReservoir() {
       gr.addColorStop(0,   'rgba('+rv+','+gv+','+bv+','+(0.22+remaining*0.28)+')');
       gr.addColorStop(0.5, 'rgba('+rv+','+gv+','+bv+','+(remaining*0.12)+')');
       gr.addColorStop(1,   'rgba('+rv+','+gv+','+bv+',0)');
-      CX.fillStyle = gr; CX.fill();
+      if (remaining > 0.01) { CX.fillStyle = gr; CX.fill(); }
 
-      // Rim
+      // Rim — always drawn, fades to a ghost outline when depleted
       CX.beginPath();
       for (var i = 0; i <= 280; i++) {
         var px = (i/280)*W;
         var py = H - bellH(px);
         i===0 ? CX.moveTo(px,py) : CX.lineTo(px,py);
       }
-      CX.strokeStyle='rgba('+rv+','+gv+','+bv+','+(0.35+remaining*0.45)+')';
+      CX.strokeStyle='rgba('+rv+','+gv+','+bv+','+(0.18 + remaining*0.42)+')';
       CX.lineWidth=1.2; CX.stroke();
 
       // ── Fast-sugar highlight layer (GI ≥ 80) ───────────────────────
@@ -1576,7 +1592,7 @@ function _drawCOBReservoir() {
         var fastPeakMin = Math.max(10, 95 - gi) * 0.6; // faster peak than full bell
         var fastPeakT   = meal.t + fastPeakMin * 60000;
         var fastSigmaM  = fastPeakMin / 1.6;
-        var fastMaxD    = maxD * 0.55 * remaining;
+        var fastMaxD    = maxD * 0.55;
         function fastBellH(px2) {
           var t_px2 = viewTime + (px2 - NOW_X*W) / W * viewSpan;
           if (t_px2 < mealT_local) return 0;
@@ -1637,20 +1653,22 @@ function _drawIOBReservoir() {
 
   bolusEvents.forEach(function(bolus) {
     var elapsedMin = (viewTime - bolus.t) / 60000;
-    var remaining  = _iobFn(elapsedMin);
-    if (remaining < 0.02) return;
+    // DIA from therapy settings — default 240min if not set
+    var diaMins    = (_TREATMENT && _TREATMENT.dia) ? _TREATMENT.dia : 240;
+    var remaining  = _iobFn(elapsedMin, diaMins);
+    // No early return — rim always drawn. Fill fades with remaining.
 
     // Time-space bell — mirrors COB approach so it tracks correctly on scroll
     // Novorapid: peak ~75min, quick rise (sigmaR), long tail (sigmaF)
     var peakT       = bolus.t + 75 * 60000;
-    var peakMins    = 75;
     var sigmaRMins  = 32;   // rise side — steeper
     var sigmaFMins  = 70;   // fall side — long Novorapid tail
     var lineY       = dataAt ? bgToY(dataAt(viewTime).bg) : H * 0.5;
     var availableH  = lineY - 8;
-    var maxD        = Math.min(availableH * 0.90, 110 * (bolus.u / 3) * remaining);
+    // Bell height fixed at peak size — remaining drives opacity not size
+    var maxD        = Math.min(availableH * 0.90, 110 * (bolus.u / 3));
     var minD        = Math.min(availableH * 0.12, 18);
-    maxD = Math.max(minD * remaining, maxD);
+    maxD = Math.max(minD, maxD);
 
     var bolusT_local = bolus.t;
 
@@ -1665,29 +1683,30 @@ function _drawIOBReservoir() {
 
     var rv = COL_IOB[0], gv = COL_IOB[1], bv = COL_IOB[2];
 
-    // Fill — from lineY upward (mirrors COB which fills from lineY downward)
+    // Fill — from top of canvas down to bell surface (insulin falls from above)
     CX.beginPath();
-    CX.moveTo(0, lineY);
+    CX.moveTo(0, 0);
     for (var i = 0; i <= 280; i++) {
       var px = (i / 280) * W;
-      CX.lineTo(px, lineY - bellH_iob(px));
+      CX.lineTo(px, bellH_iob(px));
     }
-    CX.lineTo(W, lineY); CX.closePath();
+    CX.lineTo(W, 0); CX.closePath();
 
-    var gr = CX.createLinearGradient(0, lineY, 0, lineY - maxD);
+    // Gradient from top down to maxD pixels — anchored at y=0
+    var gr = CX.createLinearGradient(0, 0, 0, maxD);
     gr.addColorStop(0,   'rgba(' + rv + ',' + gv + ',' + bv + ',' + (0.22 + remaining * 0.28) + ')');
     gr.addColorStop(0.5, 'rgba(' + rv + ',' + gv + ',' + bv + ',' + (remaining * 0.12) + ')');
     gr.addColorStop(1,   'rgba(' + rv + ',' + gv + ',' + bv + ',0)');
     CX.fillStyle = gr; CX.fill();
 
-    // Rim — always drawn; fades to ghost when depleted
+    // Rim — traces bell surface, always drawn
     CX.beginPath();
     for (var i = 0; i <= 280; i++) {
       var px = (i / 280) * W;
-      var py = lineY - bellH_iob(px);
+      var py = bellH_iob(px);
       i === 0 ? CX.moveTo(px, py) : CX.lineTo(px, py);
     }
-    CX.strokeStyle = 'rgba(' + rv + ',' + gv + ',' + bv + ',' + (0.18 + remaining * 0.42) + ')';
+    CX.strokeStyle = 'rgba(' + rv + ',' + gv + ',' + bv + ',' + (0.35 + remaining * 0.45) + ')';
     CX.lineWidth = 1.2; CX.stroke();
 
     // Label at peak
@@ -1698,7 +1717,7 @@ function _drawIOBReservoir() {
       CX.fillStyle   = 'rgba(' + rv + ',' + gv + ',' + bv + ',1)';
       CX.font        = "300 8px 'DM Mono',monospace";
       CX.textAlign   = 'center';
-      CX.fillText(bolus.u.toFixed(1) + 'U', peakX, lineY - peakD - 6);
+      CX.fillText(bolus.u.toFixed(1) + 'U', peakX, peakD + 10);
       CX.globalAlpha = 1;
     }
 
@@ -1717,7 +1736,7 @@ function _drawIOBReservoir() {
     CX.beginPath();
     for (var i2 = 0; i2 <= 280; i2++) {
       var px2 = (i2 / 280) * W;
-      i2 === 0 ? CX.moveTo(px2, lineY - bellH_eff(px2)) : CX.lineTo(px2, lineY - bellH_eff(px2));
+      i2 === 0 ? CX.moveTo(px2, bellH_eff(px2)) : CX.lineTo(px2, bellH_eff(px2));
     }
     CX.strokeStyle = 'rgba(' + rv + ',' + gv + ',' + bv + ',0.28)';
     CX.lineWidth = 1.0; CX.setLineDash([5, 5]); CX.stroke(); CX.setLineDash([]);
@@ -1739,10 +1758,66 @@ function _drawIOBReservoir() {
       CX.beginPath();
       for (var i3 = 0; i3 <= 280; i3++) {
         var px3 = (i3 / 280) * W;
-        i3 === 0 ? CX.moveTo(px3, lineY - bellH_obs(px3)) : CX.lineTo(px3, lineY - bellH_obs(px3));
+        i3 === 0 ? CX.moveTo(px3, bellH_obs(px3)) : CX.lineTo(px3, bellH_obs(px3));
       }
       CX.strokeStyle = 'rgba(180,220,255,0.22)';
       CX.lineWidth = 0.8; CX.setLineDash([2, 5]); CX.stroke(); CX.setLineDash([]);
+      CX.restore();
+    }
+
+    // Curve 2 — clinical effective (wider tail, dashed)
+    var sigmaF_eff = sigmaFMins * 1.35;
+    function bellH_eff(px) {
+      var t_px = viewTime + (px - NOW_X * W) / W * viewSpan;
+      var md   = (t_px - peakT) / 60000;
+      var rmp  = Math.min(1.0, Math.max(0, (t_px - bolusT_local) / (12 * 60000)));
+      var ramp = rmp * rmp * (3 - 2 * rmp);
+      var sig  = md < 0 ? sigmaRMins : sigmaF_eff;
+      return Math.exp(-0.5 * Math.pow(md / sig, 2)) * maxD * ramp;
+    }
+    CX.save();
+    CX.beginPath();
+    for (var i = 0; i <= 280; i++) {
+      var px = (i / 280) * W;
+      var py = lineY - bellH_eff(px);
+      i === 0 ? CX.moveTo(px, py) : CX.lineTo(px, py);
+    }
+    CX.strokeStyle = 'rgba(' + rv + ',' + gv + ',' + bv + ',0.28)';
+    CX.lineWidth   = 1.0;
+    CX.setLineDash([5, 5]);
+    CX.stroke();
+    CX.setLineDash([]);
+    CX.restore();
+
+    // Curve 3 — observed (from bolus_outcomes.return_mins median), dotted
+    var observedDIA = null;
+    if (_observedISF && window._observedReturnMins && window._observedReturnMins[bolus.t]) {
+      observedDIA = window._observedReturnMins[bolus.t];
+    } else if (window._medianReturnMins && window._medianReturnMins > 0) {
+      observedDIA = window._medianReturnMins;
+    }
+    if (observedDIA && Math.abs(observedDIA - diaMins) > 10) {
+      var sigmaF_obs = observedDIA * (sigmaFMins / diaMins); // scale to observed DIA
+      function bellH_obs(px) {
+        var t_px = viewTime + (px - NOW_X * W) / W * viewSpan;
+        var md   = (t_px - peakT) / 60000;
+        var rmp  = Math.min(1.0, Math.max(0, (t_px - bolusT_local) / (12 * 60000)));
+        var ramp = rmp * rmp * (3 - 2 * rmp);
+        var sig  = md < 0 ? sigmaRMins : sigmaF_obs;
+        return Math.exp(-0.5 * Math.pow(md / sig, 2)) * maxD * ramp;
+      }
+      CX.save();
+      CX.beginPath();
+      for (var i = 0; i <= 280; i++) {
+        var px = (i / 280) * W;
+        var py = lineY - bellH_obs(px);
+        i === 0 ? CX.moveTo(px, py) : CX.lineTo(px, py);
+      }
+      CX.strokeStyle = 'rgba(180,220,255,0.22)';
+      CX.lineWidth   = 0.8;
+      CX.setLineDash([2, 5]);
+      CX.stroke();
+      CX.setLineDash([]);
       CX.restore();
     }
 
@@ -2014,8 +2089,9 @@ function drawGasCloud(cobPts, col, direction, d) {
         });
         if(_bf) _domGI=_bf.gi||55;
       }
-      if(Math.random()<_cobReservoir*0.88) _spawnForceParticle('cob',_domGI);
-      if(Math.random()<_iobReservoir*0.82) _spawnForceParticle('iob');
+      // Particle spawning disabled — animated drops/bubbles removed
+      // if(Math.random()<_cobReservoir*0.88) _spawnForceParticle('cob',_domGI);
+      // if(Math.random()<_iobReservoir*0.82) _spawnForceParticle('iob');
     }
     if(_forceFrame%15===0){
       var lineY=d?bgToY(d.bg):H/2;
@@ -2062,9 +2138,10 @@ function drawGasCloud(cobPts, col, direction, d) {
   if(isCob){
     var lineY=d?bgToY(d.bg):H/2;
     _drawMists();
-    _drawPressureGlow(lineY);
-    _drawForceParticles(lineY);
-    _drawSparks();
+    // Animated drops/bubbles removed — visual noise, superseded by ribbon system
+    // _drawPressureGlow(lineY);
+    // _drawForceParticles(lineY);
+    // _drawSparks();
   }
 }
 
@@ -4384,6 +4461,25 @@ function frame(ts) {
   drawForecastTrace(pal);   // forecast BG line beyond now (navigable)
   drawTimeLabels(pal);
 
+  // ── FUTURE MODE INDICATOR — clear signal when scrubbed past now ──
+  var _isScrubFuture = viewTime > CGM_END + 60000;
+  if (_isScrubFuture) {
+    // Blue tint overlay — unmistakably "not now"
+    var _futGrad = CX.createLinearGradient(0, 0, W, 0);
+    _futGrad.addColorStop(0, 'rgba(40,80,200,0)');
+    _futGrad.addColorStop(0.3, 'rgba(40,80,200,0.07)');
+    _futGrad.addColorStop(1, 'rgba(40,80,200,0.13)');
+    CX.fillStyle = _futGrad;
+    CX.fillRect(0, 0, W, H);
+    // "looking ahead" label — top left, clear and calm
+    CX.save();
+    CX.font = "300 10px 'DM Mono',monospace";
+    CX.textAlign = 'left';
+    CX.fillStyle = 'rgba(100,150,255,0.55)';
+    CX.fillText('looking ahead ›', 14, 22);
+    CX.restore();
+  }
+
   // ── THE ORB — buoyant on BG line ────────────────────────────────
   drawOrb(pal, d);
 
@@ -4439,6 +4535,11 @@ function frame(ts) {
   }
   nowBtn.style.opacity        = awayFromNow ? '0.9' : '0';
   nowBtn.style.pointerEvents  = awayFromNow ? 'auto' : 'none';
+  // Label and colour differ for future vs past scrub
+  var _scrubIsFuture = viewTime > (latestT + 60000);
+  nowBtn.textContent = _scrubIsFuture ? '← now' : 'now ›';
+  nowBtn.style.borderColor = _scrubIsFuture ? 'rgba(100,150,255,0.5)' : 'rgba(62,180,120,0.35)';
+  nowBtn.style.color = _scrubIsFuture ? 'rgba(120,160,255,0.9)' : 'rgba(62,200,140,0.85)';
 
   // time labels handled by drawTimeLabels
 
@@ -6171,9 +6272,11 @@ async function loadObservedISF() {
       var mean = vals.reduce(function(s,v){return s+v;},0) / vals.length;
       _observedISF[period] = { mean: +mean.toFixed(2), count: vals.length };
     });
+    // Median observed DIA from return_mins — used for the observed IOB curve overlay
     if (returnMinsAll.length >= 3) {
       var sorted = returnMinsAll.slice().sort(function(a,b){return a-b;});
       window._medianReturnMins = sorted[Math.floor(sorted.length / 2)];
+      console.log('[observed DIA] median return_mins:', window._medianReturnMins + 'min from ' + returnMinsAll.length + ' outcomes');
     }
     if (Object.keys(_observedISF).length > 0) {
       console.log('[adaptive ISF] loaded:', JSON.stringify(_observedISF));
@@ -13259,24 +13362,39 @@ function openContextCard(eventIdx, chipData) {
   var isMealBolus  = ev.c > 0 && ev.u > 0;
   var isCarbOnly   = ev.c > 0 && !ev.u;
   var isBolus      = ev.u > 0 && !ev.c;
-  var isCorrection = isBolus && (ev.note === 'correction' || ev.note === 'bolus');
-  var isMeal       = isMealBolus || (isCarbOnly && !isHypo);
+  // Quick-look paired carb detection: if this is a pure bolus chip and there
+  // is a carb chip within 30min after it, it's a meal bolus not a correction.
+  var _hasPairedCarbAhead = isBolus && BOLUS_EVENTS.some(function(e) {
+    return e.c > 0 && !e.u && e.t > t && (e.t - t) <= 30 * 60000;
+  });
+  var isCorrection = isBolus && !_hasPairedCarbAhead && (ev.note === 'correction' || ev.note === 'bolus');
+  var isMealBolusOrPairedBolus = isMealBolus || _hasPairedCarbAhead;
+  var isMeal       = isMealBolusOrPairedBolus || (isCarbOnly && !isHypo);
   var isPrick      = ev.note === 'prick';
 
+  // Carb-only events: use time period as label (not generic "Snack")
+  var _carbOnlyLabel = period === 'Breakfast' ? 'Breakfast' :
+                       period === 'Lunch'     ? 'Lunch'     :
+                       period === 'Afternoon' ? 'Snack'     :
+                       period === 'Evening'   ? 'Dinner'    : 'Snack';
+
   var typeLabel, typeIcon, typeColor;
-  if (isHypo)       { typeLabel='Hypo Treatment'; typeIcon='🍬'; typeColor='rgba(255,210,40,0.9)'; }
-  else if (isMealBolus) { typeLabel='Meal + Bolus'; typeIcon='🍽'; typeColor='rgba(255,140,50,0.9)'; }
-  else if (isCarbOnly)  { typeLabel='Snack'; typeIcon='🍎'; typeColor='rgba(255,160,60,0.8)'; }
-  else if (isCorrection){ typeLabel='Correction'; typeIcon='💉'; typeColor='rgba(60,130,220,0.9)'; }
-  else if (isBolus)     { typeLabel='Bolus'; typeIcon='💉'; typeColor='rgba(60,130,220,0.9)'; }
-  else if (isPrick)     { typeLabel='Blood Prick'; typeIcon='🩸'; typeColor='rgba(220,60,60,0.9)'; }
-  else                  { typeLabel='Event'; typeIcon='·'; typeColor='rgba(180,200,220,0.8)'; }
+  if (isHypo)                    { typeLabel='Hypo Treatment'; typeIcon='🍬'; typeColor='rgba(255,210,40,0.9)'; }
+  else if (isMealBolusOrPairedBolus) { typeLabel='Meal + Bolus'; typeIcon='🍽'; typeColor='rgba(255,140,50,0.9)'; }
+  else if (isCarbOnly)           { typeLabel=_carbOnlyLabel; typeIcon='🍽'; typeColor='rgba(255,160,60,0.8)'; }
+  else if (isCorrection)         { typeLabel='Correction'; typeIcon='💉'; typeColor='rgba(60,130,220,0.9)'; }
+  else if (isBolus)              { typeLabel='Bolus'; typeIcon='💉'; typeColor='rgba(60,130,220,0.9)'; }
+  else if (isPrick)              { typeLabel='Blood Prick'; typeIcon='🩸'; typeColor='rgba(220,60,60,0.9)'; }
+  else                           { typeLabel='Event'; typeIcon='·'; typeColor='rgba(180,200,220,0.8)'; }
 
   // ── Context data ───────────────────────────────────────────────────
   var d        = dataAt(t);
   var bgNow    = d.bg;
-  var iobNow   = d.iob;
-  var cobNow   = d.cob;
+  // Prior IOB: use dataAt(t-1) to exclude this event's own insulin from the reading.
+  // dataAt(t) includes the event at t because iobF(0)=1 — showing the bolus itself as IOB.
+  var _dPrior  = dataAt(t - 1);
+  var iobNow   = _dPrior.iob;
+  var cobNow   = _dPrior.cob;
 
   // ── Paired bolus detection ─────────────────────────────────────────
   // A carb chip (c>0, u=0) is always spawned at bolusT + waitMins*60000.
