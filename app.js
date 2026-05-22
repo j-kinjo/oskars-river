@@ -1549,7 +1549,7 @@ function _drawCOBReservoir() {
       // For each pixel, compute its canvas time and evaluate distance to peakT.
       var sigmaMins = peakMin / 2.2; // absorption width in minutes (mirrors _cobFgi sigma)
       var mealT_local = meal.t; // capture for closure — carbs cannot arrive before eat time
-      function bellH(px) {
+      var bellH = function(px) {
         var t_px = viewTime + (px - NOW_X*W) / W * viewSpan;
         if (t_px < mealT_local) return 0; // zero before food is eaten
         // Smooth ramp-up from eat time: rises from 0 over the first ~8 minutes
@@ -1593,7 +1593,7 @@ function _drawCOBReservoir() {
         var fastPeakT   = meal.t + fastPeakMin * 60000;
         var fastSigmaM  = fastPeakMin / 1.6;
         var fastMaxD    = maxD * 0.55;
-        function fastBellH(px2) {
+        var fastBellH = function(px2) {
           var t_px2 = viewTime + (px2 - NOW_X*W) / W * viewSpan;
           if (t_px2 < mealT_local) return 0;
           var ramp2 = Math.min(1, (t_px2 - mealT_local) / (4 * 60000));
@@ -1673,7 +1673,7 @@ function _drawIOBReservoir() {
     var bolusT_local = bolus.t;
 
     // bellH_iob returns height in pixels ABOVE lineY (mirroring COB which returns height below)
-    function bellH_iob(px) {
+    var bellH_iob = function(px) {
       var t_px     = viewTime + (px - NOW_X * W) / W * viewSpan;
       var minsDist = (t_px - peakT) / 60000;
       var rampMins = Math.min(1.0, Math.max(0, (t_px - bolusT_local) / (12 * 60000)));
@@ -1722,32 +1722,22 @@ function _drawIOBReservoir() {
     }
 
     // ── THREE-CURVE OVERLAY — therapy / clinical-effective / observed ────
-    // Curve 1 (already drawn above as the main bell): therapy DIA — what the clinical
-    //   team agreed. Solid fill + rim. Most prominent.
-    //
-    // Curve 2: clinical effective — biexponential peak matches therapy but the
-    //   gaussian sigma is wider (tail is longer in practice). Dashed rim, no fill.
-    //   Uses sigmaF * 1.35 to show the longer real-world tail.
-    //
-    // Curve 3: observed — derived from bolus_outcomes.return_mins median.
-    //   Dotted rim, no fill. Only drawn when we have enough observations.
-
     // Curve 2 — clinical effective (wider tail, dashed)
     var sigmaF_eff = sigmaFMins * 1.35;
-    function bellH_eff(px) {
+    var bellH_eff = function(px) {
       var t_px = viewTime + (px - NOW_X * W) / W * viewSpan;
       var md   = (t_px - peakT) / 60000;
       var rmp  = Math.min(1.0, Math.max(0, (t_px - bolusT_local) / (12 * 60000)));
       var ramp = rmp * rmp * (3 - 2 * rmp);
       var sig  = md < 0 ? sigmaRMins : sigmaF_eff;
       return Math.exp(-0.5 * Math.pow(md / sig, 2)) * maxD * ramp;
-    }
+    };
     CX.save();
     CX.beginPath();
-    for (var i = 0; i <= 280; i++) {
-      var px = (i / 280) * W;
-      var py = lineY - bellH_eff(px);
-      i === 0 ? CX.moveTo(px, py) : CX.lineTo(px, py);
+    for (var i2 = 0; i2 <= 280; i2++) {
+      var px2 = (i2 / 280) * W;
+      var py2 = lineY - bellH_eff(px2);
+      i2 === 0 ? CX.moveTo(px2, py2) : CX.lineTo(px2, py2);
     }
     CX.strokeStyle = 'rgba(' + rv + ',' + gv + ',' + bv + ',0.28)';
     CX.lineWidth   = 1.0;
@@ -1758,27 +1748,25 @@ function _drawIOBReservoir() {
 
     // Curve 3 — observed (from bolus_outcomes.return_mins median), dotted
     var observedDIA = null;
-    if (_observedISF && window._observedReturnMins && window._observedReturnMins[bolus.t]) {
-      observedDIA = window._observedReturnMins[bolus.t];
-    } else if (window._medianReturnMins && window._medianReturnMins > 0) {
+    if (window._medianReturnMins && window._medianReturnMins > 0) {
       observedDIA = window._medianReturnMins;
     }
     if (observedDIA && Math.abs(observedDIA - diaMins) > 10) {
-      var sigmaF_obs = observedDIA * (sigmaFMins / diaMins); // scale to observed DIA
-      function bellH_obs(px) {
+      var sigmaF_obs = observedDIA * (sigmaFMins / diaMins);
+      var bellH_obs = function(px) {
         var t_px = viewTime + (px - NOW_X * W) / W * viewSpan;
         var md   = (t_px - peakT) / 60000;
         var rmp  = Math.min(1.0, Math.max(0, (t_px - bolusT_local) / (12 * 60000)));
         var ramp = rmp * rmp * (3 - 2 * rmp);
         var sig  = md < 0 ? sigmaRMins : sigmaF_obs;
         return Math.exp(-0.5 * Math.pow(md / sig, 2)) * maxD * ramp;
-      }
+      };
       CX.save();
       CX.beginPath();
-      for (var i = 0; i <= 280; i++) {
-        var px = (i / 280) * W;
-        var py = lineY - bellH_obs(px);
-        i === 0 ? CX.moveTo(px, py) : CX.lineTo(px, py);
+      for (var i3 = 0; i3 <= 280; i3++) {
+        var px3 = (i3 / 280) * W;
+        var py3 = lineY - bellH_obs(px3);
+        i3 === 0 ? CX.moveTo(px3, py3) : CX.lineTo(px3, py3);
       }
       CX.strokeStyle = 'rgba(180,220,255,0.22)';
       CX.lineWidth   = 0.8;
