@@ -1971,8 +1971,9 @@ function drawGasCloud(cobPts, col, direction, d) {
         });
         if(_bf) _domGI=_bf.gi||55;
       }
-      if(Math.random()<_cobReservoir*0.88) _spawnForceParticle('cob',_domGI);
-      if(Math.random()<_iobReservoir*0.82) _spawnForceParticle('iob');
+      // Particle spawning disabled — animated drops/bubbles removed
+      // if(Math.random()<_cobReservoir*0.88) _spawnForceParticle('cob',_domGI);
+      // if(Math.random()<_iobReservoir*0.82) _spawnForceParticle('iob');
     }
     if(_forceFrame%15===0){
       var lineY=d?bgToY(d.bg):H/2;
@@ -2019,9 +2020,10 @@ function drawGasCloud(cobPts, col, direction, d) {
   if(isCob){
     var lineY=d?bgToY(d.bg):H/2;
     _drawMists();
-    _drawPressureGlow(lineY);
-    _drawForceParticles(lineY);
-    _drawSparks();
+    // Animated drops/bubbles removed — visual noise, superseded by ribbon system
+    // _drawPressureGlow(lineY);
+    // _drawForceParticles(lineY);
+    // _drawSparks();
   }
 }
 
@@ -4341,6 +4343,25 @@ function frame(ts) {
   drawForecastTrace(pal);   // forecast BG line beyond now (navigable)
   drawTimeLabels(pal);
 
+  // ── FUTURE MODE INDICATOR — clear signal when scrubbed past now ──
+  var _isScrubFuture = viewTime > CGM_END + 60000;
+  if (_isScrubFuture) {
+    // Blue tint overlay — unmistakably "not now"
+    var _futGrad = CX.createLinearGradient(0, 0, W, 0);
+    _futGrad.addColorStop(0, 'rgba(40,80,200,0)');
+    _futGrad.addColorStop(0.3, 'rgba(40,80,200,0.07)');
+    _futGrad.addColorStop(1, 'rgba(40,80,200,0.13)');
+    CX.fillStyle = _futGrad;
+    CX.fillRect(0, 0, W, H);
+    // "looking ahead" label — top left, clear and calm
+    CX.save();
+    CX.font = "300 10px 'DM Mono',monospace";
+    CX.textAlign = 'left';
+    CX.fillStyle = 'rgba(100,150,255,0.55)';
+    CX.fillText('looking ahead ›', 14, 22);
+    CX.restore();
+  }
+
   // ── THE ORB — buoyant on BG line ────────────────────────────────
   drawOrb(pal, d);
 
@@ -4396,6 +4417,11 @@ function frame(ts) {
   }
   nowBtn.style.opacity        = awayFromNow ? '0.9' : '0';
   nowBtn.style.pointerEvents  = awayFromNow ? 'auto' : 'none';
+  // Label and colour differ for future vs past scrub
+  var _scrubIsFuture = viewTime > (latestT + 60000);
+  nowBtn.textContent = _scrubIsFuture ? '← now' : 'now ›';
+  nowBtn.style.borderColor = _scrubIsFuture ? 'rgba(100,150,255,0.5)' : 'rgba(62,180,120,0.35)';
+  nowBtn.style.color = _scrubIsFuture ? 'rgba(120,160,255,0.9)' : 'rgba(62,200,140,0.85)';
 
   // time labels handled by drawTimeLabels
 
@@ -13210,24 +13236,39 @@ function openContextCard(eventIdx, chipData) {
   var isMealBolus  = ev.c > 0 && ev.u > 0;
   var isCarbOnly   = ev.c > 0 && !ev.u;
   var isBolus      = ev.u > 0 && !ev.c;
-  var isCorrection = isBolus && (ev.note === 'correction' || ev.note === 'bolus');
-  var isMeal       = isMealBolus || (isCarbOnly && !isHypo);
+  // Quick-look paired carb detection: if this is a pure bolus chip and there
+  // is a carb chip within 30min after it, it's a meal bolus not a correction.
+  var _hasPairedCarbAhead = isBolus && BOLUS_EVENTS.some(function(e) {
+    return e.c > 0 && !e.u && e.t > t && (e.t - t) <= 30 * 60000;
+  });
+  var isCorrection = isBolus && !_hasPairedCarbAhead && (ev.note === 'correction' || ev.note === 'bolus');
+  var isMealBolusOrPairedBolus = isMealBolus || _hasPairedCarbAhead;
+  var isMeal       = isMealBolusOrPairedBolus || (isCarbOnly && !isHypo);
   var isPrick      = ev.note === 'prick';
 
+  // Carb-only events: use time period as label (not generic "Snack")
+  var _carbOnlyLabel = period === 'Breakfast' ? 'Breakfast' :
+                       period === 'Lunch'     ? 'Lunch'     :
+                       period === 'Afternoon' ? 'Snack'     :
+                       period === 'Evening'   ? 'Dinner'    : 'Snack';
+
   var typeLabel, typeIcon, typeColor;
-  if (isHypo)       { typeLabel='Hypo Treatment'; typeIcon='🍬'; typeColor='rgba(255,210,40,0.9)'; }
-  else if (isMealBolus) { typeLabel='Meal + Bolus'; typeIcon='🍽'; typeColor='rgba(255,140,50,0.9)'; }
-  else if (isCarbOnly)  { typeLabel='Snack'; typeIcon='🍎'; typeColor='rgba(255,160,60,0.8)'; }
-  else if (isCorrection){ typeLabel='Correction'; typeIcon='💉'; typeColor='rgba(60,130,220,0.9)'; }
-  else if (isBolus)     { typeLabel='Bolus'; typeIcon='💉'; typeColor='rgba(60,130,220,0.9)'; }
-  else if (isPrick)     { typeLabel='Blood Prick'; typeIcon='🩸'; typeColor='rgba(220,60,60,0.9)'; }
-  else                  { typeLabel='Event'; typeIcon='·'; typeColor='rgba(180,200,220,0.8)'; }
+  if (isHypo)                    { typeLabel='Hypo Treatment'; typeIcon='🍬'; typeColor='rgba(255,210,40,0.9)'; }
+  else if (isMealBolusOrPairedBolus) { typeLabel='Meal + Bolus'; typeIcon='🍽'; typeColor='rgba(255,140,50,0.9)'; }
+  else if (isCarbOnly)           { typeLabel=_carbOnlyLabel; typeIcon='🍽'; typeColor='rgba(255,160,60,0.8)'; }
+  else if (isCorrection)         { typeLabel='Correction'; typeIcon='💉'; typeColor='rgba(60,130,220,0.9)'; }
+  else if (isBolus)              { typeLabel='Bolus'; typeIcon='💉'; typeColor='rgba(60,130,220,0.9)'; }
+  else if (isPrick)              { typeLabel='Blood Prick'; typeIcon='🩸'; typeColor='rgba(220,60,60,0.9)'; }
+  else                           { typeLabel='Event'; typeIcon='·'; typeColor='rgba(180,200,220,0.8)'; }
 
   // ── Context data ───────────────────────────────────────────────────
   var d        = dataAt(t);
   var bgNow    = d.bg;
-  var iobNow   = d.iob;
-  var cobNow   = d.cob;
+  // Prior IOB: use dataAt(t-1) to exclude this event's own insulin from the reading.
+  // dataAt(t) includes the event at t because iobF(0)=1 — showing the bolus itself as IOB.
+  var _dPrior  = dataAt(t - 1);
+  var iobNow   = _dPrior.iob;
+  var cobNow   = _dPrior.cob;
 
   // ── Paired bolus detection ─────────────────────────────────────────
   // A carb chip (c>0, u=0) is always spawned at bolusT + waitMins*60000.
