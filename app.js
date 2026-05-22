@@ -848,14 +848,18 @@ function dataAt(t) {
   return { bg:h.bg, iob:h.iob+si, cob:h.cob+sc, pen:h.pen };
 }
 
+var _iobNormCache = {}; // cache {diaMins: norm} to avoid recomputing every frame
 function iobF(m) {
   var diaMins = (_TREATMENT && _TREATMENT.dia) ? _TREATMENT.dia : 240;
   if (m<=0) return 1; if (m>=diaMins) return 0;
   var peakM = diaMins * 0.3125;
   var tailM = diaMins - peakM;
+  if (!_iobNormCache[diaMins]) {
+    var norm=0; for(var x=0;x<diaMins;x+=2) norm+=(x<=peakM?x/peakM:Math.max(0,1-(x-peakM)/tailM))*2;
+    _iobNormCache[diaMins] = norm;
+  }
   var d=0; for(var x=0;x<m;x+=2) d+=(x<=peakM?x/peakM:Math.max(0,1-(x-peakM)/tailM))*2;
-  var norm=0; for(var x=0;x<diaMins;x+=2) norm+=(x<=peakM?x/peakM:Math.max(0,1-(x-peakM)/tailM))*2;
-  return Math.max(0,1-Math.min(1,d/norm));
+  return Math.max(0,1-Math.min(1,d/_iobNormCache[diaMins]));
 }
 function cobF(m,gi=60) {
   if (m<=0) return 1; if (m>=240) return 0;
@@ -1489,15 +1493,15 @@ function _cobFgi(mins, gi) {
 function _iobFn(mins, diaMins) {
   diaMins = diaMins || 240;
   if (mins <= 0) return 1; if (mins >= diaMins) return 0;
-  // Scale the peak and tail to DIA — peak at ~31% of DIA (75min of 240min default)
   var peakM = diaMins * 0.3125;
   var tailM = diaMins - peakM;
+  if (!_iobNormCache[diaMins]) {
+    var norm=0; for(var x=0;x<diaMins;x+=2) norm+=(x<=peakM?x/peakM:Math.max(0,1-(x-peakM)/tailM))*2;
+    _iobNormCache[diaMins] = norm;
+  }
   var d = 0;
   for (var x = 0; x < mins; x += 2) d += (x <= peakM ? x/peakM : Math.max(0,1-(x-peakM)/tailM))*2;
-  // Normaliser: compute integral at diaMins so curve reaches 0 correctly
-  var norm = 0;
-  for (var x = 0; x < diaMins; x += 2) norm += (x <= peakM ? x/peakM : Math.max(0,1-(x-peakM)/tailM))*2;
-  return Math.max(0, 1 - Math.min(1, d / norm));
+  return Math.max(0, 1 - Math.min(1, d / _iobNormCache[diaMins]));
 }
 
 // Zoom-aware sigma: bell width scales with viewSpan so it looks right at any zoom
