@@ -1394,9 +1394,11 @@ function topUpCOB(grams)  { _cobReservoir = Math.min(1, _cobReservoir + grams / 
 function topUpIOB(units)  { _iobReservoir = Math.min(1, _iobReservoir + units / 6);  }
 
 function _getActiveMealEvents() {
-  // 12h cutoff — long enough to cover breakfast-to-evening. Not viewTime-based
-  // to avoid old events reappearing when scrolling back.
-  var cutoff = Date.now() - 12 * 3600000;
+  // Cutoff is 24h before the earlier of viewTime or now.
+  // When scrubbing back, shows meals visible at that point in time.
+  // Cap at 24h to avoid loading ancient history into the canvas.
+  var refT   = Math.min(Date.now(), viewTime);
+  var cutoff = refT - 24 * 3600000;
   var events = [], seen = {};
   BOLUS_EVENTS.concat(SESSION).forEach(function(ev) {
     if (!ev.c || ev.c <= 0 || ev.t < cutoff) return;
@@ -1410,7 +1412,8 @@ function _getActiveMealEvents() {
 }
 
 function _getActiveBolusEvents() {
-  var cutoff = Date.now() - 12 * 3600000;
+  var refT   = Math.min(Date.now(), viewTime);
+  var cutoff = refT - 24 * 3600000;
   var events = [], seen = {};
   BOLUS_EVENTS.concat(SESSION).forEach(function(ev) {
     if (!ev.u || ev.u <= 0 || ev.t < cutoff) return;
@@ -1762,62 +1765,6 @@ function _drawIOBReservoir() {
       }
       CX.strokeStyle = 'rgba(180,220,255,0.22)';
       CX.lineWidth = 0.8; CX.setLineDash([2, 5]); CX.stroke(); CX.setLineDash([]);
-      CX.restore();
-    }
-
-    // Curve 2 — clinical effective (wider tail, dashed)
-    var sigmaF_eff = sigmaFMins * 1.35;
-    function bellH_eff(px) {
-      var t_px = viewTime + (px - NOW_X * W) / W * viewSpan;
-      var md   = (t_px - peakT) / 60000;
-      var rmp  = Math.min(1.0, Math.max(0, (t_px - bolusT_local) / (12 * 60000)));
-      var ramp = rmp * rmp * (3 - 2 * rmp);
-      var sig  = md < 0 ? sigmaRMins : sigmaF_eff;
-      return Math.exp(-0.5 * Math.pow(md / sig, 2)) * maxD * ramp;
-    }
-    CX.save();
-    CX.beginPath();
-    for (var i = 0; i <= 280; i++) {
-      var px = (i / 280) * W;
-      var py = lineY - bellH_eff(px);
-      i === 0 ? CX.moveTo(px, py) : CX.lineTo(px, py);
-    }
-    CX.strokeStyle = 'rgba(' + rv + ',' + gv + ',' + bv + ',0.28)';
-    CX.lineWidth   = 1.0;
-    CX.setLineDash([5, 5]);
-    CX.stroke();
-    CX.setLineDash([]);
-    CX.restore();
-
-    // Curve 3 — observed (from bolus_outcomes.return_mins median), dotted
-    var observedDIA = null;
-    if (_observedISF && window._observedReturnMins && window._observedReturnMins[bolus.t]) {
-      observedDIA = window._observedReturnMins[bolus.t];
-    } else if (window._medianReturnMins && window._medianReturnMins > 0) {
-      observedDIA = window._medianReturnMins;
-    }
-    if (observedDIA && Math.abs(observedDIA - diaMins) > 10) {
-      var sigmaF_obs = observedDIA * (sigmaFMins / diaMins); // scale to observed DIA
-      function bellH_obs(px) {
-        var t_px = viewTime + (px - NOW_X * W) / W * viewSpan;
-        var md   = (t_px - peakT) / 60000;
-        var rmp  = Math.min(1.0, Math.max(0, (t_px - bolusT_local) / (12 * 60000)));
-        var ramp = rmp * rmp * (3 - 2 * rmp);
-        var sig  = md < 0 ? sigmaRMins : sigmaF_obs;
-        return Math.exp(-0.5 * Math.pow(md / sig, 2)) * maxD * ramp;
-      }
-      CX.save();
-      CX.beginPath();
-      for (var i = 0; i <= 280; i++) {
-        var px = (i / 280) * W;
-        var py = lineY - bellH_obs(px);
-        i === 0 ? CX.moveTo(px, py) : CX.lineTo(px, py);
-      }
-      CX.strokeStyle = 'rgba(180,220,255,0.22)';
-      CX.lineWidth   = 0.8;
-      CX.setLineDash([2, 5]);
-      CX.stroke();
-      CX.setLineDash([]);
       CX.restore();
     }
 
