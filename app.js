@@ -1668,34 +1668,28 @@ function _drawIOBReservoir() {
 
     var bolusT_local = bolus.t;
 
+    // bellH_iob returns height in pixels ABOVE lineY (mirroring COB which returns height below)
     function bellH_iob(px) {
       var t_px     = viewTime + (px - NOW_X * W) / W * viewSpan;
       var minsDist = (t_px - peakT) / 60000;
-      // Ramp up from bolus time — no cliff at injection point
       var rampMins = Math.min(1.0, Math.max(0, (t_px - bolusT_local) / (12 * 60000)));
-      var ramp     = rampMins * rampMins * (3 - 2 * rampMins); // smoothstep
-      // Asymmetric gaussian: tighter on rise, wider on fall
+      var ramp     = rampMins * rampMins * (3 - 2 * rampMins);
       var sigma    = minsDist < 0 ? sigmaRMins : sigmaFMins;
       return Math.exp(-0.5 * Math.pow(minsDist / sigma, 2)) * maxD * ramp;
     }
 
     var rv = COL_IOB[0], gv = COL_IOB[1], bv = COL_IOB[2];
 
-    // Compute actual bell height at orb position for gradient scaling
-    var orbBellH = bellH_iob(NOW_X * W);
-    var gradDepth = Math.max(orbBellH, maxD * 0.15); // at least 15% of maxD for gradient range
-
-    // Fill — drawn from top edge down to bell surface
+    // Fill — from lineY upward, mirroring COB which fills from lineY downward
     CX.beginPath();
-    CX.moveTo(0, 0);
+    CX.moveTo(0, lineY);
     for (var i = 0; i <= 280; i++) {
       var px = (i / 280) * W;
-      CX.lineTo(px, bellH_iob(px));
+      CX.lineTo(px, lineY - bellH_iob(px));
     }
-    CX.lineTo(W, 0); CX.closePath();
+    CX.lineTo(W, lineY); CX.closePath();
 
-    // Gradient mapped to actual bell depth at orb, not absolute maxD
-    var gr = CX.createLinearGradient(0, 0, 0, gradDepth);
+    var gr = CX.createLinearGradient(0, lineY, 0, lineY - maxD);
     gr.addColorStop(0,   'rgba(' + rv + ',' + gv + ',' + bv + ',' + (0.22 + remaining * 0.28) + ')');
     gr.addColorStop(0.6, 'rgba(' + rv + ',' + gv + ',' + bv + ',' + (remaining * 0.10) + ')');
     gr.addColorStop(1,   'rgba(' + rv + ',' + gv + ',' + bv + ',0)');
@@ -1705,7 +1699,7 @@ function _drawIOBReservoir() {
     CX.beginPath();
     for (var i = 0; i <= 280; i++) {
       var px = (i / 280) * W;
-      var py = bellH_iob(px);
+      var py = lineY - bellH_iob(px);
       i === 0 ? CX.moveTo(px, py) : CX.lineTo(px, py);
     }
     CX.strokeStyle = 'rgba(' + rv + ',' + gv + ',' + bv + ',' + (0.18 + remaining * 0.42) + ')';
@@ -1722,6 +1716,74 @@ function _drawIOBReservoir() {
       CX.fillText(bolus.u.toFixed(1) + 'U', peakX, peakD + 10);
       CX.globalAlpha = 1;
     }
+
+    // ── THREE-CURVE OVERLAY — therapy / clinical-effective / observed ────
+    // Curve 1 (already drawn above as the main bell): therapy DIA — what the clinical
+    //   team agreed. Solid fill + rim. Most prominent.
+    //
+    // Curve 2: clinical effective — biexponential peak matches therapy but the
+    //   gaussian sigma is wider (tail is longer in practice). Dashed rim, no fill.
+    //   Uses sigmaF * 1.35 to show the longer real-world tail.
+    //
+    // Curve 3: observed — derived from bolus_outcomes.return_mins median.
+    //   Dotted rim, no fill. Only drawn when we have enough observations.
+
+    // Curve 2 — clinical effective (wider tail, dashed)
+    var sigmaF_eff = sigmaFMins * 1.35;
+    function bellH_eff(px) {
+      var t_px = viewTime + (px - NOW_X * W) / W * viewSpan;
+      var md   = (t_px - peakT) / 60000;
+      var rmp  = Math.min(1.0, Math.max(0, (t_px - bolusT_local) / (12 * 60000)));
+      var ramp = rmp * rmp * (3 - 2 * rmp);
+      var sig  = md < 0 ? sigmaRMins : sigmaF_eff;
+      return Math.exp(-0.5 * Math.pow(md / sig, 2)) * maxD * ramp;
+    }
+    CX.save();
+    CX.beginPath();
+    for (var i = 0; i <= 280; i++) {
+      var px = (i / 280) * W;
+      var py = lineY - bellH_eff(px);
+      i === 0 ? CX.moveTo(px, py) : CX.lineTo(px, py);
+    }
+    CX.strokeStyle = 'rgba(' + rv + ',' + gv + ',' + bv + ',0.28)';
+    CX.lineWidth   = 1.0;
+    CX.setLineDash([5, 5]);
+    CX.stroke();
+    CX.setLineDash([]);
+    CX.restore();
+
+    // Curve 3 — observed (from bolus_outcomes.return_mins median), dotted
+    var observedDIA = null;
+    if (_observedISF && window._observedReturnMins && window._observedReturnMins[bolus.t]) {
+      observedDIA = window._observedReturnMins[bolus.t];
+    } else if (window._medianReturnMins && window._medianReturnMins > 0) {
+      observedDIA = window._medianReturnMins;
+    }
+    if (observedDIA && Math.abs(observedDIA - diaMins) > 10) {
+      var sigmaF_obs = observedDIA * (sigmaFMins / diaMins); // scale to observed DIA
+      function bellH_obs(px) {
+        var t_px = viewTime + (px - NOW_X * W) / W * viewSpan;
+        var md   = (t_px - peakT) / 60000;
+        var rmp  = Math.min(1.0, Math.max(0, (t_px - bolusT_local) / (12 * 60000)));
+        var ramp = rmp * rmp * (3 - 2 * rmp);
+        var sig  = md < 0 ? sigmaRMins : sigmaF_obs;
+        return Math.exp(-0.5 * Math.pow(md / sig, 2)) * maxD * ramp;
+      }
+      CX.save();
+      CX.beginPath();
+      for (var i = 0; i <= 280; i++) {
+        var px = (i / 280) * W;
+        var py = lineY - bellH_obs(px);
+        i === 0 ? CX.moveTo(px, py) : CX.lineTo(px, py);
+      }
+      CX.strokeStyle = 'rgba(180,220,255,0.22)';
+      CX.lineWidth   = 0.8;
+      CX.setLineDash([2, 5]);
+      CX.stroke();
+      CX.setLineDash([]);
+      CX.restore();
+    }
+
     // Track peak Y for pill positioning
     if (_lastIOBPeakY < 0 || maxD > _lastIOBPeakY) _lastIOBPeakY = maxD;
   });
@@ -6155,15 +6217,17 @@ async function loadObservedISF() {
   if (!SUPABASE_READY) return;
   try {
     var rows = await _sbFetch(
-      'bolus_outcomes?select=period,observed_isf&observed_isf=not.is.null&order=t.desc&limit=500',
+      'bolus_outcomes?select=period,observed_isf,return_mins&observed_isf=not.is.null&order=t.desc&limit=500',
       { method: 'GET' }
     );
     if (!Array.isArray(rows) || rows.length === 0) return;
     var byPeriod = {};
+    var returnMinsAll = [];
     rows.forEach(function(r) {
       if (!r.period || !r.observed_isf) return;
       if (!byPeriod[r.period]) byPeriod[r.period] = [];
       byPeriod[r.period].push(r.observed_isf);
+      if (r.return_mins && r.return_mins > 0) returnMinsAll.push(r.return_mins);
     });
     _observedISF = {};
     Object.keys(byPeriod).forEach(function(period) {
@@ -6171,6 +6235,12 @@ async function loadObservedISF() {
       var mean = vals.reduce(function(s,v){return s+v;},0) / vals.length;
       _observedISF[period] = { mean: +mean.toFixed(2), count: vals.length };
     });
+    // Median observed DIA from return_mins — used for the observed IOB curve overlay
+    if (returnMinsAll.length >= 3) {
+      var sorted = returnMinsAll.slice().sort(function(a,b){return a-b;});
+      window._medianReturnMins = sorted[Math.floor(sorted.length / 2)];
+      console.log('[observed DIA] median return_mins:', window._medianReturnMins + 'min from ' + returnMinsAll.length + ' outcomes');
+    }
     if (Object.keys(_observedISF).length > 0) {
       console.log('[adaptive ISF] loaded:', JSON.stringify(_observedISF));
     }
