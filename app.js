@@ -4475,10 +4475,10 @@ CV.addEventListener('touchend',()=>{
     _dragActiveListenerAttached=false;
   }
 },{passive:true});
-let md={on:false,x0:0,t0:0};
-CV.addEventListener('mousedown',e=>{if(!e.target.closest('#sheet,#flow-dock,.dock-btn,#whisper-overlay,#food-mgr-overlay,#hypo-overlay,#corr-overlay,#food-add-overlay,[id$=-overlay],button,input,textarea,select'))md={on:true,x0:e.clientX,t0:viewTime}});
-CV.addEventListener('mousemove',e=>{if(md.on){viewTime=Math.max(CGM_END - 30*86400000, Math.min(CGM_END + 3*3600000, md.t0-(e.clientX-md.x0)*(viewSpan/W))); _maybeLoadOlderHistory();}});
-CV.addEventListener('mouseup',()=>md.on=false);
+let md={on:false,dragging:false,x0:0,t0:0};
+CV.addEventListener('mousedown',e=>{if(!e.target.closest('#sheet,#flow-dock,.dock-btn,#whisper-overlay,#food-mgr-overlay,#hypo-overlay,#corr-overlay,#food-add-overlay,[id$=-overlay],button,input,textarea,select'))md={on:true,dragging:false,x0:e.clientX,t0:viewTime}});
+CV.addEventListener('mousemove',e=>{if(md.on){var dx=e.clientX-md.x0;if(!md.dragging&&Math.abs(dx)<5)return;md.dragging=true;viewTime=Math.max(CGM_END - 30*86400000, Math.min(CGM_END + 3*3600000, md.t0-dx*(viewSpan/W)));_maybeLoadOlderHistory();}});
+CV.addEventListener('mouseup',()=>{md.on=false;});
 
 // ── QUICK JUMP DAY STRIP ──────────────────────────────────────────────────
 // Floating bottom strip: last 14 days as tappable date pills.
@@ -4852,7 +4852,8 @@ async function _bulkFetchHistory(fromDate) {
 }
 
 // ── CANVAS LONG-PRESS DETECTION ──────────────────────────────────────────
-// Short tap (<400ms) → context card  |  long press (≥400ms) → edit overlay
+// Any tap/click on a chip → openContextCard (unified card with inline edit)
+// Long press on background → showDayStrip
 var _canvasTapStart = 0;
 var _canvasTapTimer = null;
 var _canvasTapMx = 0;
@@ -4889,16 +4890,23 @@ CV.addEventListener('touchend', function(e) {
   if (_canvasTapTimer) { clearTimeout(_canvasTapTimer); _canvasTapTimer = null; }
   if (_canvasTapMoved) return;
   var held = Date.now() - _canvasTapStart;
+  _lastTouchEndTime = Date.now(); // suppress synthetic click
   if (held < 450) {
     _handleCanvasHit(_canvasTapMx, _canvasTapMy, false);
   }
 }, {passive: true});
 
+var _lastTouchEndTime = 0;
+
 CV.addEventListener('click', function(e) {
-  // Mouse clicks always go to context card (short-tap equivalent)
+  // Suppress synthetic click fired after touchend (~300ms later on mobile)
+  if (Date.now() - _lastTouchEndTime < 500) return;
+  // Mouse clicks → context card
   var rect = CV.getBoundingClientRect();
   var mx = e.clientX - rect.left;
   var my = e.clientY - rect.top;
+  // Only fire if mouse wasn't dragged
+  if (md.dragging) return;
   _handleCanvasHit(mx, my, false);
 });
 
@@ -4923,16 +4931,12 @@ function _handleCanvasHit(mx, my, isLongPress) {
       }
     }
   }
-  // Event chips
+  // Event chips — any tap/click opens unified context card (with inline edit)
   if (window._eventCards && _eventCards.length > 0) {
     for (var ci = 0; ci < _eventCards.length; ci++) {
       var c = _eventCards[ci];
       if (mx >= c.x - c.w/2 && mx <= c.x + c.w/2 && my >= c.y - 12 && my <= c.y + 12) {
-        if (isLongPress) {
-          openEventEditor(c.idx);
-        } else {
-          openContextCard(c.idx, c.data);
-        }
+        openContextCard(c.idx, c.data);
         return;
       }
     }
@@ -13725,13 +13729,83 @@ function openContextCard(eventIdx, chipData) {
       : '<div style="font-size:9px;color:rgba(160,180,200,0.3);padding:4px 0">no suggestion recorded at this event</div>'
   , false);
 
-  // EDIT BUTTON
-  contextHTML += '<div style="margin-top:16px;display:flex;gap:8px">' +
-    '<button onclick="document.getElementById(\'ctx-card-overlay\').remove();openEventEditor('+eventIdx+')" ' +
-      'style="flex:1;padding:11px;border-radius:10px;border:1px solid rgba(180,200,220,0.15);background:rgba(255,255,255,0.03);font-family:DM Mono,monospace;font-size:10px;letter-spacing:0.5px;color:rgba(180,200,220,0.5);cursor:pointer;touch-action:manipulation">edit entry</button>' +
-    '<button onclick="document.getElementById(\'ctx-card-overlay\').remove()" ' +
-      'style="padding:11px 18px;border-radius:10px;border:none;background:transparent;font-family:DM Mono,monospace;font-size:10px;color:rgba(140,160,180,0.4);cursor:pointer;touch-action:manipulation">close</button>' +
+  // ── INLINE EDIT SECTION ──────────────────────────────────────────────
+  // Build time value for datetime-local input
+  var tzOffset = dt.getTimezoneOffset() * 60000;
+  var dtLocalISO = new Date(dt.getTime() - tzOffset).toISOString().slice(0,16);
+
+  // Which fields to show based on event type
+  var editFields = '';
+
+  // Time — always editable
+  editFields += '<div style="margin-bottom:12px">' +
+    '<div style="font-family:DM Mono,monospace;font-size:8px;letter-spacing:1px;text-transform:uppercase;color:rgba(160,180,200,0.4);margin-bottom:5px">when</div>' +
+    '<input id="ee-time" type="datetime-local" value="' + dtLocalISO + '" ' +
+      'style="width:100%;padding:9px 12px;border-radius:8px;border:1px solid rgba(255,255,255,0.08);' +
+      'background:rgba(255,255,255,0.04);font-family:DM Mono,monospace;font-size:12px;' +
+      'color:rgba(200,220,240,0.8);outline:none;box-sizing:border-box">' +
     '</div>';
+
+  if (isMealBolus || isMeal || isCarbOnly || isHypo) {
+    // Carbs field
+    editFields += '<div style="margin-bottom:12px">' +
+      '<div style="font-family:DM Mono,monospace;font-size:8px;letter-spacing:1px;text-transform:uppercase;color:rgba(255,140,50,0.5);margin-bottom:5px">carbs (g)</div>' +
+      '<input id="ee-carbs" type="number" value="' + (ev.c||0) + '" min="0" max="300" step="1" ' +
+        'style="width:100%;padding:10px;border-radius:8px;border:1px solid rgba(255,140,50,0.2);' +
+        'background:rgba(255,140,50,0.04);font-family:DM Mono,monospace;font-size:18px;' +
+        'color:rgba(255,140,50,0.9);text-align:center;outline:none;box-sizing:border-box">' +
+      '</div>';
+  } else {
+    editFields += '<input id="ee-carbs" type="hidden" value="' + (ev.c||0) + '">';
+  }
+
+  if (isMealBolus || isCorrection || isBolus) {
+    // Insulin field
+    editFields += '<div style="margin-bottom:12px">' +
+      '<div style="font-family:DM Mono,monospace;font-size:8px;letter-spacing:1px;text-transform:uppercase;color:rgba(60,130,220,0.5);margin-bottom:5px">insulin (U)</div>' +
+      '<input id="ee-units" type="number" value="' + (ev.u||0) + '" min="0" max="20" step="0.5" ' +
+        'style="width:100%;padding:10px;border-radius:8px;border:1px solid rgba(60,130,220,0.2);' +
+        'background:rgba(60,130,220,0.04);font-family:DM Mono,monospace;font-size:18px;' +
+        'color:rgba(60,130,220,0.9);text-align:center;outline:none;box-sizing:border-box">' +
+      '</div>';
+  } else {
+    editFields += '<input id="ee-units" type="hidden" value="' + (ev.u||0) + '">';
+  }
+
+  if (isMealBolus) {
+    // Wait mins field — only relevant for bolus+meal pairs
+    editFields += '<div style="margin-bottom:12px">' +
+      '<div style="font-family:DM Mono,monospace;font-size:8px;letter-spacing:1px;text-transform:uppercase;color:rgba(160,180,200,0.4);margin-bottom:5px">wait before eating (min)</div>' +
+      '<input id="ee-wait" type="number" value="' + (waitMinsDisplay||0) + '" min="0" max="60" step="5" ' +
+        'style="width:100%;padding:10px;border-radius:8px;border:1px solid rgba(255,255,255,0.07);' +
+        'background:rgba(255,255,255,0.03);font-family:DM Mono,monospace;font-size:18px;' +
+        'color:rgba(200,200,200,0.9);text-align:center;outline:none;box-sizing:border-box">' +
+      '</div>';
+  } else {
+    editFields += '<input id="ee-wait" type="hidden" value="' + (waitMinsDisplay||0) + '">';
+  }
+
+  var editSectionHTML =
+    '<div style="border-top:1px solid rgba(255,255,255,0.06);margin-top:20px;padding-top:18px">' +
+      '<div style="font-family:DM Mono,monospace;font-size:8px;letter-spacing:1.5px;text-transform:uppercase;color:rgba(160,180,200,0.3);margin-bottom:14px">edit entry</div>' +
+      editFields +
+      '<div style="display:flex;gap:8px;margin-top:4px">' +
+        '<button onclick="saveEventEdit(' + eventIdx + ')" ' +
+          'style="flex:1;padding:12px;border-radius:10px;border:1px solid rgba(62,180,120,0.3);' +
+          'background:rgba(62,180,120,0.07);font-family:Fraunces,serif;font-style:italic;' +
+          'font-weight:200;font-size:16px;color:rgba(62,180,120,0.9);cursor:pointer;touch-action:manipulation">save</button>' +
+        '<button onclick="deleteEvent(' + eventIdx + ')" ' +
+          'style="padding:12px 16px;border-radius:10px;border:1px solid rgba(200,60,60,0.2);' +
+          'background:transparent;font-family:DM Mono,monospace;font-size:10px;' +
+          'color:rgba(200,80,80,0.5);cursor:pointer;touch-action:manipulation">delete</button>' +
+        '<button onclick="document.getElementById(\'ctx-card-overlay\').remove()" ' +
+          'style="padding:12px 14px;border-radius:10px;border:1px solid rgba(255,255,255,0.07);' +
+          'background:transparent;font-family:DM Mono,monospace;font-size:10px;' +
+          'color:rgba(140,160,180,0.4);cursor:pointer;touch-action:manipulation">close</button>' +
+      '</div>' +
+    '</div>';
+
+  contextHTML += editSectionHTML;
 
 
   // ── Build overlay ────────────────────────────────────────────────
@@ -13759,7 +13833,7 @@ function openEventEditor(eventIdx) {
   var ev = LOGGED_EVENTS[eventIdx];
   if (!ev) return;
 
-  var ex = document.getElementById('event-edit-overlay');
+  var ex = document.getElementById('ctx-card-overlay') || document.getElementById('event-edit-overlay');
   if (ex) ex.remove();
 
   var el = document.createElement('div');
@@ -13863,7 +13937,7 @@ function saveEventEdit(idx) {
   var timeEl   = document.getElementById('ee-time');
   var newT     = timeEl && timeEl.value ? new Date(timeEl.value).getTime() : null;
 
-  if (!LOGGED_EVENTS[idx]) { var el=document.getElementById('event-edit-overlay'); if(el) el.remove(); return; }
+  if (!LOGGED_EVENTS[idx]) { var el=document.getElementById('ctx-card-overlay') || document.getElementById('event-edit-overlay'); if(el) el.remove(); return; }
 
   var oldT = LOGGED_EVENTS[idx].t;
   var oldWait = LOGGED_EVENTS[idx].waitMins || 0;
@@ -13912,7 +13986,7 @@ function saveEventEdit(idx) {
   }
   try { localStorage.setItem('river_logged', JSON.stringify(LOGGED_EVENTS)); } catch(e) {}
 
-  var el = document.getElementById('event-edit-overlay');
+  var el = document.getElementById('ctx-card-overlay') || document.getElementById('event-edit-overlay');
   if (el) el.remove();
   showToast('entry updated');
 
@@ -14337,7 +14411,7 @@ function deleteEvent(idx) {
         .catch(function(e){ console.warn('[delete] Supabase delete failed:', e.message); });
     }
   }
-  var el = document.getElementById('event-edit-overlay');
+  var el = document.getElementById('ctx-card-overlay') || document.getElementById('event-edit-overlay');
   if (el) el.remove();
   showToast('entry removed');
 }
