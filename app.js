@@ -1545,76 +1545,65 @@ function _drawCOBReservoir() {
 
       var sigmaFactor = gi >= 70 ? 0.6 : gi >= 55 ? 1.0 : 1.5;
       var sigma  = _bellSigma(sigmaFactor);
+      var lineY  = dataAt ? bgToY(dataAt(viewTime).bg) : H * 0.5;
+      var availableH = H - lineY - 8;
+      var maxD   = Math.min(availableH * 0.92, 90 * (food.carbs / 20));
+      var minD   = Math.min(availableH * 0.12, 18);
+      maxD = Math.max(minD, maxD);
 
-      // Chip Y — origin on CGM line at meal time
-      var baseBG  = dataAt(meal.t).bg || dataAt(viewTime).bg || 7.0;
-      var chipY   = bgToY(baseBG);
-
-      // ── maxD in mmol-space ────────────────────────────────────────────
-      // The bell shows the carb FORCE — what these carbs are capable of doing.
-      // We use gross rise (carbs/IC × ISF) as the force magnitude, but cap it
-      // at a realistic visible range (1.5–5 mmol). This isn't the net outcome —
-      // it's the carb contribution before insulin offsets it. The bell peak
-      // lands at approximately where BG would go from carbs alone (within reason).
-      // The gap between bell peak and actual CGM peak tells the insulin story.
-      var IC       = getIC(meal.t) || 10;
-      var ISF      = getISF(meal.t) || 7;
-      var grossRise = (food.carbs / IC) * ISF;
-      // Scale to display range: cap at 5 mmol, floor at 1.5 mmol
-      var displayRise = Math.max(1.5, Math.min(5.0, grossRise * 0.18));
-      var maxD = Math.max(12, chipY - bgToY(baseBG + displayRise));
-
-      // ── Timing: absorption peak → BG impact peak (+20min lag) ────────
-      // Carb absorption peaks at peakMin. BG impact peaks ~20min later:
-      // CGM sensor lag (~10min) + blood↔interstitial equilibration (~10min).
-      var bgPeakT   = meal.t + (peakMin + 20) * 60000;
-      var sigmaMins = peakMin / 2.2;
+      var sigmaMins   = peakMin / 2.2;
       var mealT_local = meal.t;
+      // Chip Y — origin point on the CGM line where this bell is born
+      var chipY = bgToY(dataAt(meal.t).bg || dataAt(viewTime).bg);
 
       var bellH = function(px) {
         var t_px = viewTime + (px - NOW_X * W) / W * viewSpan;
         if (t_px < mealT_local) return 0;
         var rampMins = Math.min(1.0, (t_px - mealT_local) / (8 * 60000));
         var ramp     = rampMins * rampMins * (3 - 2 * rampMins);
-        var minsDist = (t_px - bgPeakT) / 60000;  // centred on BG impact peak, not absorption peak
+        var minsDist = (t_px - peakT) / 60000;
         return Math.exp(-0.5 * Math.pow(minsDist / sigmaMins, 2)) * maxD * ramp;
       };
 
-      // ── Fill — blossoms from chipY, expands upward ───────────────────
-      // Top surface is the bell. Bottom surface blurs into the CGM line.
-      // Fill is clipped so it never goes below chipY.
+      // ── Depletion guard — skip if bell is essentially flat ───────────
+      var _maxBellH = 0;
+      for (var _gi = 0; _gi <= 20; _gi++) {
+        var _h = bellH((_gi / 20) * W);
+        if (_h > _maxBellH) _maxBellH = _h;
+      }
+      if (_maxBellH < 2) return; // nothing visible — don't draw flat line
+
+      // ── Fill — bell surface upward from chipY, shaded to canvas bottom ─
+      // Upper fill: from chipY up to bell surface (the carb force region)
+      // Lower fill: from chipY down to H (shading the space below — carbs are
+      // a buoyant force pushing up from the bottom, the fill shows their domain)
       CX.save();
+
+      // Upper region: chipY → bell surface
       CX.beginPath();
       CX.moveTo(0, chipY);
       for (var i = 0; i <= 280; i++) {
         var px = (i / 280) * W;
-        var bh = bellH(px);
-        CX.lineTo(px, chipY - bh);
+        CX.lineTo(px, chipY - bellH(px));
       }
       CX.lineTo(W, chipY);
       CX.closePath();
-
-      // Living gradient: colour-shifted, breathes with _phase
       var breathe = 0.18 + Math.sin(_phase * 1.3) * 0.06;
       var gr = CX.createLinearGradient(0, chipY, 0, chipY - maxD);
       gr.addColorStop(0,   'rgba(' + rv + ',' + gv + ',' + bv + ',' + (breathe + 0.12) + ')');
-      gr.addColorStop(0.4, 'rgba(' + rv + ',' + gv + ',' + bv + ',' + (breathe * 0.6) + ')');
-      gr.addColorStop(0.8, 'rgba(' + rv + ',' + gv + ',' + bv + ',' + (breathe * 0.2) + ')');
+      gr.addColorStop(0.5, 'rgba(' + rv + ',' + gv + ',' + bv + ',' + (breathe * 0.5) + ')');
       gr.addColorStop(1,   'rgba(' + rv + ',' + gv + ',' + bv + ',0)');
       CX.fillStyle = gr; CX.fill();
 
-      // Blurred bottom edge — soft origin from chip, feathers to nothing
-      CX.shadowColor = 'rgba(' + rv + ',' + gv + ',' + bv + ',0.35)';
-      CX.shadowBlur  = 18;
+      // Lower region: chipY → canvas bottom (soft downward shade)
       CX.beginPath();
-      CX.moveTo(0, chipY);
-      for (var i = 0; i <= 280; i++) {
-        var px = (i / 280) * W;
-        CX.lineTo(px, chipY);
-      }
-      CX.strokeStyle = 'rgba(' + rv + ',' + gv + ',' + bv + ',0.18)';
-      CX.lineWidth = 1; CX.stroke();
-      CX.shadowBlur = 0; CX.shadowColor = 'transparent';
+      CX.moveTo(0, chipY); CX.lineTo(W, chipY); CX.lineTo(W, H); CX.lineTo(0, H); CX.closePath();
+      var grBot = CX.createLinearGradient(0, chipY, 0, H);
+      grBot.addColorStop(0,   'rgba(' + rv + ',' + gv + ',' + bv + ',' + (breathe * 0.55) + ')');
+      grBot.addColorStop(0.4, 'rgba(' + rv + ',' + gv + ',' + bv + ',' + (breathe * 0.25) + ')');
+      grBot.addColorStop(1,   'rgba(' + rv + ',' + gv + ',' + bv + ',0)');
+      CX.fillStyle = grBot; CX.fill();
+
       CX.restore();
 
       // ── Rim — bell surface, always drawn ─────────────────────────────
@@ -1699,7 +1688,7 @@ function _drawCOBReservoir() {
 
       // ── Food label ────────────────────────────────────────────────────
       if (food.carbs >= 2 && maxD > 14) {
-        var labelX = Math.max(30, Math.min(W - 30, tX(bgPeakT)));
+        var labelX = Math.max(30, Math.min(W - 30, peakX));
         var labelH = bellH(labelX);
         if (labelH > maxD * 0.15) {
           CX.globalAlpha = 0.65;
@@ -1734,19 +1723,12 @@ function _drawIOBReservoir() {
     var sigmaRMins  = 32;
     var sigmaFMins  = 70;
 
-    // BG at bolus time — bell originates from this point
-    var baseBG_iob  = dataAt(bolus.t).bg || dataAt(viewTime).bg || 7.0;
-    var chipY       = bgToY(baseBG_iob);
-
-    // ── maxD in mmol-space ────────────────────────────────────────────
-    // Peak suppression = bolus.u × ISF, clamped so BG doesn't go below 2.5.
-    // Expressed as pixel height above chipY (IOB fills from chipY upward).
-    var ISF_iob    = getISF(bolus.t) || 7;
-    var peakDrop   = Math.max(1.5, Math.min(bolus.u * ISF_iob, baseBG_iob - 2.5));
-    // bgToY(baseBG - drop) gives Y BELOW chipY (lower BG = lower on screen).
-    // IOB bell draws ABOVE chipY, so use the same pixel magnitude but upward.
-    var dropPx     = bgToY(baseBG_iob - peakDrop) - chipY;  // positive px distance
-    var maxD       = Math.max(12, Math.min(dropPx, chipY - 8));
+    // Chip Y — origin on CGM line where this bell is born
+    var chipY     = bgToY(dataAt(bolus.t).bg || dataAt(viewTime).bg);
+    var availableH = Math.max(chipY - 8, 40); // space above chip toward top of canvas
+    var maxD       = Math.min(availableH * 0.90, 110 * (bolus.u / 3));
+    var minD       = Math.min(availableH * 0.12, 18);
+    maxD = Math.max(minD, maxD);
 
     var bolusT_local = bolus.t;
 
@@ -1759,44 +1741,46 @@ function _drawIOBReservoir() {
       return Math.exp(-0.5 * Math.pow(minsDist / sigma, 2)) * maxD * ramp;
     };
 
+    // ── Depletion guard — skip if bell is essentially flat ───────────
+    var _maxIobH = 0;
+    for (var _ii = 0; _ii <= 20; _ii++) {
+      var _ih = bellH_iob((_ii / 20) * W);
+      if (_ih > _maxIobH) _maxIobH = _ih;
+    }
+    if (_maxIobH < 2) {
+      if (_lastIOBPeakY < 0 || maxD > _lastIOBPeakY) _lastIOBPeakY = maxD;
+      return; // nothing visible — don't draw flat line
+    }
+
     // Colour drift: blue→indigo→steel cycle
     var drift = Math.sin(_phase + bolus.u * 0.3) * 0.5 + 0.5;
     var rv = Math.round(COL_IOB[0] * (1 - drift * 0.15) + 80  * drift * 0.15);
     var gv = Math.round(COL_IOB[1] * (1 - drift * 0.10) + 100 * drift * 0.10);
     var bv = Math.round(COL_IOB[2] * (1 - drift * 0.05) + 255 * drift * 0.05);
 
-    // ── Fill — blossoms from chipY upward ─────────────────────────────
+    // ── Fill — insulin cloud fills from top of canvas down to bell surface ──
+    // Surface Y = chipY - bellH_iob(px): at bell peak → chipY-maxD (near CGM)
+    //                                    at bell edges → chipY (at CGM level, no fill)
+    // Fill region: y=0 to surface. Gradient: dense at top, fades toward surface.
     CX.save();
     CX.beginPath();
-    CX.moveTo(0, chipY);
+    CX.moveTo(0, 0);
     for (var i = 0; i <= 280; i++) {
       var px = (i / 280) * W;
       CX.lineTo(px, chipY - bellH_iob(px));
     }
-    CX.lineTo(W, chipY); CX.closePath();
+    CX.lineTo(W, 0); CX.closePath();
 
     var breathe = 0.18 + Math.sin(_phase * 1.1 + 1.5) * 0.06;
-    var gr = CX.createLinearGradient(0, chipY, 0, chipY - maxD);
+    // Gradient: top of canvas → chipY - maxD (the deepest the bell reaches)
+    var gr = CX.createLinearGradient(0, 0, 0, chipY - maxD);
     gr.addColorStop(0,   'rgba(' + rv + ',' + gv + ',' + bv + ',' + (breathe + 0.12) + ')');
-    gr.addColorStop(0.4, 'rgba(' + rv + ',' + gv + ',' + bv + ',' + (breathe * 0.6) + ')');
-    gr.addColorStop(0.8, 'rgba(' + rv + ',' + gv + ',' + bv + ',' + (breathe * 0.2) + ')');
+    gr.addColorStop(0.6, 'rgba(' + rv + ',' + gv + ',' + bv + ',' + (breathe * 0.5) + ')');
     gr.addColorStop(1,   'rgba(' + rv + ',' + gv + ',' + bv + ',0)');
     CX.fillStyle = gr; CX.fill();
-
-    // Blurred bottom edge — soft origin from chip
-    CX.shadowColor = 'rgba(' + rv + ',' + gv + ',' + bv + ',0.30)';
-    CX.shadowBlur  = 18;
-    CX.beginPath();
-    for (var ii = 0; ii <= 280; ii++) {
-      var ppx = (ii / 280) * W;
-      ii === 0 ? CX.moveTo(ppx, chipY) : CX.lineTo(ppx, chipY);
-    }
-    CX.strokeStyle = 'rgba(' + rv + ',' + gv + ',' + bv + ',0.15)';
-    CX.lineWidth = 1; CX.stroke();
-    CX.shadowBlur = 0; CX.shadowColor = 'transparent';
     CX.restore();
 
-    // ── Rim — bell surface, always drawn ─────────────────────────────
+    // ── Rim — traces the bell surface (bottom edge of insulin fill) ───
     CX.save();
     CX.beginPath();
     for (var i = 0; i <= 280; i++) {
