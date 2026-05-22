@@ -1523,10 +1523,11 @@ function _drawCOBReservoir() {
       // Deeper into the flow — reservoir peaks closer to BG line
       var lineY      = dataAt ? bgToY(dataAt(viewTime).bg) : H * 0.5;
       var availableH = H - lineY - 8;  // space from bottom to just below BG line
-      var maxD  = Math.min(availableH * 0.92, 90 * (food.carbs / 20) * remaining);
-      // Minimum visible height — even 1g carb should be perceptible on the canvas
+      // Bell height is fixed at peak size — doesn't shrink as carbs deplete.
+      // remaining only drives opacity so the shape scrolls past like a fixed river object.
+      var maxD  = Math.min(availableH * 0.92, 90 * (food.carbs / 20));
       var minD  = Math.min(availableH * 0.12, 18);
-      maxD = Math.max(minD * remaining, maxD);
+      maxD = Math.max(minD, maxD);
 
       // Draw bell in TIME-SPACE, not pixel-space.
       // This correctly handles peakT off-screen left or right.
@@ -1576,7 +1577,7 @@ function _drawCOBReservoir() {
         var fastPeakMin = Math.max(10, 95 - gi) * 0.6; // faster peak than full bell
         var fastPeakT   = meal.t + fastPeakMin * 60000;
         var fastSigmaM  = fastPeakMin / 1.6;
-        var fastMaxD    = maxD * 0.55 * remaining;
+        var fastMaxD    = maxD * 0.55;
         function fastBellH(px2) {
           var t_px2 = viewTime + (px2 - NOW_X*W) / W * viewSpan;
           if (t_px2 < mealT_local) return 0;
@@ -1648,9 +1649,11 @@ function _drawIOBReservoir() {
     var sigmaFMins  = 70;   // fall side — long Novorapid tail
     var lineY       = dataAt ? bgToY(dataAt(viewTime).bg) : H * 0.5;
     var availableH  = lineY - 8;
-    var maxD        = Math.min(availableH * 0.90, 110 * (bolus.u / 3) * remaining);
+    // Bell height is fixed at peak size — doesn't shrink as insulin depletes.
+    // remaining only drives opacity so the shape scrolls past like a fixed river object.
+    var maxD        = Math.min(availableH * 0.90, 110 * (bolus.u / 3));
     var minD        = Math.min(availableH * 0.12, 18);
-    maxD = Math.max(minD * remaining, maxD);
+    maxD = Math.max(minD, maxD);
 
     var bolusT_local = bolus.t;
 
