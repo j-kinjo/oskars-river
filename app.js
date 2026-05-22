@@ -851,7 +851,7 @@ function dataAt(t) {
 function iobF(m) {
   if (m<=0) return 1; if (m>=240) return 0;
   let d=0; for(let x=0;x<m;x+=2) d+=(x<=70?x/70:Math.max(0,1-(x-70)/170))*2;
-  return Math.max(0,1-Math.min(1,d/105));
+  return Math.max(0,1-Math.min(1,d/120));  // 120 = correct integral at 240min
 }
 function cobF(m,gi=60) {
   if (m<=0) return 1; if (m>=240) return 0;
@@ -1486,7 +1486,7 @@ function _iobFn(mins) {
   if (mins <= 0) return 1; if (mins >= 240) return 0;
   var d = 0;
   for (var x = 0; x < mins; x += 2) d += (x<=70 ? x/70 : Math.max(0,1-(x-70)/170))*2;
-  return Math.max(0, 1 - Math.min(1, d/105));
+  return Math.max(0, 1 - Math.min(1, d/120));  // 120 = correct integral at 240min (was 105 — caused early cutoff at ~169min)
 }
 
 // Zoom-aware sigma: bell width scales with viewSpan so it looks right at any zoom
@@ -1512,7 +1512,7 @@ function _drawCOBReservoir() {
       var peakX      = tX(peakT);  // scroll-aware
       var elapsedMin = (viewTime - meal.t) / 60000;
       var remaining  = _cobFgi(elapsedMin, gi);
-      if (remaining < 0.02) return;
+      if (remaining < 0.005) return;
 
       // GI \u2192 colour via continuous ramp (user-configurable)
       var giCol=giToColour(gi), rv=giCol[0], gv=giCol[1], bv=giCol[2];
@@ -1639,7 +1639,7 @@ function _drawIOBReservoir() {
   bolusEvents.forEach(function(bolus) {
     var elapsedMin = (viewTime - bolus.t) / 60000;
     var remaining  = _iobFn(elapsedMin);
-    if (remaining < 0.02) return;
+    if (remaining < 0.005) return;
 
     // Time-space bell — mirrors COB approach so it tracks correctly on scroll
     // Novorapid: peak ~75min, quick rise (sigmaR), long tail (sigmaF)
