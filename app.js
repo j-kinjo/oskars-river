@@ -1520,6 +1520,9 @@ function _drawCOBReservoir() {
   var mealEvents = _getActiveMealEvents();
   if (mealEvents.length === 0) return;
 
+  // Sinusoidal colour drift — 4s cycle, shared across all COB bells
+  var _phase = (Date.now() % 4000) / 4000 * Math.PI * 2;
+
   mealEvents.forEach(function(meal) {
     if (!meal.items) return;
     meal.items.forEach(function(food) {
@@ -1527,124 +1530,174 @@ function _drawCOBReservoir() {
       var gi         = food.gi || 55;
       var peakMin    = Math.max(15, 95 - gi);
       var peakT      = meal.t + peakMin * 60000;
-      var peakX      = tX(peakT);  // scroll-aware
+      var peakX      = tX(peakT);
       var elapsedMin = (viewTime - meal.t) / 60000;
       var remaining  = _cobFgi(elapsedMin, gi);
-      // No early return — rim always drawn. Fill fades with remaining.
 
-      // GI \u2192 colour via continuous ramp (user-configurable)
-      var giCol=giToColour(gi), rv=giCol[0], gv=giCol[1], bv=giCol[2];
+      // Base colour from GI — warm ramp orange→amber→gold
+      var giCol = giToColour(gi);
+      var rv0 = giCol[0], gv0 = giCol[1], bv0 = giCol[2];
+      // Sinusoidal drift: orange→gold→amber cycle, independent of remaining
+      var drift  = Math.sin(_phase + gi * 0.05) * 0.5 + 0.5; // 0..1
+      var rv = Math.round(rv0 * (1 - drift * 0.08) + 255 * drift * 0.08);
+      var gv = Math.round(gv0 * (1 - drift * 0.15) + 200 * drift * 0.15);
+      var bv = Math.round(bv0 * (1 - drift * 0.05) + 40  * drift * 0.05);
 
-      // Zoom-aware bell width — faster GI = narrower bell
       var sigmaFactor = gi >= 70 ? 0.6 : gi >= 55 ? 1.0 : 1.5;
-      var sigma = _bellSigma(sigmaFactor);
-      // Deeper into the flow — reservoir peaks closer to BG line
-      var lineY      = dataAt ? bgToY(dataAt(viewTime).bg) : H * 0.5;
-      var availableH = H - lineY - 8;  // space from bottom to just below BG line
-      // Bell height is fixed at peak size — doesn't shrink as carbs deplete.
-      // remaining only drives opacity so the shape scrolls past like a fixed river object.
-      var maxD  = Math.min(availableH * 0.92, 90 * (food.carbs / 20));
-      var minD  = Math.min(availableH * 0.12, 18);
+      var sigma  = _bellSigma(sigmaFactor);
+      var lineY  = dataAt ? bgToY(dataAt(viewTime).bg) : H * 0.5;
+      var availableH = H - lineY - 8;
+      var maxD   = Math.min(availableH * 0.92, 90 * (food.carbs / 20));
+      var minD   = Math.min(availableH * 0.12, 18);
       maxD = Math.max(minD, maxD);
 
-      // Draw bell in TIME-SPACE, not pixel-space.
-      // This correctly handles peakT off-screen left or right.
-      // For each pixel, compute its canvas time and evaluate distance to peakT.
-      var sigmaMins = peakMin / 2.2; // absorption width in minutes (mirrors _cobFgi sigma)
-      var mealT_local = meal.t; // capture for closure — carbs cannot arrive before eat time
-      function bellH(px) {
-        var t_px = viewTime + (px - NOW_X*W) / W * viewSpan;
-        if (t_px < mealT_local) return 0; // zero before food is eaten
-        // Smooth ramp-up from eat time: rises from 0 over the first ~8 minutes
-        // so the curve starts gradually at the chip rather than as a vertical cliff
+      var sigmaMins   = peakMin / 2.2;
+      var mealT_local = meal.t;
+      // Chip Y — origin point on the CGM line where this bell is born
+      var chipY = bgToY(dataAt(meal.t).bg || dataAt(viewTime).bg);
+
+      var bellH = function(px) {
+        var t_px = viewTime + (px - NOW_X * W) / W * viewSpan;
+        if (t_px < mealT_local) return 0;
         var rampMins = Math.min(1.0, (t_px - mealT_local) / (8 * 60000));
-        var ramp = rampMins * rampMins * (3 - 2 * rampMins); // smoothstep
+        var ramp     = rampMins * rampMins * (3 - 2 * rampMins);
         var minsDist = (t_px - peakT) / 60000;
         return Math.exp(-0.5 * Math.pow(minsDist / sigmaMins, 2)) * maxD * ramp;
-      }
+      };
+
+      // ── Fill — blossoms from chipY, expands upward ───────────────────
+      // Top surface is the bell. Bottom surface blurs into the CGM line.
+      // Fill is clipped so it never goes below chipY.
+      CX.save();
       CX.beginPath();
-      CX.moveTo(0, H);
+      CX.moveTo(0, chipY);
       for (var i = 0; i <= 280; i++) {
-        var px = (i/280)*W;
-        CX.lineTo(px, H - bellH(px));
+        var px = (i / 280) * W;
+        var bh = bellH(px);
+        CX.lineTo(px, chipY - bh);
       }
-      CX.lineTo(W, H); CX.closePath();
+      CX.lineTo(W, chipY);
+      CX.closePath();
 
-      var gr = CX.createLinearGradient(0, H, 0, H-maxD);
-      gr.addColorStop(0,   'rgba('+rv+','+gv+','+bv+','+(0.22+remaining*0.28)+')');
-      gr.addColorStop(0.5, 'rgba('+rv+','+gv+','+bv+','+(remaining*0.12)+')');
-      gr.addColorStop(1,   'rgba('+rv+','+gv+','+bv+',0)');
-      if (remaining > 0.01) { CX.fillStyle = gr; CX.fill(); }
+      // Living gradient: colour-shifted, breathes with _phase
+      var breathe = 0.18 + Math.sin(_phase * 1.3) * 0.06;
+      var gr = CX.createLinearGradient(0, chipY, 0, chipY - maxD);
+      gr.addColorStop(0,   'rgba(' + rv + ',' + gv + ',' + bv + ',' + (breathe + 0.12) + ')');
+      gr.addColorStop(0.4, 'rgba(' + rv + ',' + gv + ',' + bv + ',' + (breathe * 0.6) + ')');
+      gr.addColorStop(0.8, 'rgba(' + rv + ',' + gv + ',' + bv + ',' + (breathe * 0.2) + ')');
+      gr.addColorStop(1,   'rgba(' + rv + ',' + gv + ',' + bv + ',0)');
+      CX.fillStyle = gr; CX.fill();
 
-      // Rim — always drawn, fades to a ghost outline when depleted
+      // Blurred bottom edge — soft origin from chip, feathers to nothing
+      CX.shadowColor = 'rgba(' + rv + ',' + gv + ',' + bv + ',0.35)';
+      CX.shadowBlur  = 18;
+      CX.beginPath();
+      CX.moveTo(0, chipY);
+      for (var i = 0; i <= 280; i++) {
+        var px = (i / 280) * W;
+        CX.lineTo(px, chipY);
+      }
+      CX.strokeStyle = 'rgba(' + rv + ',' + gv + ',' + bv + ',0.18)';
+      CX.lineWidth = 1; CX.stroke();
+      CX.shadowBlur = 0; CX.shadowColor = 'transparent';
+      CX.restore();
+
+      // ── Rim — bell surface, always drawn ─────────────────────────────
+      CX.save();
       CX.beginPath();
       for (var i = 0; i <= 280; i++) {
-        var px = (i/280)*W;
-        var py = H - bellH(px);
-        i===0 ? CX.moveTo(px,py) : CX.lineTo(px,py);
+        var px = (i / 280) * W;
+        var py = chipY - bellH(px);
+        i === 0 ? CX.moveTo(px, py) : CX.lineTo(px, py);
       }
-      CX.strokeStyle='rgba('+rv+','+gv+','+bv+','+(0.18 + remaining*0.42)+')';
-      CX.lineWidth=1.2; CX.stroke();
+      CX.strokeStyle = 'rgba(' + rv + ',' + gv + ',' + bv + ',0.55)';
+      CX.lineWidth = 1.2; CX.stroke();
+      CX.restore();
 
-      // ── Fast-sugar highlight layer (GI ≥ 80) ───────────────────────
-      // High-GI foods (glucose tabs, jelly babies, white bread, fruit juice)
-      // get a bright inner spike to distinguish fast sugar from slow starch.
-      // Shows the rapid-rise character that makes them useful for hypos
-      // and risky if over-dosed.
-      if (gi >= 80 && remaining > 0.05) {
-        var fastPeakMin = Math.max(10, 95 - gi) * 0.6; // faster peak than full bell
+      // ── Living bubbles — distributed along full bell surface ─────────
+      // Bubbles sit on the rim and pulse/drift upward. No peak/trough bias.
+      var chipXpx = tX(meal.t);
+      var nBubbles = Math.min(18, Math.max(4, Math.floor(food.carbs * 0.5)));
+      for (var bi = 0; bi < nBubbles; bi++) {
+        var bFrac   = (bi + 0.5) / nBubbles;
+        var bPx     = bFrac * W;
+        var bH      = bellH(bPx);
+        if (bH < 3) continue;
+        // Each bubble has its own drift cycle offset
+        var bPhase  = _phase + bi * 0.7 + gi * 0.02;
+        var bRise   = (Math.sin(bPhase * 0.8) * 0.5 + 0.5) * bH * 0.35;
+        var bWobX   = Math.sin(bPhase * 1.1) * 3;
+        var bY      = chipY - bH * (0.15 + bFrac * 0.5) - bRise;
+        var bR      = 1.5 + Math.sin(bPhase * 1.3 + bi) * 0.8 + food.carbs / 60;
+        var bAlpha  = 0.25 + Math.sin(bPhase * 0.9) * 0.15;
+        if (bY > chipY || bY < chipY - maxD - 5) continue;
+
+        // Bubble: translucent fill + bright rim + highlight
+        CX.beginPath();
+        CX.arc(bPx + bWobX, bY, bR, 0, Math.PI * 2);
+        CX.fillStyle = 'rgba(' + rv + ',' + gv + ',' + bv + ',' + (bAlpha * 0.2) + ')';
+        CX.fill();
+        CX.strokeStyle = 'rgba(' + rv + ',' + gv + ',' + bv + ',' + bAlpha + ')';
+        CX.lineWidth = 0.8; CX.stroke();
+        // Highlight
+        CX.beginPath();
+        CX.arc(bPx + bWobX - bR * 0.28, bY - bR * 0.3, bR * 0.28, 0, Math.PI * 2);
+        CX.fillStyle = 'rgba(255,240,180,' + (bAlpha * 0.55) + ')';
+        CX.fill();
+      }
+
+      // ── Fast-sugar inner spike (GI ≥ 80) ─────────────────────────────
+      if (gi >= 80) {
+        var fastPeakMin = Math.max(10, 95 - gi) * 0.6;
         var fastPeakT   = meal.t + fastPeakMin * 60000;
         var fastSigmaM  = fastPeakMin / 1.6;
         var fastMaxD    = maxD * 0.55;
-        function fastBellH(px2) {
-          var t_px2 = viewTime + (px2 - NOW_X*W) / W * viewSpan;
+        var fastBellH = function(px2) {
+          var t_px2 = viewTime + (px2 - NOW_X * W) / W * viewSpan;
           if (t_px2 < mealT_local) return 0;
           var ramp2 = Math.min(1, (t_px2 - mealT_local) / (4 * 60000));
-          var md2 = (t_px2 - fastPeakT) / 60000;
+          var md2   = (t_px2 - fastPeakT) / 60000;
           return Math.exp(-0.5 * Math.pow(md2 / fastSigmaM, 2)) * fastMaxD * ramp2;
-        }
+        };
+        CX.save();
         CX.beginPath();
-        CX.moveTo(0, H);
+        CX.moveTo(0, chipY);
         for (var fi = 0; fi <= 280; fi++) {
-          var fpx = (fi/280)*W;
-          CX.lineTo(fpx, H - fastBellH(fpx));
+          var fpx = (fi / 280) * W;
+          CX.lineTo(fpx, chipY - fastBellH(fpx));
         }
-        CX.lineTo(W, H); CX.closePath();
-        // Gold/white inner fill — fast sugar is warm and urgent
-        var fgr = CX.createLinearGradient(0, H, 0, H - fastMaxD);
-        fgr.addColorStop(0,   'rgba(255,220,80,' + (0.35 * remaining) + ')');
-        fgr.addColorStop(0.6, 'rgba(255,220,80,' + (0.12 * remaining) + ')');
+        CX.lineTo(W, chipY); CX.closePath();
+        var fgr = CX.createLinearGradient(0, chipY, 0, chipY - fastMaxD);
+        fgr.addColorStop(0,   'rgba(255,220,80,0.30)');
+        fgr.addColorStop(0.5, 'rgba(255,220,80,0.10)');
         fgr.addColorStop(1,   'rgba(255,220,80,0)');
-        CX.fillStyle = fgr;
-        CX.fill();
-        // Fast-sugar rim: brighter, narrower
+        CX.fillStyle = fgr; CX.fill();
         CX.beginPath();
         for (var fi2 = 0; fi2 <= 280; fi2++) {
-          var fpx2 = (fi2/280)*W;
-          var fpy2 = H - fastBellH(fpx2);
-          fi2 === 0 ? CX.moveTo(fpx2, fpy2) : CX.lineTo(fpx2, fpy2);
+          var fpx2 = (fi2 / 280) * W;
+          fi2 === 0 ? CX.moveTo(fpx2, chipY - fastBellH(fpx2)) : CX.lineTo(fpx2, chipY - fastBellH(fpx2));
         }
-        CX.strokeStyle = 'rgba(255,230,100,' + (0.5 * remaining) + ')';
-        CX.lineWidth = 0.8;
-        CX.stroke();
+        CX.strokeStyle = 'rgba(255,230,100,0.45)';
+        CX.lineWidth = 0.8; CX.stroke();
+        CX.restore();
       }
 
-      // Food label — at peak if on screen, else at visible maximum
+      // ── Food label ────────────────────────────────────────────────────
       if (food.carbs >= 2 && maxD > 14) {
-        // Find the pixel with highest bell value within screen bounds
-        var labelX = Math.max(30, Math.min(W-30, peakX));
+        var labelX = Math.max(30, Math.min(W - 30, peakX));
         var labelH = bellH(labelX);
-        if (labelH > maxD * 0.15) { // only label if bell is meaningfully tall here
-          CX.globalAlpha = remaining * 0.65;
-          CX.fillStyle   = 'rgba('+rv+','+gv+','+bv+',1)';
+        if (labelH > maxD * 0.15) {
+          CX.globalAlpha = 0.65;
+          CX.fillStyle   = 'rgba(' + rv + ',' + gv + ',' + bv + ',1)';
           CX.font        = "300 8px 'DM Mono',monospace";
           CX.textAlign   = 'center';
-          CX.fillText(food.name.slice(0,14)+' '+food.carbs.toFixed(0)+'g', labelX, H-labelH-6);
+          CX.fillText(food.name.slice(0, 14) + ' ' + food.carbs.toFixed(0) + 'g', labelX, chipY - labelH - 6);
           CX.globalAlpha = 1;
         }
       }
-      // Track peak Y for pill positioning (highest bell = closest to BG line)
-      var thisPeakY = H - maxD;
+
+      // Track peak Y for pill positioning
+      var thisPeakY = chipY - maxD;
       if (_lastCOBPeakY < 0 || thisPeakY < _lastCOBPeakY) _lastCOBPeakY = thisPeakY;
     });
   });
@@ -1654,23 +1707,23 @@ function _drawIOBReservoir() {
   var bolusEvents = _getActiveBolusEvents();
   if (bolusEvents.length === 0) return;
 
-  bolusEvents.forEach(function(bolus) {
-    var elapsedMin = (viewTime - bolus.t) / 60000;
-    // DIA from therapy settings — default 240min if not set
-    var diaMins    = (_TREATMENT && _TREATMENT.dia) ? _TREATMENT.dia : 240;
-    var remaining  = _iobFn(elapsedMin, diaMins);
-    // No early return — rim always drawn. Fill fades with remaining.
+  // Sinusoidal colour drift — 4s cycle, cool blue→indigo→steel
+  var _phase = (Date.now() % 4000) / 4000 * Math.PI * 2;
 
-    // Time-space bell — mirrors COB approach so it tracks correctly on scroll
-    // Novorapid: peak ~75min, quick rise (sigmaR), long tail (sigmaF)
+  bolusEvents.forEach(function(bolus) {
+    var elapsedMin  = (viewTime - bolus.t) / 60000;
+    var diaMins     = (_TREATMENT && _TREATMENT.dia) ? _TREATMENT.dia : 240;
+    var remaining   = _iobFn(elapsedMin, diaMins);
+
     var peakT       = bolus.t + 75 * 60000;
-    var sigmaRMins  = 32;   // rise side — steeper
-    var sigmaFMins  = 70;   // fall side — long Novorapid tail
-    var lineY       = dataAt ? bgToY(dataAt(viewTime).bg) : H * 0.5;
-    var availableH  = lineY - 8;
-    // Bell height fixed at peak size — remaining drives opacity not size
-    var maxD        = Math.min(availableH * 0.90, 110 * (bolus.u / 3));
-    var minD        = Math.min(availableH * 0.12, 18);
+    var sigmaRMins  = 32;
+    var sigmaFMins  = 70;
+
+    // Chip Y — origin on CGM line where this bell is born
+    var chipY     = bgToY(dataAt(bolus.t).bg || dataAt(viewTime).bg);
+    var availableH = Math.max(chipY - 8, 40); // space above chip toward top of canvas
+    var maxD       = Math.min(availableH * 0.90, 110 * (bolus.u / 3));
+    var minD       = Math.min(availableH * 0.12, 18);
     maxD = Math.max(minD, maxD);
 
     var bolusT_local = bolus.t;
@@ -1684,48 +1737,85 @@ function _drawIOBReservoir() {
       return Math.exp(-0.5 * Math.pow(minsDist / sigma, 2)) * maxD * ramp;
     };
 
-    var rv = COL_IOB[0], gv = COL_IOB[1], bv = COL_IOB[2];
+    // Colour drift: blue→indigo→steel cycle
+    var drift = Math.sin(_phase + bolus.u * 0.3) * 0.5 + 0.5;
+    var rv = Math.round(COL_IOB[0] * (1 - drift * 0.15) + 80  * drift * 0.15);
+    var gv = Math.round(COL_IOB[1] * (1 - drift * 0.10) + 100 * drift * 0.10);
+    var bv = Math.round(COL_IOB[2] * (1 - drift * 0.05) + 255 * drift * 0.05);
 
-    // Fill — from top of canvas down to bell surface (insulin falls from above)
+    // ── Fill — blossoms from chipY upward ─────────────────────────────
+    CX.save();
     CX.beginPath();
-    CX.moveTo(0, 0);
+    CX.moveTo(0, chipY);
     for (var i = 0; i <= 280; i++) {
       var px = (i / 280) * W;
-      CX.lineTo(px, bellH_iob(px));
+      CX.lineTo(px, chipY - bellH_iob(px));
     }
-    CX.lineTo(W, 0); CX.closePath();
+    CX.lineTo(W, chipY); CX.closePath();
 
-    // Gradient from top down to maxD pixels — anchored at y=0
-    var gr = CX.createLinearGradient(0, 0, 0, maxD);
-    gr.addColorStop(0,   'rgba(' + rv + ',' + gv + ',' + bv + ',' + (0.22 + remaining * 0.28) + ')');
-    gr.addColorStop(0.5, 'rgba(' + rv + ',' + gv + ',' + bv + ',' + (remaining * 0.12) + ')');
+    var breathe = 0.18 + Math.sin(_phase * 1.1 + 1.5) * 0.06;
+    var gr = CX.createLinearGradient(0, chipY, 0, chipY - maxD);
+    gr.addColorStop(0,   'rgba(' + rv + ',' + gv + ',' + bv + ',' + (breathe + 0.12) + ')');
+    gr.addColorStop(0.4, 'rgba(' + rv + ',' + gv + ',' + bv + ',' + (breathe * 0.6) + ')');
+    gr.addColorStop(0.8, 'rgba(' + rv + ',' + gv + ',' + bv + ',' + (breathe * 0.2) + ')');
     gr.addColorStop(1,   'rgba(' + rv + ',' + gv + ',' + bv + ',0)');
     CX.fillStyle = gr; CX.fill();
 
-    // Rim — traces bell surface, always drawn
+    // Blurred bottom edge — soft origin from chip
+    CX.shadowColor = 'rgba(' + rv + ',' + gv + ',' + bv + ',0.30)';
+    CX.shadowBlur  = 18;
+    CX.beginPath();
+    for (var ii = 0; ii <= 280; ii++) {
+      var ppx = (ii / 280) * W;
+      ii === 0 ? CX.moveTo(ppx, chipY) : CX.lineTo(ppx, chipY);
+    }
+    CX.strokeStyle = 'rgba(' + rv + ',' + gv + ',' + bv + ',0.15)';
+    CX.lineWidth = 1; CX.stroke();
+    CX.shadowBlur = 0; CX.shadowColor = 'transparent';
+    CX.restore();
+
+    // ── Rim — bell surface, always drawn ─────────────────────────────
+    CX.save();
     CX.beginPath();
     for (var i = 0; i <= 280; i++) {
       var px = (i / 280) * W;
-      var py = bellH_iob(px);
+      var py = chipY - bellH_iob(px);
       i === 0 ? CX.moveTo(px, py) : CX.lineTo(px, py);
     }
-    CX.strokeStyle = 'rgba(' + rv + ',' + gv + ',' + bv + ',' + (0.35 + remaining * 0.45) + ')';
+    CX.strokeStyle = 'rgba(' + rv + ',' + gv + ',' + bv + ',0.55)';
     CX.lineWidth = 1.2; CX.stroke();
+    CX.restore();
 
-    // Label at peak
-    var peakX = tX(peakT);
-    var peakD = bellH_iob(peakX);
-    if (peakX > 30 && peakX < W - 30 && peakD > 10) {
-      CX.globalAlpha = remaining * 0.6;
-      CX.fillStyle   = 'rgba(' + rv + ',' + gv + ',' + bv + ',1)';
-      CX.font        = "300 8px 'DM Mono',monospace";
-      CX.textAlign   = 'center';
-      CX.fillText(bolus.u.toFixed(1) + 'U', peakX, peakD + 10);
-      CX.globalAlpha = 1;
+    // ── Distributed bubbles along full rim ───────────────────────────
+    var nBubbles = Math.min(14, Math.max(3, Math.floor(bolus.u * 2.5)));
+    for (var bi = 0; bi < nBubbles; bi++) {
+      var bFrac  = (bi + 0.5) / nBubbles;
+      var bPx    = bFrac * W;
+      var bH     = bellH_iob(bPx);
+      if (bH < 3) continue;
+      var bPhase = _phase + bi * 0.65 + bolus.u * 0.1;
+      var bDrift = (Math.sin(bPhase * 0.7) * 0.5 + 0.5) * bH * 0.25;
+      var bWobX  = Math.sin(bPhase * 1.2) * 3;
+      var bY     = chipY - bH * (0.2 + bFrac * 0.45) - bDrift;
+      var bR     = 1.2 + Math.sin(bPhase * 1.4 + bi) * 0.6 + bolus.u / 8;
+      var bAlpha = 0.22 + Math.sin(bPhase) * 0.12;
+      if (bY > chipY || bY < chipY - maxD - 5) continue;
+
+      // Teardrop-like bubble for insulin (cooler, denser than carb)
+      CX.beginPath();
+      CX.arc(bPx + bWobX, bY, bR, 0, Math.PI * 2);
+      CX.fillStyle   = 'rgba(' + rv + ',' + gv + ',' + bv + ',' + (bAlpha * 0.18) + ')';
+      CX.fill();
+      CX.strokeStyle = 'rgba(' + rv + ',' + gv + ',' + bv + ',' + bAlpha + ')';
+      CX.lineWidth = 0.7; CX.stroke();
+      // Cool highlight
+      CX.beginPath();
+      CX.arc(bPx + bWobX + bR * 0.25, bY - bR * 0.3, bR * 0.25, 0, Math.PI * 2);
+      CX.fillStyle = 'rgba(195,228,255,' + (bAlpha * 0.5) + ')';
+      CX.fill();
     }
 
-    // ── THREE-CURVE OVERLAY ────────────────────────────────────────────
-    // Curve 2: clinical effective — wider tail (sigmaF × 1.35), dashed
+    // ── THREE-CURVE OVERLAY ──────────────────────────────────────────
     var sigmaF_eff = sigmaFMins * 1.35;
     var bellH_eff = function(px) {
       var t_px = viewTime + (px - NOW_X * W) / W * viewSpan;
@@ -1739,13 +1829,12 @@ function _drawIOBReservoir() {
     CX.beginPath();
     for (var i2 = 0; i2 <= 280; i2++) {
       var px2 = (i2 / 280) * W;
-      i2 === 0 ? CX.moveTo(px2, bellH_eff(px2)) : CX.lineTo(px2, bellH_eff(px2));
+      i2 === 0 ? CX.moveTo(px2, chipY - bellH_eff(px2)) : CX.lineTo(px2, chipY - bellH_eff(px2));
     }
     CX.strokeStyle = 'rgba(' + rv + ',' + gv + ',' + bv + ',0.28)';
     CX.lineWidth = 1.0; CX.setLineDash([5, 5]); CX.stroke(); CX.setLineDash([]);
     CX.restore();
 
-    // Curve 3: observed DIA from bolus_outcomes.return_mins median, dotted
     if (window._medianReturnMins && window._medianReturnMins > 0 &&
         Math.abs(window._medianReturnMins - 240) > 15) {
       var sigmaF_obs = window._medianReturnMins * (sigmaFMins / 240);
@@ -1761,14 +1850,25 @@ function _drawIOBReservoir() {
       CX.beginPath();
       for (var i3 = 0; i3 <= 280; i3++) {
         var px3 = (i3 / 280) * W;
-        i3 === 0 ? CX.moveTo(px3, bellH_obs(px3)) : CX.lineTo(px3, bellH_obs(px3));
+        i3 === 0 ? CX.moveTo(px3, chipY - bellH_obs(px3)) : CX.lineTo(px3, chipY - bellH_obs(px3));
       }
       CX.strokeStyle = 'rgba(180,220,255,0.22)';
       CX.lineWidth = 0.8; CX.setLineDash([2, 5]); CX.stroke(); CX.setLineDash([]);
       CX.restore();
     }
 
-    // Track peak Y for pill positioning
+    // Label at peak
+    var peakX = tX(peakT);
+    var peakD = bellH_iob(peakX);
+    if (peakX > 30 && peakX < W - 30 && peakD > 10) {
+      CX.globalAlpha = 0.6;
+      CX.fillStyle   = 'rgba(' + rv + ',' + gv + ',' + bv + ',1)';
+      CX.font        = "300 8px 'DM Mono',monospace";
+      CX.textAlign   = 'center';
+      CX.fillText(bolus.u.toFixed(1) + 'U', peakX, chipY - peakD - 6);
+      CX.globalAlpha = 1;
+    }
+
     if (_lastIOBPeakY < 0 || maxD > _lastIOBPeakY) _lastIOBPeakY = maxD;
   });
 }
@@ -2106,70 +2206,162 @@ var _mistFrame = 0;
 function drawUnknownForce(pal) {
   _mistFrame++;
 
-  // ── BUILD RESIDUAL SERIES — actual vs model-predicted (2h window) ──
-  var steps    = 24;
-  var residuals = [];
+  // ── FILLED MIST — swirling between where COB and IOB meet ────────────
+  // We sample the COB top surface and IOB bottom surface at each pixel.
+  // Where they overlap (COB top > IOB bottom from the CGM line), that gap
+  // is the unresolved zone — filled with animated grey mist.
+  // Where they don't overlap, we draw a thin permanent aura around the CGM.
 
-  for (var i = 0; i <= steps; i++) {
-    var t_i     = viewTime - (steps - i) * 5 * 60000;
-    var actual  = dataAt(t_i).bg;
+  var steps = 120; // pixel resolution
+  var mistPts = [];
+
+  for (var si = 0; si <= steps; si++) {
+    var px   = (si / steps) * W;
+    var t_px = viewTime + (px - NOW_X * W) / W * viewSpan;
+
+    // CGM actual at this pixel
+    var actual = dataAt(t_px).bg;
     if (!actual || actual <= 0) continue;
+    var cgmY = bgToY(actual);
 
-    var tPrev   = t_i - 5 * 60000;
-    var dPrev   = dataAt(tPrev);
-    var ISF     = getISF(t_i);
+    // COB top surface — highest COB bell at this pixel
+    var cobH = 0;
+    var mealEvents = _getActiveMealEvents();
+    mealEvents.forEach(function(meal) {
+      if (!meal.items) return;
+      meal.items.forEach(function(food) {
+        if (!food.carbs || food.carbs <= 0) return;
+        var gi       = food.gi || 55;
+        var peakMin  = Math.max(15, 95 - gi);
+        var peakT    = meal.t + peakMin * 60000;
+        var sigmaM   = peakMin / 2.2;
+        if (t_px < meal.t) return;
+        var rampMins = Math.min(1.0, (t_px - meal.t) / (8 * 60000));
+        var ramp     = rampMins * rampMins * (3 - 2 * rampMins);
+        var maxD     = Math.min((H - cgmY - 8) * 0.92, 90 * (food.carbs / 20));
+        var h        = Math.exp(-0.5 * Math.pow((t_px - peakT) / 60000 / sigmaM, 2)) * maxD * ramp;
+        if (h > cobH) cobH = h;
+      });
+    });
 
-    var cobDelta = dPrev.cob > 0 ? dPrev.cob * (1 - cobF(5)) * 0.055 : 0;
-    var iobDelta = dPrev.iob > 0 ? -dPrev.iob * (1 - iobF(5)) * ISF  : 0;
-    var predicted = dPrev.bg + cobDelta + iobDelta;
+    // IOB bottom surface — deepest IOB bell at this pixel
+    var iobH = 0;
+    var bolusEvents = _getActiveBolusEvents();
+    bolusEvents.forEach(function(bolus) {
+      var peakT    = bolus.t + 75 * 60000;
+      var sigmaR   = 32, sigmaF = 70;
+      var diaMins  = (_TREATMENT && _TREATMENT.dia) ? _TREATMENT.dia : 240;
+      var maxD     = Math.min((cgmY - 8) * 0.90, 110 * (bolus.u / 3));
+      var rmpMins  = Math.min(1.0, Math.max(0, (t_px - bolus.t) / (12 * 60000)));
+      var ramp     = rmpMins * rmpMins * (3 - 2 * rmpMins);
+      var md       = (t_px - peakT) / 60000;
+      var sigma    = md < 0 ? sigmaR : sigmaF;
+      var h        = Math.exp(-0.5 * Math.pow(md / sigma, 2)) * maxD * ramp;
+      if (h > iobH) iobH = h;
+    });
 
-    var residual = actual - predicted;
-    var x = tX(t_i);
-    if (x > 0 && x < W) {
-      residuals.push({ t: t_i, x: x, actual: actual, predicted: predicted, residual: residual });
-    }
+    // Chip Y for COB/IOB origin (use CGM at viewTime as reference for now)
+    var chipY = cgmY;
+    var cobTopY = chipY - cobH;  // COB surface: Y above chip
+    var iobBotY = chipY - iobH; // IOB surface: Y above chip
+
+    mistPts.push({ px: px, cgmY: cgmY, cobTopY: cobTopY, iobBotY: iobBotY, cobH: cobH, iobH: iobH });
   }
+
+  if (mistPts.length < 2) return;
 
   CX.save();
 
-  // ── AURA + GAP MIST — always present around BG line; denser in the void ──
-  // The line never sits clean — there is always something unexplained.
-  // baseAura: permanent haze breathing around the line regardless of gap size.
-  // Gap density: fills the space between expected and actual when they diverge.
-  var baseAura = 10; // px — permanent mist radius around the CGM line
-
-  residuals.forEach(function(pt) {
-    if (pt.x < 0 || pt.x > W) return;
-
-    var actualY    = bgToY(pt.actual);
-    var predictedY = bgToY(pt.predicted);
-    var gap        = Math.abs(actualY - predictedY);
-    var topY       = Math.min(actualY, predictedY) - baseAura;
-    var botY       = Math.max(actualY, predictedY) + baseAura;
-
-    // Draw vertical column of mist particles for this residual point
-    for (var py = topY; py < botY; py += 2.5) {
-      var inGap       = py > Math.min(actualY, predictedY) && py < Math.max(actualY, predictedY);
-      var distFromLine = Math.abs(py - actualY);
-      var gapFactor    = inGap ? Math.min(1, gap / 20) : 0;
-      var auraFactor   = Math.exp(-(distFromLine * distFromLine) / (2 * baseAura * baseAura));
-      var density      = Math.max(gapFactor * 0.9, auraFactor * 0.4);
-
-      var shimmer = Math.sin(pt.x * 0.11 + py * 0.09 + phi * 3.5) * 0.5 + 0.5;
-      var drift   = Math.sin(pt.x * 0.06 + phi * 1.4) * 2.0;
-      var alpha   = shimmer * density * 0.20;
-      if (alpha < 0.01) continue;
-
-      CX.beginPath();
-      CX.arc(pt.x + drift, py + Math.sin(phi * 1.0 + pt.x * 0.05) * 1.5, 1.4, 0, Math.PI * 2);
-      CX.fillStyle = 'rgba(200,212,235,' + alpha.toFixed(3) + ')';
-      CX.fill();
-    }
+  // ── PERMANENT CGM AURA — always present ──────────────────────────────
+  var auraGr = CX.createLinearGradient(0, 0, 0, H);
+  auraGr.addColorStop(0,   'rgba(180,200,220,0)');
+  auraGr.addColorStop(0.5, 'rgba(180,200,220,0.06)');
+  auraGr.addColorStop(1,   'rgba(180,200,220,0)');
+  mistPts.forEach(function(pt) {
+    var aura = 12;
+    var gr = CX.createLinearGradient(pt.px, pt.cgmY - aura, pt.px, pt.cgmY + aura);
+    gr.addColorStop(0,   'rgba(180,200,235,0)');
+    gr.addColorStop(0.5, 'rgba(180,200,235,0.08)');
+    gr.addColorStop(1,   'rgba(180,200,235,0)');
+    CX.fillStyle = gr;
+    CX.fillRect(pt.px - 1, pt.cgmY - aura, 2, aura * 2);
   });
 
-  // ── PREDICTED (EXPECTED) LINE — ghost of what should have happened ──
+  // ── FILLED MIST REGION — between COB top and IOB bottom ─────────────
+  // Build upper and lower mist boundary paths
+  var phi2 = _mistFrame * 0.018;
+
+  // Sample enough points for smooth fill — scan column by column
+  for (var mi = 0; mi < mistPts.length - 1; mi++) {
+    var pt  = mistPts[mi];
+    var pt2 = mistPts[mi + 1];
+
+    // The mist zone: between COB top surface and IOB bottom surface
+    // COB top is below CGM (pt.cobTopY > pt.cgmY in screen coords is wrong — cobTopY is ABOVE chip)
+    // cobTopY = chipY - cobH → smaller Y = higher on screen
+    // iobBotY = chipY - iobH → smaller Y = higher on screen
+    // Mist fills from max(cobTopY, iobBotY) up to the CGM line
+    // i.e. the zone where BOTH forces are active but don't match reality
+
+    var topY  = Math.min(pt.cobTopY, pt.iobBotY); // highest surface (smallest Y)
+    var botY  = pt.cgmY;                            // CGM line as floor
+    var topY2 = Math.min(pt2.cobTopY, pt2.iobBotY);
+    var botY2 = pt2.cgmY;
+
+    if (botY - topY < 2) continue; // no meaningful gap
+
+    // Swirling mist: shimmer shifts with time and position
+    var shimmer  = Math.sin(phi2 * 2.1 + pt.px * 0.04) * 0.5 + 0.5;
+    var swirl    = Math.sin(phi2 * 1.3 + pt.px * 0.07 + mi * 0.3) * 3;
+    var mistAlpha = 0.06 + shimmer * 0.08;
+    var mistDepth = botY - topY;
+
+    // Draw filled mist column
+    var mgr = CX.createLinearGradient(0, topY + swirl, 0, botY);
+    mgr.addColorStop(0,   'rgba(160,185,215,' + (mistAlpha * 0.2) + ')');
+    mgr.addColorStop(0.3, 'rgba(175,195,225,' + mistAlpha + ')');
+    mgr.addColorStop(0.7, 'rgba(185,205,230,' + mistAlpha + ')');
+    mgr.addColorStop(1,   'rgba(160,185,215,' + (mistAlpha * 0.3) + ')');
+
+    CX.beginPath();
+    CX.moveTo(pt.px,  topY  + swirl);
+    CX.lineTo(pt2.px, topY2 + swirl);
+    CX.lineTo(pt2.px, botY2);
+    CX.lineTo(pt.px,  botY);
+    CX.closePath();
+    CX.fillStyle = mgr;
+    CX.fill();
+
+    // Occasional swirl wisps — slow, sparse, ghostly
+    if (mi % 8 === 0 && mistDepth > 8) {
+      var wispY = topY + mistDepth * (0.3 + shimmer * 0.4) + swirl;
+      var wispR = 3 + shimmer * 4;
+      CX.beginPath();
+      CX.arc(pt.px + swirl * 1.5, wispY, wispR, 0, Math.PI * 2);
+      CX.fillStyle = 'rgba(190,210,235,' + (mistAlpha * 0.35) + ')';
+      CX.fill();
+    }
+  }
+
+  // ── PREDICTED (EXPECTED) LINE — ghost of what model said ──────────
+  var residuals = [];
+  var rSteps = 24;
+  for (var ri = 0; ri <= rSteps; ri++) {
+    var t_i    = viewTime - (rSteps - ri) * 5 * 60000;
+    var actual = dataAt(t_i).bg;
+    if (!actual || actual <= 0) continue;
+    var tPrev  = t_i - 5 * 60000;
+    var dPrev  = dataAt(tPrev);
+    var ISF    = getISF(t_i);
+    var cobDelta = dPrev.cob > 0 ? dPrev.cob * (1 - cobF(5)) * 0.055 : 0;
+    var iobDelta = dPrev.iob > 0 ? -dPrev.iob * (1 - iobF(5)) * ISF  : 0;
+    var predicted = dPrev.bg + cobDelta + iobDelta;
+    var x = tX(t_i);
+    if (x > 0 && x < W) residuals.push({ x: x, predicted: predicted });
+  }
+
   if (residuals.length > 2) {
-    CX.globalAlpha = 0.18;
+    CX.globalAlpha = 0.14;
     CX.strokeStyle = 'rgba(200,215,235,1)';
     CX.lineWidth   = 1;
     CX.setLineDash([2, 8]);
@@ -2183,84 +2375,6 @@ function drawUnknownForce(pal) {
     CX.globalAlpha = 1;
   }
 
-  // ── RIBBON LAYER — directional pull when sustained residual ──────
-  var totalResidue = 0;
-  var recentResiduals = residuals.slice(-8);
-  recentResiduals.forEach(function(r) { totalResidue += r.residual; });
-  var avgResidue    = recentResiduals.length > 0 ? totalResidue / recentResiduals.length : 0;
-  var ribbonStrength = Math.min(1, Math.abs(avgResidue) / 2.5);
-
-  if (ribbonStrength > 0.08) {
-    var isDown   = avgResidue < 0;
-    var nowX2    = NOW_X * W;
-    var lineY2   = dataAt ? bgToY(dataAt(viewTime).bg) : H * 0.5;
-    var numRibs  = 3 + Math.floor(ribbonStrength * 4);
-    var edgeY    = isDown ? H : 0;
-
-    for (var ri = 0; ri < numRibs; ri++) {
-      var rFrac    = (ri + 1) / (numRibs + 1);
-      var rx       = nowX2 * (0.3 + rFrac * 0.6);
-      var ribLen   = 40 + rFrac * 60;
-      var ribAlpha = ribbonStrength * (0.06 + rFrac * 0.08) * (0.5 + 0.5 * Math.sin(phi * 0.4 + ri));
-      var midY     = edgeY + (lineY2 - edgeY) * (0.3 + rFrac * 0.55);
-
-      var gr2 = CX.createLinearGradient(rx - ribLen / 2, 0, rx + ribLen / 2, 0);
-      gr2.addColorStop(0,   'rgba(180,195,220,0)');
-      gr2.addColorStop(0.2, 'rgba(180,195,220,' + ribAlpha + ')');
-      gr2.addColorStop(0.8, 'rgba(180,195,220,' + ribAlpha + ')');
-      gr2.addColorStop(1,   'rgba(180,195,220,0)');
-      CX.fillStyle = gr2;
-      CX.beginPath(); CX.roundRect(rx - ribLen / 2, midY - 1.5, ribLen, 3, 1.5); CX.fill();
-
-      var tGr = CX.createLinearGradient(0, edgeY, 0, midY);
-      tGr.addColorStop(0,   'rgba(160,180,210,0)');
-      tGr.addColorStop(0.6, 'rgba(160,180,210,' + (ribAlpha * 0.5) + ')');
-      tGr.addColorStop(1,   'rgba(160,180,210,' + (ribAlpha * 0.9) + ')');
-      CX.fillStyle = tGr;
-      CX.fillRect(rx - 1, Math.min(edgeY, midY), 2, Math.abs(midY - edgeY));
-    }
-  }
-
-  // ── LEGACY MIST PARTICLES — keep ticking for smooth transition ───
-  if (_mistFrame % 16 === 0) {
-    residuals.forEach(function(pt) {
-      if (Math.abs(pt.residual) < 1.2) return;
-      if (Math.random() > 0.25) return;
-      var intensity = Math.min(1, Math.abs(pt.residual) / 3);
-      _mistParticles.push({
-        x:        pt.x + (Math.random() - 0.5) * 18,
-        y:        bgToY(pt.actual) + (Math.random() - 0.5) * 10,
-        vx:       (Math.random() - 0.5) * 0.3,
-        vy:       (pt.residual < 0 ? -0.25 : 0.25) * (0.5 + Math.random() * 0.5),
-        r:        3 + Math.random() * 8,
-        alpha:    0,
-        maxAlpha: 0.08 + intensity * 0.10,
-        life:     0,
-        maxLife:  60 + Math.random() * 90,
-        phase:    Math.random() * Math.PI * 2,
-        intensity: intensity,
-      });
-    });
-    if (_mistParticles.length > 160) _mistParticles.splice(0, _mistParticles.length - 160);
-  }
-
-  for (var mi = _mistParticles.length - 1; mi >= 0; mi--) {
-    var mp = _mistParticles[mi];
-    mp.life++;
-    mp.x += mp.vx + Math.sin(mp.life * 0.04 + mp.phase) * 0.25;
-    mp.y += mp.vy + Math.sin(mp.life * 0.06 + mp.phase * 1.3) * 0.18;
-    var tFrac = mp.life / mp.maxLife;
-    if (tFrac < 0.2)      mp.alpha = mp.maxAlpha * (tFrac / 0.2);
-    else if (tFrac < 0.7) mp.alpha = mp.maxAlpha;
-    else                  mp.alpha = mp.maxAlpha * (1 - (tFrac - 0.7) / 0.3);
-    if (mp.life >= mp.maxLife) { _mistParticles.splice(mi, 1); continue; }
-    CX.beginPath();
-    CX.arc(mp.x, mp.y, mp.r * (0.6 + tFrac * 0.6), 0, Math.PI * 2);
-    CX.fillStyle = 'rgba(210,220,235,' + Math.max(0, mp.alpha).toFixed(3) + ')';
-    CX.fill();
-  }
-
-  CX.globalAlpha = 1;
   CX.restore();
 }
 
