@@ -849,9 +849,13 @@ function dataAt(t) {
 }
 
 function iobF(m) {
-  if (m<=0) return 1; if (m>=240) return 0;
-  let d=0; for(let x=0;x<m;x+=2) d+=(x<=70?x/70:Math.max(0,1-(x-70)/170))*2;
-  return Math.max(0,1-Math.min(1,d/120));  // 120 = correct integral at 240min
+  var diaMins = (_TREATMENT && _TREATMENT.dia) ? _TREATMENT.dia : 240;
+  if (m<=0) return 1; if (m>=diaMins) return 0;
+  var peakM = diaMins * 0.3125;
+  var tailM = diaMins - peakM;
+  var d=0; for(var x=0;x<m;x+=2) d+=(x<=peakM?x/peakM:Math.max(0,1-(x-peakM)/tailM))*2;
+  var norm=0; for(var x=0;x<diaMins;x+=2) norm+=(x<=peakM?x/peakM:Math.max(0,1-(x-peakM)/tailM))*2;
+  return Math.max(0,1-Math.min(1,d/norm));
 }
 function cobF(m,gi=60) {
   if (m<=0) return 1; if (m>=240) return 0;
@@ -1482,11 +1486,18 @@ function _cobFgi(mins, gi) {
   return Math.max(0, 1 - Math.min(1, 0.5*(1+Math.tanh(0.7978845608*(z+0.044715*z*z*z)))));
 }
 
-function _iobFn(mins) {
-  if (mins <= 0) return 1; if (mins >= 240) return 0;
+function _iobFn(mins, diaMins) {
+  diaMins = diaMins || 240;
+  if (mins <= 0) return 1; if (mins >= diaMins) return 0;
+  // Scale the peak and tail to DIA — peak at ~31% of DIA (75min of 240min default)
+  var peakM = diaMins * 0.3125;
+  var tailM = diaMins - peakM;
   var d = 0;
-  for (var x = 0; x < mins; x += 2) d += (x<=70 ? x/70 : Math.max(0,1-(x-70)/170))*2;
-  return Math.max(0, 1 - Math.min(1, d/120));  // 120 = correct integral at 240min (was 105 — caused early cutoff at ~169min)
+  for (var x = 0; x < mins; x += 2) d += (x <= peakM ? x/peakM : Math.max(0,1-(x-peakM)/tailM))*2;
+  // Normaliser: compute integral at diaMins so curve reaches 0 correctly
+  var norm = 0;
+  for (var x = 0; x < diaMins; x += 2) norm += (x <= peakM ? x/peakM : Math.max(0,1-(x-peakM)/tailM))*2;
+  return Math.max(0, 1 - Math.min(1, d / norm));
 }
 
 // Zoom-aware sigma: bell width scales with viewSpan so it looks right at any zoom
@@ -1512,7 +1523,7 @@ function _drawCOBReservoir() {
       var peakX      = tX(peakT);  // scroll-aware
       var elapsedMin = (viewTime - meal.t) / 60000;
       var remaining  = _cobFgi(elapsedMin, gi);
-      if (remaining < 0.005) return;
+      // No early return — rim always drawn. Fill fades with remaining.
 
       // GI \u2192 colour via continuous ramp (user-configurable)
       var giCol=giToColour(gi), rv=giCol[0], gv=giCol[1], bv=giCol[2];
@@ -1556,16 +1567,16 @@ function _drawCOBReservoir() {
       gr.addColorStop(0,   'rgba('+rv+','+gv+','+bv+','+(0.22+remaining*0.28)+')');
       gr.addColorStop(0.5, 'rgba('+rv+','+gv+','+bv+','+(remaining*0.12)+')');
       gr.addColorStop(1,   'rgba('+rv+','+gv+','+bv+',0)');
-      CX.fillStyle = gr; CX.fill();
+      if (remaining > 0.01) { CX.fillStyle = gr; CX.fill(); }
 
-      // Rim
+      // Rim — always drawn, fades to a ghost outline when depleted
       CX.beginPath();
       for (var i = 0; i <= 280; i++) {
         var px = (i/280)*W;
         var py = H - bellH(px);
         i===0 ? CX.moveTo(px,py) : CX.lineTo(px,py);
       }
-      CX.strokeStyle='rgba('+rv+','+gv+','+bv+','+(0.35+remaining*0.45)+')';
+      CX.strokeStyle='rgba('+rv+','+gv+','+bv+','+(0.18 + remaining*0.42)+')';
       CX.lineWidth=1.2; CX.stroke();
 
       // ── Fast-sugar highlight layer (GI ≥ 80) ───────────────────────
@@ -1638,19 +1649,19 @@ function _drawIOBReservoir() {
 
   bolusEvents.forEach(function(bolus) {
     var elapsedMin = (viewTime - bolus.t) / 60000;
-    var remaining  = _iobFn(elapsedMin);
-    if (remaining < 0.005) return;
+    // DIA from therapy settings — default 240min if not set
+    var diaMins    = (_TREATMENT && _TREATMENT.dia) ? _TREATMENT.dia : 240;
+    var remaining  = _iobFn(elapsedMin, diaMins);
+    // No early return — rim always drawn. Fill fades with remaining.
 
     // Time-space bell — mirrors COB approach so it tracks correctly on scroll
     // Novorapid: peak ~75min, quick rise (sigmaR), long tail (sigmaF)
     var peakT       = bolus.t + 75 * 60000;
-    var peakMins    = 75;
     var sigmaRMins  = 32;   // rise side — steeper
     var sigmaFMins  = 70;   // fall side — long Novorapid tail
     var lineY       = dataAt ? bgToY(dataAt(viewTime).bg) : H * 0.5;
     var availableH  = lineY - 8;
-    // Bell height is fixed at peak size — doesn't shrink as insulin depletes.
-    // remaining only drives opacity so the shape scrolls past like a fixed river object.
+    // Bell height fixed at peak size — remaining drives opacity not size
     var maxD        = Math.min(availableH * 0.90, 110 * (bolus.u / 3));
     var minD        = Math.min(availableH * 0.12, 18);
     maxD = Math.max(minD, maxD);
@@ -1670,6 +1681,10 @@ function _drawIOBReservoir() {
 
     var rv = COL_IOB[0], gv = COL_IOB[1], bv = COL_IOB[2];
 
+    // Compute actual bell height at orb position for gradient scaling
+    var orbBellH = bellH_iob(NOW_X * W);
+    var gradDepth = Math.max(orbBellH, maxD * 0.15); // at least 15% of maxD for gradient range
+
     // Fill — drawn from top edge down to bell surface
     CX.beginPath();
     CX.moveTo(0, 0);
@@ -1679,27 +1694,28 @@ function _drawIOBReservoir() {
     }
     CX.lineTo(W, 0); CX.closePath();
 
-    var gr = CX.createLinearGradient(0, 0, 0, maxD);
+    // Gradient mapped to actual bell depth at orb, not absolute maxD
+    var gr = CX.createLinearGradient(0, 0, 0, gradDepth);
     gr.addColorStop(0,   'rgba(' + rv + ',' + gv + ',' + bv + ',' + (0.22 + remaining * 0.28) + ')');
-    gr.addColorStop(0.5, 'rgba(' + rv + ',' + gv + ',' + bv + ',' + (remaining * 0.12) + ')');
+    gr.addColorStop(0.6, 'rgba(' + rv + ',' + gv + ',' + bv + ',' + (remaining * 0.10) + ')');
     gr.addColorStop(1,   'rgba(' + rv + ',' + gv + ',' + bv + ',0)');
-    CX.fillStyle = gr; CX.fill();
+    if (remaining > 0.01) { CX.fillStyle = gr; CX.fill(); }
 
-    // Rim — traces the bell curve
+    // Rim — always drawn, ghost outline when depleted
     CX.beginPath();
     for (var i = 0; i <= 280; i++) {
       var px = (i / 280) * W;
       var py = bellH_iob(px);
       i === 0 ? CX.moveTo(px, py) : CX.lineTo(px, py);
     }
-    CX.strokeStyle = 'rgba(' + rv + ',' + gv + ',' + bv + ',' + (0.35 + remaining * 0.45) + ')';
+    CX.strokeStyle = 'rgba(' + rv + ',' + gv + ',' + bv + ',' + (0.18 + remaining * 0.42) + ')';
     CX.lineWidth = 1.2; CX.stroke();
 
     // Label at peak
     var peakX = tX(peakT);
     var peakD = bellH_iob(peakX);
     if (peakX > 30 && peakX < W - 30 && peakD > 10) {
-      CX.globalAlpha = remaining * 0.6;
+      CX.globalAlpha = Math.max(0.2, remaining * 0.6);
       CX.fillStyle   = 'rgba(' + rv + ',' + gv + ',' + bv + ',1)';
       CX.font        = "300 8px 'DM Mono',monospace";
       CX.textAlign   = 'center';
