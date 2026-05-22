@@ -13260,6 +13260,11 @@ function openContextCard(eventIdx, chipData) {
     }
   }
 
+  // Meal items — from event directly, or from paired carb event
+  var mealItems = (ev.items && ev.items.length) ? ev.items
+    : (pairedCarb && pairedCarb.items && pairedCarb.items.length) ? pairedCarb.items
+    : [];
+
   // The wait mins: stored on the bolus event or inferred from the gap
   var waitMinsDisplay = ev.waitMins != null ? ev.waitMins
     : pairedBolus ? Math.round((t - pairedBolus.t) / 60000)
