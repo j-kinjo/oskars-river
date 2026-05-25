@@ -1796,9 +1796,16 @@ function _drawIOBReservoir() {
 // _snapshotPrediction: called at every log event.
 // Computes prediction from current state, stores globally and in localStorage.
 // This is the immutable "what we thought would happen" curve for this event.
+// Prediction formula version — bump when formula changes to bust stale cache
+var _PRED_FORMULA_VERSION = 2; // v2 = net imbalance formula
+
 var _activePredictedCurves = (function() {
   try {
-    var stored = localStorage.getItem('river_predicted_curves');
+    var vKey = 'river_predicted_curves_v' + _PRED_FORMULA_VERSION;
+    // Clear old version keys
+    localStorage.removeItem('river_predicted_curves');
+    localStorage.removeItem('river_predicted_curves_v1');
+    var stored = localStorage.getItem(vKey);
     return stored ? JSON.parse(stored) : [];
   } catch(e) { return []; }
 })();
@@ -1813,7 +1820,7 @@ function _snapshotPrediction() {
   _activePredictedCurves.unshift({ loggedAt: Date.now(), pts: pts });
   if (_activePredictedCurves.length > 20) _activePredictedCurves.length = 20;
   // Persist to localStorage so it survives page refresh
-  try { localStorage.setItem('river_predicted_curves', JSON.stringify(_activePredictedCurves)); } catch(e) {}
+  try { localStorage.setItem('river_predicted_curves_v' + _PRED_FORMULA_VERSION, JSON.stringify(_activePredictedCurves)); } catch(e) {}
   // Also store on most recent MEAL_HISTORY entry if present
   if (MEAL_HISTORY && MEAL_HISTORY[0]) MEAL_HISTORY[0]._predictedCurve = pts;
 }
@@ -6465,62 +6472,57 @@ function _backfillPredictedCurves() {
     var ISF      = (snap.ratios && snap.ratios[0] && snap.ratios[0].isf) || getISF(anchorT) || 7;
     var IC_snap  = (snap.ratios && snap.ratios[0] && snap.ratios[0].ic)  || getIC(anchorT)  || 10;
     var lagMins  = 10;
+    var pts      = [];
 
-    // Collect all boluses active at meal time (within 4h before)
+    // Total carbs
+    var totalCarbs = 0;
+    if (meal.items) meal.items.forEach(function(f) { totalCarbs += (f.carbs || 0); });
+
+    // Average GI
+    var avgGI = 55;
+    if (meal.items && totalCarbs > 0) {
+      var giSum = 0;
+      meal.items.forEach(function(f) { if (f.carbs > 0) giSum += (f.gi || 55) * f.carbs; });
+      avgGI = giSum / totalCarbs;
+    }
+
+    // Covering units — boluses within 90min before this meal
     var activeBoluses = [];
     LOGGED_EVENTS.forEach(function(ev) {
       if (!ev.u || ev.u <= 0 || ev.note === 'basal') return;
-      var bAge = (anchorT - ev.t) / 60000; // mins before meal
-      if (bAge >= 0 && bAge <= 240) activeBoluses.push({ t: ev.t, u: ev.u });
+      var bAge = (anchorT - ev.t) / 60000;
+      if (bAge >= -15 && bAge <= 90) activeBoluses.push({ t: ev.t, u: ev.u });
     });
-    // If no LOGGED_EVENTS boluses found, fall back to meal.u
     if (activeBoluses.length === 0 && meal.u && meal.u > 0) {
       activeBoluses.push({ t: meal.bolus_t || anchorT, u: meal.u });
     }
-
-    var pts = [];
+    var coverU = 0;
+    activeBoluses.forEach(function(b) { coverU += b.u; });
 
     for (var i = 0; i <= 36; i++) {
       var mins = i * 5;
       var ft   = anchorT + mins * 60000;
 
-      // COB effect from this meal's items
-      var cobEffect = 0;
-      if (meal.items) {
-        meal.items.forEach(function(food) {
-          if (!food.carbs) return;
-          var gi  = food.gi || 55;
-          var a0  = food.carbs * Math.max(0, 1 - _cobFgi(0,    gi));
-          var af  = food.carbs * Math.max(0, 1 - _cobFgi(mins, gi));
-          cobEffect += Math.max(0, af - a0) / IC_snap * ISF;
-        });
-      }
+      // Net imbalance formula — matches buildSmartForecast
+      // mAnchor = mins between anchor and meal (negative = meal after anchor)
+      var mAnchor = (anchorT - anchorT) / 60000; // = 0, anchor IS meal time for backfill
+      var absAtAnchor = totalCarbs * Math.max(0, 1 - _cobFgi(0,    avgGI));
+      var absAtFuture = totalCarbs * Math.max(0, 1 - _cobFgi(mins, avgGI));
+      var carbsWindow = Math.max(0, absAtFuture - absAtAnchor);
+      var insFrac     = totalCarbs > 0 ? carbsWindow / totalCarbs : 0;
+      var netCarbs    = carbsWindow - coverU * IC_snap * insFrac;
+      var netEffect   = netCarbs / IC_snap * ISF;
 
-      // IOB effect from all active boluses at meal time
-      var iobEffect = 0;
-      activeBoluses.forEach(function(bolus) {
-        var bMins = (anchorT - bolus.t) / 60000;
-        iobEffect += bolus.u * (_iobFn(Math.max(0, bMins)) - _iobFn(Math.max(0, bMins) + mins)) * ISF;
-      });
+      // Add uncovered correction IOB (boluses not matched to this meal)
+      // For backfill simplicity: no additional corrections assumed — covered by coverU
+      var predBlood = Math.max(2.0, Math.min(22, baseBG + netEffect));
 
-      var predBlood = Math.max(2.0, Math.min(22, baseBG + cobEffect - iobEffect));
-      var cgmM      = Math.max(0, mins - lagMins);
-      var cobCGM    = 0;
-      if (meal.items) {
-        meal.items.forEach(function(food) {
-          if (!food.carbs) return;
-          var gi = food.gi || 55;
-          var a0 = food.carbs * Math.max(0, 1 - _cobFgi(0,    gi));
-          var af = food.carbs * Math.max(0, 1 - _cobFgi(cgmM, gi));
-          cobCGM += Math.max(0, af - a0) / IC_snap * ISF;
-        });
-      }
-      var iobCGM = 0;
-      activeBoluses.forEach(function(bolus) {
-        var bMins = (anchorT - bolus.t) / 60000;
-        iobCGM += bolus.u * (_iobFn(Math.max(0, bMins)) - _iobFn(Math.max(0, bMins) + cgmM)) * ISF;
-      });
-      var predCGM = Math.max(2.0, Math.min(22, baseBG + cobCGM - iobCGM));
+      var cgmM        = Math.max(0, mins - lagMins);
+      var absAtCGM    = totalCarbs * Math.max(0, 1 - _cobFgi(cgmM, avgGI));
+      var carbsCGM    = Math.max(0, absAtCGM - absAtAnchor);
+      var insFracCGM  = totalCarbs > 0 ? carbsCGM / totalCarbs : 0;
+      var netCGM      = (carbsCGM - coverU * IC_snap * insFracCGM) / IC_snap * ISF;
+      var predCGM     = Math.max(2.0, Math.min(22, baseBG + netCGM));
 
       pts.push({ t: ft, mins: mins, bgBlood: predBlood, bgCGM: predCGM, bg: predCGM, predicted_bg: predCGM });
     }
@@ -6537,7 +6539,7 @@ function _backfillPredictedCurves() {
   // Sort newest first, trim to 20
   _activePredictedCurves.sort(function(a,b){ return b.loggedAt - a.loggedAt; });
   if (_activePredictedCurves.length > 20) _activePredictedCurves.length = 20;
-  try { localStorage.setItem('river_predicted_curves', JSON.stringify(_activePredictedCurves)); } catch(e) {}
+  try { localStorage.setItem('river_predicted_curves_v' + _PRED_FORMULA_VERSION, JSON.stringify(_activePredictedCurves)); } catch(e) {}
 }
 
 // ═══════════════════════════════════════════════════════════════════════
