@@ -1792,9 +1792,27 @@ function _drawIOBReservoir() {
 // Build prediction traces anchored to the earliest active event.
 // These are fixed absolute-time curves — visible at all scrub positions.
 // The prediction doesn't change when you scrub — it was set at event time.
-// buildSmartForecast: compute prediction curve from now, returning absolute timestamps.
-// Called once at log time — result stored on the meal record as _predictedCurve.
-// Each point has an absolute `t` (ms) so it renders correctly at any scrub position.
+// _snapshotPrediction: called at every log event.
+// Computes prediction from current state, stores globally and in localStorage.
+// This is the immutable "what we thought would happen" curve for this event.
+var _activePredictedCurves = (function() {
+  try {
+    var stored = localStorage.getItem('river_predicted_curves');
+    return stored ? JSON.parse(stored) : [];
+  } catch(e) { return []; }
+})();
+
+function _snapshotPrediction() {
+  var pts = buildSmartForecast();
+  if (!pts || pts.length < 2) return;
+  // Add to front, keep last 20 snapshots (one per event over ~24h)
+  _activePredictedCurves.unshift({ loggedAt: Date.now(), pts: pts });
+  if (_activePredictedCurves.length > 20) _activePredictedCurves.length = 20;
+  // Persist to localStorage so it survives page refresh
+  try { localStorage.setItem('river_predicted_curves', JSON.stringify(_activePredictedCurves)); } catch(e) {}
+  // Also store on most recent MEAL_HISTORY entry if present
+  if (MEAL_HISTORY && MEAL_HISTORY[0]) MEAL_HISTORY[0]._predictedCurve = pts;
+}
 function buildSmartForecast() {
   var meals   = _getActiveMealEvents();
   var boluses = _getActiveBolusEvents();
@@ -2287,20 +2305,30 @@ function drawForecastTrace(pal) {
   var R = pal.bgLine[0], G = pal.bgLine[1], B = pal.bgLine[2];
   var phi = (_mistFrame || 0) * 0.015;
 
-  // Collect all stored prediction curves within a 24h window of viewTime
+  // Collect stored prediction curves — from _activePredictedCurves (all event types)
+  // and MEAL_HISTORY._predictedCurve (meals). Show curves from last 24h window.
   var curves = [];
-
-  // From MEAL_HISTORY — stored at log time
   var refT = viewTime || CGM_END || Date.now();
-  MEAL_HISTORY.forEach(function(meal) {
-    if (!meal._predictedCurve || meal._predictedCurve.length < 2) return;
-    // Only show curves from meals within 24h of current view
-    var anchorT = meal._predictedCurve[0].t;
+
+  // Primary: stored snapshots (covers corrections, hypos, bolus, meals)
+  _activePredictedCurves.forEach(function(snap) {
+    if (!snap.pts || snap.pts.length < 2) return;
+    var anchorT = snap.pts[0].t;
     if (Math.abs(anchorT - refT) > 24 * 3600000) return;
-    curves.push(meal._predictedCurve);
+    curves.push(snap.pts);
   });
 
-  // Fallback: if no stored curves yet, compute live for current events
+  // Also check MEAL_HISTORY for any stored curves not in _activePredictedCurves
+  MEAL_HISTORY.forEach(function(meal) {
+    if (!meal._predictedCurve || meal._predictedCurve.length < 2) return;
+    var anchorT = meal._predictedCurve[0].t;
+    if (Math.abs(anchorT - refT) > 24 * 3600000) return;
+    // Avoid duplicates — skip if same anchorT already in curves
+    var dup = curves.some(function(c) { return c[0] && Math.abs(c[0].t - anchorT) < 60000; });
+    if (!dup) curves.push(meal._predictedCurve);
+  });
+
+  // Fallback: live calculation if nothing stored
   if (curves.length === 0) {
     var livePts = buildSmartForecast();
     if (livePts && livePts.length >= 2) curves.push(livePts);
@@ -6917,6 +6945,8 @@ function bolusNow() {
   _plateBolused = true;
   _plateBolusU  = u;
   _plateBolusTm = t;
+  // Snapshot prediction at bolus time
+  _snapshotPrediction();
   // Eat reminder
   var eatWait = _eatWaitOverride!==null?_eatWaitOverride:suggestEatWait(dataAt(viewTime).bg);
   if (_cookingTimer) clearTimeout(_cookingTimer);
@@ -9514,6 +9544,7 @@ function commitManualBolus() {
   var t = typeof getEntryTime === 'function' ? getEntryTime() : Date.now();
   SESSION.push({t: t, c: 0, u: u});
   try { localStorage.setItem('river_session',JSON.stringify(SESSION)); } catch(e) {}
+  _snapshotPrediction();
   showToast('💧 ' + u.toFixed(1) + 'U logged');
   closeSheet();
 }
@@ -10777,6 +10808,8 @@ function logHypoTreatment(id){
   syncAfterLog();
   closeHypoLog();
   var timeStr=document.getElementById('hypo-time-display')?.textContent||'';
+  // Snapshot prediction at log time
+  _snapshotPrediction();
   showToast(t.name+'\n'+qty+' '+t.unit+'s · '+carbs+'g logged'+(timeStr?'\n'+timeStr:''));
 }
 
@@ -10901,6 +10934,8 @@ function logCorrection(){
   LOGGED_EVENTS.push({t:now,c:0,u:u,note:'correction',logged_by:_thisPersonId||'unknown',local:true});
   try{localStorage.setItem('river_session',JSON.stringify(SESSION));}catch(e){}
   try{localStorage.setItem('river_logged',JSON.stringify(LOGGED_EVENTS));}catch(e){}
+  // Snapshot prediction at log time — stored globally for drawForecastTrace
+  _snapshotPrediction();
   ALERTS.snooze('corr_nudge',90*60000); ALERTS.snooze('corr_high',90*60000);
   _riverPebble=null;
   syncAfterLog();
