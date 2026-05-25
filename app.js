@@ -1849,11 +1849,9 @@ function buildSmartForecast() {
   var boluses = _getActiveBolusEvents();
   if (meals.length === 0 && boluses.length === 0) return [];
 
-  // Anchor to the earliest active event
-  var allTs = [];
-  meals.forEach(function(m)   { allTs.push(m.t); });
-  boluses.forEach(function(b) { allTs.push(b.t); });
-  var anchorT = Math.min.apply(null, allTs);
+  // Anchor to now (CGM_END) — prediction always starts at the orb and runs forward.
+  // All active events contribute their remaining COB/IOB effect from now.
+  var anchorT = CGM_END || Date.now();
 
   // BG at anchor
   var d0 = dataAt(anchorT);
@@ -2294,7 +2292,7 @@ function drawUnknownForce(pal) {
   // ── SMOOTH MIST REGION — single continuous path, no columns ─────────
   var phi2 = _mistFrame * 0.018;
   var validPts = mistPts.filter(function(pt) {
-    return pt.cgmY - Math.min(pt.cobTopY, pt.iobBotY) > 3;
+    return pt.cgmY - Math.min(pt.cobTopY, pt.iobBotY) > 18; // meaningful gap only
   });
 
   if (validPts.length > 1) {
