@@ -2201,9 +2201,39 @@ function drawUnknownForce(pal) {
   }
   if (!predCurve || predCurve.length < 2) return;
 
-  // Build lookup: absolute time → predicted BG
-  var predMap = {};
-  predCurve.forEach(function(p) { predMap[p.t] = p.bgCGM || p.bg; });
+  // Build lookup from chained segments — same logic as drawForecastTrace
+  var snaps2 = _activePredictedCurves.slice();
+  MEAL_HISTORY.forEach(function(meal) {
+    if (!meal._predictedCurve || meal._predictedCurve.length < 2) return;
+    var aT = meal._predictedCurve[0].t;
+    var dup = snaps2.some(function(s) { return s.pts && s.pts[0] && Math.abs(s.pts[0].t - aT) < 60000; });
+    if (!dup) snaps2.push({ loggedAt: aT, pts: meal._predictedCurve });
+  });
+  snaps2.sort(function(a,b){ return b.loggedAt - a.loggedAt; });
+  var refT2 = CGM_END || Date.now();
+  var segs2 = snaps2.map(function(snap, i) {
+    return {
+      pts: snap.pts,
+      startT: snap.pts[0].t,
+      endT:   i === 0 ? refT2 + 3 * 3600000 : snaps2[i-1].pts[0].t
+    };
+  });
+
+  // Interpolate predicted BG at a given time using the correct segment
+  function getPredictedBG(t_px) {
+    for (var si2 = 0; si2 < segs2.length; si2++) {
+      var seg2 = segs2[si2];
+      if (t_px < seg2.startT || t_px > seg2.endT) continue;
+      var pts2 = seg2.pts;
+      for (var pi2 = 0; pi2 < pts2.length - 1; pi2++) {
+        if (t_px >= pts2[pi2].t && t_px <= pts2[pi2+1].t) {
+          var frac = (t_px - pts2[pi2].t) / (pts2[pi2+1].t - pts2[pi2].t);
+          return (pts2[pi2].bgCGM || pts2[pi2].bg) * (1 - frac) + (pts2[pi2+1].bgCGM || pts2[pi2+1].bg) * frac;
+        }
+      }
+    }
+    return null;
+  }
 
   // Sample across visible canvas — compare predicted vs actual at each pixel
   var steps = 80;
@@ -2211,28 +2241,15 @@ function drawUnknownForce(pal) {
   for (var si = 0; si <= steps; si++) {
     var px   = (si / steps) * W;
     var t_px = viewTime + (px - NOW_X * W) / W * viewSpan;
-    // Only fill in the past (where we have actual data)
     if (t_px > (CGM_END || Date.now()) + 60000) continue;
-
     var actual = dataAt(t_px).bg;
     if (!actual || actual <= 0) continue;
     var cgmY = bgToY(actual);
-
-    // Interpolate prediction at this time
-    var predBG = null;
-    var pts = predCurve;
-    for (var pi = 0; pi < pts.length - 1; pi++) {
-      if (t_px >= pts[pi].t && t_px <= pts[pi+1].t) {
-        var frac = (t_px - pts[pi].t) / (pts[pi+1].t - pts[pi].t);
-        predBG = (pts[pi].bgCGM || pts[pi].bg) * (1 - frac) + (pts[pi+1].bgCGM || pts[pi+1].bg) * frac;
-        break;
-      }
-    }
+    var predBG = getPredictedBG(t_px);
     if (predBG === null) continue;
     var predY = bgToY(predBG);
     var delta = Math.abs(cgmY - predY);
-    if (delta < 3) continue; // no meaningful gap
-
+    if (delta < 3) continue;
     mistPts.push({ px: px, cgmY: cgmY, predY: predY, delta: delta });
   }
 
@@ -2283,116 +2300,111 @@ function drawUnknownForce(pal) {
 // ── FORECAST TRACE — event-anchored prediction, always visible ───────────
 // Anchored to earliest active event time. Renders identically whether
 // scrubbing back or at now. Blood=warm amber, CGM=bold white, mist tunnel.
-// ── FORECAST TRACE — renders stored prediction snapshots at absolute time positions
-// Each meal/bolus event has a _predictedCurve snapshot taken at log time.
-// These are rendered as fixed lines — tX(p.t) positions them correctly at any viewTime.
-// Consistent appearance whether scrubbing through history or at now.
+// ── FORECAST TRACE — chained prediction segments ────────────────────────
+// Each snapshot is valid from its anchor until the next event's anchor.
+// They chain together: lunch 12:15→14:37, correction 14:37→onwards.
+// Mist fills gap between each segment and actual CGM for that window.
 function drawForecastTrace(pal) {
   var R = pal.bgLine[0], G = pal.bgLine[1], B = pal.bgLine[2];
   var phi = (_mistFrame || 0) * 0.015;
 
-  // Collect stored prediction curves — from _activePredictedCurves (all event types)
-  // and MEAL_HISTORY._predictedCurve (meals). Show curves from last 24h window.
-  var curves = [];
-  var refT = viewTime || CGM_END || Date.now();
-
-  // Primary: stored snapshots (covers corrections, hypos, bolus, meals)
-  _activePredictedCurves.forEach(function(snap) {
-    if (!snap.pts || snap.pts.length < 2) return;
-    var anchorT = snap.pts[0].t;
-    if (Math.abs(anchorT - refT) > 24 * 3600000) return;
-    curves.push(snap.pts);
-  });
-
-  // Also check MEAL_HISTORY for any stored curves not in _activePredictedCurves
+  // Collect all snapshots sorted newest-first
+  var snaps = _activePredictedCurves.slice(); // newest first
+  // Add MEAL_HISTORY curves not already covered
   MEAL_HISTORY.forEach(function(meal) {
     if (!meal._predictedCurve || meal._predictedCurve.length < 2) return;
     var anchorT = meal._predictedCurve[0].t;
-    if (Math.abs(anchorT - refT) > 24 * 3600000) return;
-    // Avoid duplicates — skip if same anchorT already in curves
-    var dup = curves.some(function(c) { return c[0] && Math.abs(c[0].t - anchorT) < 60000; });
-    if (!dup) curves.push(meal._predictedCurve);
+    var dup = snaps.some(function(s) { return s.pts && s.pts[0] && Math.abs(s.pts[0].t - anchorT) < 60000; });
+    if (!dup) snaps.push({ loggedAt: anchorT, pts: meal._predictedCurve });
+  });
+  // Sort newest first
+  snaps.sort(function(a,b){ return b.loggedAt - a.loggedAt; });
+
+  // Fallback: live calculation
+  if (snaps.length === 0) {
+    var livePts = buildSmartForecast(CGM_END || Date.now());
+    if (livePts && livePts.length >= 2) snaps = [{ loggedAt: Date.now(), pts: livePts }];
+  }
+  if (snaps.length === 0) return;
+
+  // Build chained segments: each snapshot valid until the next one's start
+  // snaps[0] = newest, snaps[1] = previous, etc.
+  // Segment i is valid from snaps[i].pts[0].t until snaps[i-1].pts[0].t (or now+3h)
+  var refT = CGM_END || Date.now();
+  var segments = snaps.map(function(snap, i) {
+    var startT = snap.pts[0].t;
+    var endT   = i === 0 ? refT + 3 * 3600000 : snaps[i-1].pts[0].t;
+    return { pts: snap.pts, startT: startT, endT: endT };
+  }).filter(function(seg) {
+    // Only show segments within 24h of current view
+    return Math.abs(seg.startT - refT) < 24 * 3600000;
   });
 
-  // Fallback: live calculation if nothing stored
-  if (curves.length === 0) {
-    var livePts = buildSmartForecast();
-    if (livePts && livePts.length >= 2) curves.push(livePts);
-  }
-
-  if (curves.length === 0) return;
-
-  // Use only the most recent snapshot — new events fold in via _snapshotPrediction
-  var bestCurve = null;
-  if (_activePredictedCurves.length > 0) {
-    bestCurve = _activePredictedCurves[0].pts;
-  } else if (MEAL_HISTORY.length > 0 && MEAL_HISTORY[0]._predictedCurve) {
-    bestCurve = MEAL_HISTORY[0]._predictedCurve;
-  }
-  if (!bestCurve || bestCurve.length < 2) {
-    var livePts = buildSmartForecast();
-    if (livePts && livePts.length >= 2) bestCurve = livePts;
-  }
-  if (!bestCurve || bestCurve.length < 2) return;
-
-  // Convert absolute t → screen x at current viewTime
-  var mapped = bestCurve.map(function(p) {
-    return {
-      x:       tX(p.t),
-      mins:    p.mins,
-      bgCGM:   p.bgCGM || p.bg || 7,
-      bgBlood: p.bgBlood || p.bgCGM || p.bg || 7,
-      yCGM:    bgToY(p.bgCGM  || p.bg || 7),
-      yBlood:  bgToY(p.bgBlood || p.bgCGM || p.bg || 7)
-    };
-  });
-  var visible = mapped.filter(function(p) { return p.x > -W && p.x < W * 2; });
-  if (visible.length < 2) return;
+  if (segments.length === 0) return;
 
   CX.save();
 
-  // ── Blood prediction — red, solid, leads CGM by sensor lag ───────
-  CX.beginPath();
-  visible.forEach(function(p, i) {
-    i === 0 ? CX.moveTo(p.x, p.yBlood) : CX.lineTo(p.x, p.yBlood);
-  });
-  CX.strokeStyle = 'rgba(220,80,60,0.55)';
-  CX.lineWidth   = 1.2;
-  CX.setLineDash([]);
-  CX.stroke();
+  segments.forEach(function(seg) {
+    // Map to screen coords, clipped to this segment's validity window
+    var mapped = seg.pts
+      .filter(function(p) { return p.t >= seg.startT && p.t <= seg.endT; })
+      .map(function(p) {
+        return {
+          x:       tX(p.t),
+          t:       p.t,
+          mins:    p.mins,
+          bgCGM:   p.bgCGM || p.bg || 7,
+          bgBlood: p.bgBlood || p.bgCGM || p.bg || 7,
+          yCGM:    bgToY(p.bgCGM  || p.bg || 7),
+          yBlood:  bgToY(p.bgBlood || p.bgCGM || p.bg || 7)
+        };
+      });
+    var visible = mapped.filter(function(p) { return p.x > -W * 0.5 && p.x < W * 1.5; });
+    if (visible.length < 2) return;
 
-  // ── Lag ribbon — filled zone between blood and CGM predictions ────
-  // Shows the sensor lag gap as a soft filled band, like the grey mist
-  CX.beginPath();
-  visible.forEach(function(p, i) {
-    i === 0 ? CX.moveTo(p.x, p.yBlood) : CX.lineTo(p.x, p.yBlood);
-  });
-  for (var ri = visible.length - 1; ri >= 0; ri--) {
-    CX.lineTo(visible[ri].x, visible[ri].yCGM);
-  }
-  CX.closePath();
-  CX.fillStyle = 'rgba(220,180,100,0.08)';
-  CX.fill();
+    // ── Blood prediction — red, solid ────────────────────────────
+    CX.beginPath();
+    visible.forEach(function(p, i) {
+      i === 0 ? CX.moveTo(p.x, p.yBlood) : CX.lineTo(p.x, p.yBlood);
+    });
+    CX.strokeStyle = 'rgba(220,80,60,0.45)';
+    CX.lineWidth   = 1.0;
+    CX.setLineDash([]);
+    CX.stroke();
 
-  // ── CGM prediction — same colour family as actual CGM, dashed, fainter ─
-  CX.beginPath();
-  visible.forEach(function(p, i) {
-    i === 0 ? CX.moveTo(p.x, p.yCGM) : CX.lineTo(p.x, p.yCGM);
-  });
-  CX.strokeStyle = 'rgba(' + R + ',' + G + ',' + B + ',0.45)';
-  CX.lineWidth   = 1.2;
-  CX.setLineDash([6, 5]);
-  CX.stroke();
-  CX.setLineDash([]);
+    // ── Lag ribbon — between blood and CGM prediction ─────────────
+    CX.beginPath();
+    visible.forEach(function(p, i) {
+      i === 0 ? CX.moveTo(p.x, p.yBlood) : CX.lineTo(p.x, p.yBlood);
+    });
+    for (var ri = visible.length - 1; ri >= 0; ri--) {
+      CX.lineTo(visible[ri].x, visible[ri].yCGM);
+    }
+    CX.closePath();
+    CX.fillStyle = 'rgba(220,180,100,0.06)';
+    CX.fill();
 
-  // ── Value labels at 30min on CGM only ────────────────────────────
-  CX.font = "400 8px 'DM Mono',monospace";
-  CX.textAlign = 'center';
-  visible.forEach(function(p) {
-    if (p.mins === 0 || p.mins % 30 !== 0) return;
-    if (p.x < 4 || p.x > W - 4) return;
-    CX.fillStyle = 'rgba(' + R + ',' + G + ',' + B + ',0.4)';
-    CX.fillText(p.bgCGM.toFixed(1), p.x, p.yCGM - 8);
+    // ── CGM prediction — dashed, same colour as actual CGM ────────
+    CX.beginPath();
+    visible.forEach(function(p, i) {
+      i === 0 ? CX.moveTo(p.x, p.yCGM) : CX.lineTo(p.x, p.yCGM);
+    });
+    CX.strokeStyle = 'rgba(' + R + ',' + G + ',' + B + ',0.45)';
+    CX.lineWidth   = 1.2;
+    CX.setLineDash([6, 5]);
+    CX.stroke();
+    CX.setLineDash([]);
+
+    // ── Value labels at 30min ─────────────────────────────────────
+    CX.font = "400 8px 'DM Mono',monospace";
+    CX.textAlign = 'center';
+    visible.forEach(function(p) {
+      if (p.mins === 0 || p.mins % 30 !== 0) return;
+      if (p.x < 4 || p.x > W - 4) return;
+      if (p.t > (CGM_END || Date.now()) + 60000) return; // future only
+      CX.fillStyle = 'rgba(' + R + ',' + G + ',' + B + ',0.38)';
+      CX.fillText(p.bgCGM.toFixed(1), p.x, p.yCGM - 7);
+    });
   });
 
   CX.globalAlpha = 1;
