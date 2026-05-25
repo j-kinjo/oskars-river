@@ -842,6 +842,7 @@ function dataAt(t) {
     _seen[_key] = true;
     const m=(t-s.t)/60000;
     if (m<0||m>240) continue;
+    if (s.note === 'basal') continue; // basal is not rapid-acting — no IOB curve
     si += (s.u||0)*iobF(m);
     sc += (s.c||0)*cobF(m);
   }
@@ -1417,6 +1418,7 @@ function _getActiveBolusEvents() {
   var events = [], seen = {};
   BOLUS_EVENTS.concat(SESSION).forEach(function(ev) {
     if (!ev.u || ev.u <= 0 || ev.t < cutoff) return;
+    if (ev.note === 'basal') return; // basal shows as chip only — no IOB bell
     var key = Math.round(ev.t / 30000);
     if (seen[key]) return;
     seen[key] = true;
@@ -1732,7 +1734,23 @@ function _drawIOBReservoir() {
 
     var bolusT_local = bolus.t;
 
-    var bellH_iob = function(px) {
+    // bellSurfaceY: the bottom edge of the insulin cloud.
+    // At peak: surface rises toward y=0 (insulin at maximum depth, cloud thinnest there).
+    // Wait — that's still wrong. Let me think:
+    //
+    // DESIRED VISUAL: insulin cloud is a valley pressing FROM THE TOP.
+    // The cloud fills the top portion of canvas. At the bolus peak it presses DEEPEST
+    // toward the CGM line. Like a thumb pressing down on the top of the screen.
+    //
+    // Fill region = y=0 to surfaceY at every pixel.
+    // surfaceY at peak = maxD (deepest, closest to CGM)
+    // surfaceY at edges = 0 (no fill — cloud has retreated to top)
+    //
+    // That IS a hill shape in terms of surfaceY values. But visually it fills FROM THE TOP.
+    // moveTo(0,0) → trace surfaceY → lineTo(W,0) → close fills the correct valley shape.
+    // The GRADIENT must go from y=0 (transparent) to y=maxD (dense) — INVERTED vs carbs.
+    // Dense color at the BOTTOM of the fill (near CGM), fading to transparent at the top.
+    var bellSurfaceY = function(px) {
       var t_px     = viewTime + (px - NOW_X * W) / W * viewSpan;
       var minsDist = (t_px - peakT) / 60000;
       var rampMins = Math.min(1.0, Math.max(0, (t_px - bolusT_local) / (12 * 60000)));
@@ -1741,15 +1759,15 @@ function _drawIOBReservoir() {
       return Math.exp(-0.5 * Math.pow(minsDist / sigma, 2)) * maxD * ramp;
     };
 
-    // ── Depletion guard — skip if bell is essentially flat ───────────
+    // ── Depletion guard ───────────────────────────────────────────────
     var _maxIobH = 0;
     for (var _ii = 0; _ii <= 20; _ii++) {
-      var _ih = bellH_iob((_ii / 20) * W);
+      var _ih = bellSurfaceY((_ii / 20) * W);
       if (_ih > _maxIobH) _maxIobH = _ih;
     }
     if (_maxIobH < 2) {
       if (_lastIOBPeakY < 0 || maxD > _lastIOBPeakY) _lastIOBPeakY = maxD;
-      return; // nothing visible — don't draw flat line
+      return;
     }
 
     // Colour drift: blue→indigo→steel cycle
@@ -1758,54 +1776,56 @@ function _drawIOBReservoir() {
     var gv = Math.round(COL_IOB[1] * (1 - drift * 0.10) + 100 * drift * 0.10);
     var bv = Math.round(COL_IOB[2] * (1 - drift * 0.05) + 255 * drift * 0.05);
 
-    // ── Fill — insulin cloud fills from top of canvas down to bell surface ──
-    // Surface Y = chipY - bellH_iob(px): at bell peak → chipY-maxD (near CGM)
-    //                                    at bell edges → chipY (at CGM level, no fill)
-    // Fill region: y=0 to surface. Gradient: dense at top, fades toward surface.
+    // ── Fill — insulin cloud from top, valley pressing down at peak ───
+    // Path traces from y=0 at edges to maxD at peak. Fill covers y=0→surface.
+    // Gradient: transparent at top (y=0), dense at surface (y=maxD).
+    // This gives the "pressing down from sky" visual — deepest at peak.
     CX.save();
     CX.beginPath();
     CX.moveTo(0, 0);
-    for (var i = 0; i <= 280; i++) {
+    CX.lineTo(0, bellSurfaceY(0));
+    for (var i = 1; i <= 280; i++) {
       var px = (i / 280) * W;
-      CX.lineTo(px, chipY - bellH_iob(px));
+      CX.lineTo(px, bellSurfaceY(px));
     }
     CX.lineTo(W, 0); CX.closePath();
 
     var breathe = 0.18 + Math.sin(_phase * 1.1 + 1.5) * 0.06;
-    // Gradient: top of canvas → chipY - maxD (the deepest the bell reaches)
-    var gr = CX.createLinearGradient(0, 0, 0, chipY - maxD);
-    gr.addColorStop(0,   'rgba(' + rv + ',' + gv + ',' + bv + ',' + (breathe + 0.12) + ')');
-    gr.addColorStop(0.6, 'rgba(' + rv + ',' + gv + ',' + bv + ',' + (breathe * 0.5) + ')');
-    gr.addColorStop(1,   'rgba(' + rv + ',' + gv + ',' + bv + ',0)');
+    // Gradient: y=0 (transparent) → y=maxD (dense) — color accumulates at the surface
+    var gr = CX.createLinearGradient(0, 0, 0, _maxIobH);
+    gr.addColorStop(0,    'rgba(' + rv + ',' + gv + ',' + bv + ',0)');
+    gr.addColorStop(0.3,  'rgba(' + rv + ',' + gv + ',' + bv + ',' + (breathe * 0.3) + ')');
+    gr.addColorStop(0.75, 'rgba(' + rv + ',' + gv + ',' + bv + ',' + (breathe * 0.8) + ')');
+    gr.addColorStop(1,    'rgba(' + rv + ',' + gv + ',' + bv + ',' + (breathe + 0.15) + ')');
     CX.fillStyle = gr; CX.fill();
-    CX.restore();
 
-    // ── Rim — traces the bell surface (bottom edge of insulin fill) ───
-    CX.save();
+    // Soft blur at the surface edge — mist touching the river
+    CX.shadowColor = 'rgba(' + rv + ',' + gv + ',' + bv + ',0.4)';
+    CX.shadowBlur  = 14;
     CX.beginPath();
     for (var i = 0; i <= 280; i++) {
       var px = (i / 280) * W;
-      var py = chipY - bellH_iob(px);
-      i === 0 ? CX.moveTo(px, py) : CX.lineTo(px, py);
+      i === 0 ? CX.moveTo(px, bellSurfaceY(px)) : CX.lineTo(px, bellSurfaceY(px));
     }
     CX.strokeStyle = 'rgba(' + rv + ',' + gv + ',' + bv + ',0.55)';
     CX.lineWidth = 1.2; CX.stroke();
+    CX.shadowBlur = 0; CX.shadowColor = 'transparent';
     CX.restore();
 
-    // ── Distributed bubbles along full rim ───────────────────────────
+    // ── Distributed bubbles inside the insulin cloud ──────────────────
     var nBubbles = Math.min(14, Math.max(3, Math.floor(bolus.u * 2.5)));
     for (var bi = 0; bi < nBubbles; bi++) {
       var bFrac  = (bi + 0.5) / nBubbles;
       var bPx    = bFrac * W;
-      var bH     = bellH_iob(bPx);
-      if (bH < 3) continue;
+      var bSurf  = bellSurfaceY(bPx); // surface Y at this pixel (0=top, maxD=deepest)
+      if (bSurf < 3) continue;
       var bPhase = _phase + bi * 0.65 + bolus.u * 0.1;
-      var bDrift = (Math.sin(bPhase * 0.7) * 0.5 + 0.5) * bH * 0.25;
+      // Bubbles drift within the cloud — between y=0 and the surface
+      var bY     = bSurf * (0.2 + Math.sin(bPhase * 0.8) * 0.3 + 0.3);
       var bWobX  = Math.sin(bPhase * 1.2) * 3;
-      var bY     = chipY - bH * (0.2 + bFrac * 0.45) - bDrift;
       var bR     = 1.2 + Math.sin(bPhase * 1.4 + bi) * 0.6 + bolus.u / 8;
       var bAlpha = 0.22 + Math.sin(bPhase) * 0.12;
-      if (bY > chipY || bY < chipY - maxD - 5) continue;
+      if (bY < 0 || bY > bSurf + 5) continue;
 
       // Teardrop-like bubble for insulin (cooler, denser than carb)
       CX.beginPath();
@@ -1821,9 +1841,9 @@ function _drawIOBReservoir() {
       CX.fill();
     }
 
-    // ── THREE-CURVE OVERLAY ──────────────────────────────────────────
-    var sigmaF_eff = sigmaFMins * 1.35;
-    var bellH_eff = function(px) {
+    // ── THREE-CURVE OVERLAY — dashed curves at surface level ────────
+    var sigmaF_eff  = sigmaFMins * 1.35;
+    var bellSurf_eff = function(px) {
       var t_px = viewTime + (px - NOW_X * W) / W * viewSpan;
       var md   = (t_px - peakT) / 60000;
       var rmp  = Math.min(1.0, Math.max(0, (t_px - bolusT_local) / (12 * 60000)));
@@ -1835,7 +1855,7 @@ function _drawIOBReservoir() {
     CX.beginPath();
     for (var i2 = 0; i2 <= 280; i2++) {
       var px2 = (i2 / 280) * W;
-      i2 === 0 ? CX.moveTo(px2, chipY - bellH_eff(px2)) : CX.lineTo(px2, chipY - bellH_eff(px2));
+      i2 === 0 ? CX.moveTo(px2, bellSurf_eff(px2)) : CX.lineTo(px2, bellSurf_eff(px2));
     }
     CX.strokeStyle = 'rgba(' + rv + ',' + gv + ',' + bv + ',0.28)';
     CX.lineWidth = 1.0; CX.setLineDash([5, 5]); CX.stroke(); CX.setLineDash([]);
@@ -1843,8 +1863,8 @@ function _drawIOBReservoir() {
 
     if (window._medianReturnMins && window._medianReturnMins > 0 &&
         Math.abs(window._medianReturnMins - 240) > 15) {
-      var sigmaF_obs = window._medianReturnMins * (sigmaFMins / 240);
-      var bellH_obs = function(px) {
+      var sigmaF_obs  = window._medianReturnMins * (sigmaFMins / 240);
+      var bellSurf_obs = function(px) {
         var t_px = viewTime + (px - NOW_X * W) / W * viewSpan;
         var md   = (t_px - peakT) / 60000;
         var rmp  = Math.min(1.0, Math.max(0, (t_px - bolusT_local) / (12 * 60000)));
@@ -1856,22 +1876,22 @@ function _drawIOBReservoir() {
       CX.beginPath();
       for (var i3 = 0; i3 <= 280; i3++) {
         var px3 = (i3 / 280) * W;
-        i3 === 0 ? CX.moveTo(px3, chipY - bellH_obs(px3)) : CX.lineTo(px3, chipY - bellH_obs(px3));
+        i3 === 0 ? CX.moveTo(px3, bellSurf_obs(px3)) : CX.lineTo(px3, bellSurf_obs(px3));
       }
       CX.strokeStyle = 'rgba(180,220,255,0.22)';
       CX.lineWidth = 0.8; CX.setLineDash([2, 5]); CX.stroke(); CX.setLineDash([]);
       CX.restore();
     }
 
-    // Label at peak
-    var peakX = tX(peakT);
-    var peakD = bellH_iob(peakX);
-    if (peakX > 30 && peakX < W - 30 && peakD > 10) {
+    // Label at peak — sits just below the deepest surface point
+    var peakX    = tX(peakT);
+    var peakSurf = bellSurfaceY(peakX);
+    if (peakX > 30 && peakX < W - 30 && peakSurf > 10) {
       CX.globalAlpha = 0.6;
       CX.fillStyle   = 'rgba(' + rv + ',' + gv + ',' + bv + ',1)';
       CX.font        = "300 8px 'DM Mono',monospace";
       CX.textAlign   = 'center';
-      CX.fillText(bolus.u.toFixed(1) + 'U', peakX, chipY - peakD - 6);
+      CX.fillText(bolus.u.toFixed(1) + 'U', peakX, peakSurf + 10);
       CX.globalAlpha = 1;
     }
 
@@ -2972,30 +2992,29 @@ function drawBolusMarkers(pal) {
       if (!_acPos || _acPos.carbY == null) continue;
       var _acx = _acPos.cx;
       var _acy = _acPos.carbY;
-      // Draw a gentle quadratic arc from bolus chip to carb chip
-      // Control point below both chips, curving outward
+      // Draw a clear arc from bolus chip to carb chip
       var midX = (_abx + _acx) / 2;
-      var arcDepth = Math.max(18, Math.abs(_aby - _acy) * 0.3 + 12);
+      var arcDepth = Math.max(10, Math.abs(_aby - _acy) * 0.2 + 8);
       var cpY = Math.max(_aby, _acy) + arcDepth;
-      CX.globalAlpha = 0.18;
+      CX.globalAlpha = 0.7;
       CX.strokeStyle = 'rgba(160,200,255,0.9)';
-      CX.lineWidth = 1;
-      CX.setLineDash([2, 4]);
+      CX.lineWidth = 1.5;
+      CX.setLineDash([]);
       CX.beginPath();
       CX.moveTo(_abx, _aby);
       CX.quadraticCurveTo(midX, cpY, _acx, _acy);
       CX.stroke();
-      CX.setLineDash([]);
-      // Small wait label on arc midpoint
+      // Wait label — sits on the arc midpoint, close to the line
       var waitM = Math.round(gap / 60000);
       if (waitM > 0) {
-        var lblX = midX;
-        var lblY = cpY + 2;
-        CX.globalAlpha = 0.22;
-        CX.font = "400 7px 'DM Mono',monospace";
+        var tParam = 0.5;
+        var lblX = (1-tParam)*(1-tParam)*_abx + 2*(1-tParam)*tParam*midX + tParam*tParam*_acx;
+        var lblY = (1-tParam)*(1-tParam)*_aby + 2*(1-tParam)*tParam*cpY  + tParam*tParam*_acy;
+        CX.globalAlpha = 0.75;
+        CX.font = "500 8px 'DM Mono',monospace";
         CX.fillStyle = 'rgba(160,200,255,1)';
         CX.textAlign = 'center';
-        CX.fillText(waitM + 'min', lblX, lblY + 8);
+        CX.fillText(waitM + 'min', lblX, lblY + 4);
       }
       break; // one link per bolus
     }
