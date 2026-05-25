@@ -1312,19 +1312,7 @@ function drawForceRibbon(pts, colorR, direction) {
     }
   }
 
-  // ── FUTURE PROJECTION — faint dotted continuation ─────────────────
-  if (future.length > 1) {
-    const futEdge = future.map(p => ({x:p.x, y:p.y}));
-    CX.globalAlpha = 0.22 * tipFrac;
-    CX.strokeStyle = `rgba(${r},${g},${b},1)`;
-    CX.lineWidth   = 1.0;
-    CX.setLineDash([2, 8]);
-    CX.beginPath();
-    CX.moveTo(tip.x, tip.y);
-    for (const p of futEdge) CX.lineTo(p.x, p.y);
-    CX.stroke();
-    CX.setLineDash([]);
-  }
+  // Future projection dashes removed
 
   CX.restore();
 }
@@ -2238,20 +2226,7 @@ function drawUnknownForce(pal) {
 
   CX.save();
 
-  // ── PERMANENT CGM AURA — always present ──────────────────────────────
-  var auraGr = CX.createLinearGradient(0, 0, 0, H);
-  auraGr.addColorStop(0,   'rgba(180,200,220,0)');
-  auraGr.addColorStop(0.5, 'rgba(180,200,220,0.06)');
-  auraGr.addColorStop(1,   'rgba(180,200,220,0)');
-  mistPts.forEach(function(pt) {
-    var aura = 12;
-    var gr = CX.createLinearGradient(pt.px, pt.cgmY - aura, pt.px, pt.cgmY + aura);
-    gr.addColorStop(0,   'rgba(180,200,235,0)');
-    gr.addColorStop(0.5, 'rgba(180,200,235,0.08)');
-    gr.addColorStop(1,   'rgba(180,200,235,0)');
-    CX.fillStyle = gr;
-    CX.fillRect(pt.px - 1, pt.cgmY - aura, 2, aura * 2);
-  });
+  // CGM aura removed — was rendering as grey column artefacts
 
   // ── SMOOTH MIST REGION — single continuous path, no columns ─────────
   var phi2 = _mistFrame * 0.018;
@@ -2783,11 +2758,6 @@ function drawBolusMarkers(pal) {
       CX.fillStyle = 'rgba(255,255,255,1.0)';
       CX.textAlign   = 'center';
       CX.fillText(lbl, x, cardY + 12);
-      if (who) {
-        CX.globalAlpha = 0.7; CX.font = "400 8px 'DM Mono',monospace";
-        CX.fillText(who, x + lw/2 - 5, cardY + 1);
-        CX.globalAlpha = 1;
-      }
       window._eventCards.push({x:x, y:cardY+8, w:lw+4, h:17, data:b, idx:_bIdx, type:'carb'});
       _chipPos[b.t] = Object.assign(_chipPos[b.t] || {}, { cx: x, carbY: cardY + 8 });
     }
@@ -2842,29 +2812,32 @@ function drawBolusMarkers(pal) {
       if (!_acPos || _acPos.carbY == null) continue;
       var _acx = _acPos.cx;
       var _acy = _acPos.carbY;
-      // Draw a clear arc from bolus chip to carb chip
-      var midX = (_abx + _acx) / 2;
-      var arcDepth = Math.max(10, Math.abs(_aby - _acy) * 0.2 + 8);
+      // Arc from right edge of bolus chip to left edge of carb chip
+      var _bHalfW   = 20;
+      var arcStartX = _abx + _bHalfW;
+      var arcEndX   = _acx - _bHalfW;
+      if (arcEndX <= arcStartX) { arcStartX = _abx; arcEndX = _acx; }
+      var midX    = (arcStartX + arcEndX) / 2;
+      var arcDepth = Math.max(22, Math.abs(_aby - _acy) * 0.3 + 18);
       var cpY = Math.max(_aby, _acy) + arcDepth;
       CX.globalAlpha = 0.7;
       CX.strokeStyle = 'rgba(160,200,255,0.9)';
       CX.lineWidth = 1.5;
       CX.setLineDash([]);
       CX.beginPath();
-      CX.moveTo(_abx, _aby);
-      CX.quadraticCurveTo(midX, cpY, _acx, _acy);
+      CX.moveTo(arcStartX, _aby);
+      CX.quadraticCurveTo(midX, cpY, arcEndX, _acy);
       CX.stroke();
-      // Wait label — sits on the arc midpoint, close to the line
       var waitM = Math.round(gap / 60000);
       if (waitM > 0) {
         var tParam = 0.5;
-        var lblX = (1-tParam)*(1-tParam)*_abx + 2*(1-tParam)*tParam*midX + tParam*tParam*_acx;
-        var lblY = (1-tParam)*(1-tParam)*_aby + 2*(1-tParam)*tParam*cpY  + tParam*tParam*_acy;
+        var lblX = (1-tParam)*(1-tParam)*arcStartX + 2*(1-tParam)*tParam*midX + tParam*tParam*arcEndX;
+        var lblY = (1-tParam)*(1-tParam)*_aby + 2*(1-tParam)*tParam*cpY + tParam*tParam*_acy;
         CX.globalAlpha = 0.75;
         CX.font = "500 8px 'DM Mono',monospace";
         CX.fillStyle = 'rgba(160,200,255,1)';
         CX.textAlign = 'center';
-        CX.fillText(waitM + 'min', lblX, lblY + 4);
+        CX.fillText(waitM + 'min', lblX, lblY + 12);
       }
       break; // one link per bolus
     }
