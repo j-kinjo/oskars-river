@@ -1126,32 +1126,7 @@ function drawBGTrail(pal) {
     CX.shadowBlur  = 0;
   }
 
-  // ── SMART FORECAST — clean landing prediction at orb ─────────────────
-  const predC = buildSmartForecast();
-  if (predC.length > 1) {
-    const last   = predC[predC.length-1];
-    const lastBG = last.bgCGM || last.bg || 7;
-    const lastY  = last.yCGM  || last.y  || bgToY(7);
-    const endCol = lastBG > BG_HIGH ? 'rgba(230,140,40,' :
-                   lastBG < BG_LOW  ? 'rgba(80,130,220,' :
-                   'rgba(' + pal.bgLine.join(',') + ',';
-
-    // Landing dot only — no bands (they create visual spikes)
-    CX.globalAlpha = 0.8;
-    CX.fillStyle   = endCol + '0.9)';
-    CX.shadowColor = endCol + '0.5)'; CX.shadowBlur = 6;
-    CX.beginPath(); CX.arc(last.x, lastY, 3.5, 0, Math.PI*2); CX.fill();
-    CX.shadowBlur = 0;
-
-    // Landing value + time
-    CX.globalAlpha = 0.6;
-    CX.fillStyle   = endCol + '1)';
-    CX.font        = "300 10px 'Fraunces',serif"; CX.textAlign = 'center';
-    CX.fillText(lastBG.toFixed(1), last.x, lastY - 9);
-    CX.globalAlpha = 0.3;
-    CX.font        = "300 8px 'DM Mono',monospace";
-    CX.fillText('+' + last.mins + 'min', last.x, lastY + 13);
-  }
+  // Prediction landing dot removed — prediction shown via drawForecastTrace
 
   CX.globalAlpha = 1;
   CX.restore();
@@ -1849,18 +1824,15 @@ function _drawIOBReservoir() {
       CX.restore();
     }
 
-    // ── Label — at deepest visible point of the surface ──────────────
-    var bestLabelX = -1, bestLabelSurf = 0;
-    for (var li = 5; li <= 275; li += 5) {
-      var lSurf = bellSurfaceY(li);
-      if (lSurf > bestLabelSurf) { bestLabelSurf = lSurf; bestLabelX = li; }
-    }
-    if (bestLabelX > 0 && bestLabelSurf > 8) {
-      CX.globalAlpha = 0.65;
+    // Label at peak — sits just below the deepest surface point
+    var peakX    = tX(peakT);
+    var peakSurf = bellSurfaceY(peakX);
+    if (peakX > 30 && peakX < W - 30 && peakSurf > 10) {
+      CX.globalAlpha = 0.6;
       CX.fillStyle   = 'rgba(' + rv + ',' + gv + ',' + bv + ',1)';
-      CX.font        = "300 9px 'DM Mono',monospace";
+      CX.font        = "300 8px 'DM Mono',monospace";
       CX.textAlign   = 'center';
-      CX.fillText(bolus.u.toFixed(1) + 'U', bestLabelX, bestLabelSurf + 12);
+      CX.fillText(bolus.u.toFixed(1) + 'U', peakX, peakSurf + 10);
       CX.globalAlpha = 1;
     }
 
@@ -1869,82 +1841,82 @@ function _drawIOBReservoir() {
 }
 
 // Smart forecast — per-food GI curves + IOB decay
+// Build prediction traces anchored to the earliest active event.
+// These are fixed absolute-time curves — visible at all scrub positions.
+// The prediction doesn't change when you scrub — it was set at event time.
 function buildSmartForecast() {
-  // Forecast is always anchored to the last CGM reading (CGM_END), not viewTime.
-  // This means scrubbing doesn't change the prediction — it was set at the moment
-  // of the last known data point. The prediction line stays fixed as you scroll.
-  var anchorT = CGM_END || viewTime;
-  var d0  = dataAt(anchorT);
-  var bg  = d0.bg;
-  if (!bg || bg <= 0) return [];
-  var ISF    = getISF(anchorT);
-  var meals  = _getActiveMealEvents();
+  var meals   = _getActiveMealEvents();
   var boluses = _getActiveBolusEvents();
+  if (meals.length === 0 && boluses.length === 0) return [];
+
+  // Anchor to the earliest active event
+  var allTs = [];
+  meals.forEach(function(m)   { allTs.push(m.t); });
+  boluses.forEach(function(b) { allTs.push(b.t); });
+  var anchorT = Math.min.apply(null, allTs);
+
+  // BG at anchor
+  var d0 = dataAt(anchorT);
+  var bg = d0.bg;
+  if (!bg || bg <= 0) { bg = dataAt(CGM_END || Date.now()).bg || 7.0; }
+
+  var ISF    = getISF(anchorT);
+  var prev5  = dataAt(anchorT - 5 * 60000);
+  var roc5   = bg - (prev5.bg || bg);
+  var lagMins = 10 + Math.max(0, Math.min(4, roc5 * 8));
   var pts    = [];
 
-  // Speed-dependent sensor lag: 10min base + up to 4min on fast rise
-  var prev5   = dataAt(anchorT - 5 * 60000);
-  var roc5    = bg - (prev5.bg || bg);
-  var lagMins = 10 + Math.max(0, Math.min(4, roc5 * 8));
-
-  for (var i = 1; i <= 36; i++) {
+  for (var i = 0; i <= 36; i++) {
     var mins = i * 5;
     var ft   = anchorT + mins * 60000;
     var fx   = tX(ft);
-    if (fx > W + 40) break;
 
-    // COB contribution: additional absorbed carbs → BG rise via IC
     var cobEffect = 0;
     meals.forEach(function(meal) {
-      var mealMinsNow    = (anchorT - meal.t) / 60000;
-      var mealMinsFuture = mealMinsNow + mins;
+      var mnow = (anchorT - meal.t) / 60000;
+      var mfut = mnow + mins;
       meal.items.forEach(function(food) {
-        var gi   = food.gi || 55;
-        var IC   = getIC(meal.t) || 10;
-        var absNow    = food.carbs * Math.max(0, 1 - _cobFgi(mealMinsNow,    gi));
-        var absFuture = food.carbs * Math.max(0, 1 - _cobFgi(mealMinsFuture, gi));
-        cobEffect += Math.max(0, absFuture - absNow) / IC * ISF;
+        var gi = food.gi || 55;
+        var IC = getIC(meal.t) || 10;
+        var a0 = food.carbs * Math.max(0, 1 - _cobFgi(mnow, gi));
+        var af = food.carbs * Math.max(0, 1 - _cobFgi(mfut, gi));
+        cobEffect += Math.max(0, af - a0) / IC * ISF;
       });
     });
-
-    // IOB contribution: insulin depleting → BG suppression
     var iobEffect = 0;
     boluses.forEach(function(bolus) {
-      var bMins = (anchorT - bolus.t) / 60000;
-      var bISF  = getISF(bolus.t) || ISF;
-      iobEffect += bolus.u * (_iobFn(bMins) - _iobFn(bMins + mins)) * bISF;
+      var bm  = (anchorT - bolus.t) / 60000;
+      var bISF = getISF(bolus.t) || ISF;
+      iobEffect += bolus.u * (_iobFn(bm) - _iobFn(bm + mins)) * bISF;
     });
-
     var predBlood = Math.max(2.0, Math.min(22, bg + cobEffect - iobEffect));
 
-    // CGM prediction — blood shifted right by sensor lag
-    var cgmMins = Math.max(0, mins - lagMins);
-    var cgmCob  = 0;
+    var cgmM   = Math.max(0, mins - lagMins);
+    var cgmCob = 0;
     meals.forEach(function(meal) {
-      var mealMinsNow    = (anchorT - meal.t) / 60000;
-      var mealMinsFuture = mealMinsNow + cgmMins;
+      var mnow = (anchorT - meal.t) / 60000;
+      var mfut = mnow + cgmM;
       meal.items.forEach(function(food) {
-        var gi  = food.gi || 55;
-        var IC  = getIC(meal.t) || 10;
-        var absNow    = food.carbs * Math.max(0, 1 - _cobFgi(mealMinsNow,    gi));
-        var absFuture = food.carbs * Math.max(0, 1 - _cobFgi(mealMinsFuture, gi));
-        cgmCob += Math.max(0, absFuture - absNow) / IC * ISF;
+        var gi = food.gi || 55;
+        var IC = getIC(meal.t) || 10;
+        var a0 = food.carbs * Math.max(0, 1 - _cobFgi(mnow, gi));
+        var af = food.carbs * Math.max(0, 1 - _cobFgi(mfut, gi));
+        cgmCob += Math.max(0, af - a0) / IC * ISF;
       });
     });
     var cgmIob = 0;
     boluses.forEach(function(bolus) {
-      var bMins = (anchorT - bolus.t) / 60000;
-      var bISF  = getISF(bolus.t) || ISF;
-      cgmIob += bolus.u * (_iobFn(bMins) - _iobFn(bMins + cgmMins)) * bISF;
+      var bm  = (anchorT - bolus.t) / 60000;
+      var bISF = getISF(bolus.t) || ISF;
+      cgmIob += bolus.u * (_iobFn(bm) - _iobFn(bm + cgmM)) * bISF;
     });
     var predCGM = Math.max(2.0, Math.min(22, bg + cgmCob - cgmIob));
 
     pts.push({
-      mins: mins, x: fx,
-      bg: predCGM,         // legacy compat
-      y: bgToY(predCGM),   // legacy compat
-      bgBlood: predBlood,  yBlood: bgToY(predBlood),
-      bgCGM:   predCGM,    yCGM:   bgToY(predCGM)
+      t: ft, mins: mins, x: fx,
+      bg: predCGM,        y: bgToY(predCGM),
+      bgBlood: predBlood, yBlood: bgToY(predBlood),
+      bgCGM: predCGM,     yCGM:   bgToY(predCGM)
     });
   }
   return pts;
@@ -2304,7 +2276,20 @@ function drawUnknownForce(pal) {
 
   CX.save();
 
-  // CGM aura removed — was rendering as chunky column artefacts
+  // ── PERMANENT CGM AURA — always present ──────────────────────────────
+  var auraGr = CX.createLinearGradient(0, 0, 0, H);
+  auraGr.addColorStop(0,   'rgba(180,200,220,0)');
+  auraGr.addColorStop(0.5, 'rgba(180,200,220,0.06)');
+  auraGr.addColorStop(1,   'rgba(180,200,220,0)');
+  mistPts.forEach(function(pt) {
+    var aura = 12;
+    var gr = CX.createLinearGradient(pt.px, pt.cgmY - aura, pt.px, pt.cgmY + aura);
+    gr.addColorStop(0,   'rgba(180,200,235,0)');
+    gr.addColorStop(0.5, 'rgba(180,200,235,0.08)');
+    gr.addColorStop(1,   'rgba(180,200,235,0)');
+    CX.fillStyle = gr;
+    CX.fillRect(pt.px - 1, pt.cgmY - aura, 2, aura * 2);
+  });
 
   // ── SMOOTH MIST REGION — single continuous path, no columns ─────────
   var phi2 = _mistFrame * 0.018;
@@ -2352,124 +2337,96 @@ function drawUnknownForce(pal) {
   CX.restore();
 }
 
-// ── FORECAST TRACE — navigable prediction line beyond CGM_END ────────────
-// ── FORECAST TRACE — event-driven dual prediction traces ─────────────────
-// Anchored at CGM_END — doesn't change when scrubbing.
-// CGM prediction: bold solid. Blood prediction: whispy offset shadow.
-// Mist wisps trail between the two traces to show the lag gap.
+// ── FORECAST TRACE — event-anchored prediction, always visible ───────────
+// Anchored to earliest active event time. Renders identically whether
+// scrubbing back or at now. Blood=warm amber, CGM=bold white, mist tunnel.
 function drawForecastTrace(pal) {
-  if (!CGM_END) return;
-  var nowX = tX(CGM_END);
-  // Render if forecast region is at least partially visible
-  if (nowX > W + 40) return;
-
   var pts = buildSmartForecast();
   if (!pts || pts.length < 2) return;
+
+  // Only draw points that fall within the visible canvas (±100px margin)
+  var visible = pts.filter(function(p) { return p.x > -100 && p.x < W + 100; });
+  if (visible.length < 2) return;
 
   var R = pal.bgLine[0], G = pal.bgLine[1], B = pal.bgLine[2];
   CX.save();
 
-  // ── Mist tunnel — soft widening envelope ─────────────────────────
+  // ── Mist tunnel — soft envelope around CGM prediction ────────────
   CX.beginPath();
-  pts.forEach(function(p, i) {
-    var uncert  = 0.25 + (p.mins / 30) * 0.5;
-    var yHi = bgToY(Math.min(22, p.bgCGM + uncert));
+  visible.forEach(function(p, i) {
+    var uncert = 0.2 + (p.mins / 30) * 0.45;
+    var yHi    = bgToY(Math.min(22, p.bgCGM + uncert));
     i === 0 ? CX.moveTo(p.x, yHi) : CX.lineTo(p.x, yHi);
   });
-  for (var i = pts.length - 1; i >= 0; i--) {
-    var p2 = pts[i];
-    var uncert2 = 0.25 + (p2.mins / 30) * 0.5;
-    CX.lineTo(p2.x, bgToY(Math.max(2, p2.bgCGM - uncert2)));
+  for (var i = visible.length - 1; i >= 0; i--) {
+    var uncert2 = 0.2 + (visible[i].mins / 30) * 0.45;
+    CX.lineTo(visible[i].x, bgToY(Math.max(2, visible[i].bgCGM - uncert2)));
   }
   CX.closePath();
-  var tunnelGr = CX.createLinearGradient(nowX, 0, W, 0);
-  tunnelGr.addColorStop(0,   'rgba(180,200,230,0.08)');
-  tunnelGr.addColorStop(0.6, 'rgba(180,200,230,0.04)');
-  tunnelGr.addColorStop(1,   'rgba(180,200,230,0.01)');
-  CX.fillStyle = tunnelGr; CX.fill();
+  CX.fillStyle = 'rgba(' + R + ',' + G + ',' + B + ',0.07)';
+  CX.fill();
 
-  // ── Blood prediction — solid warm line (actual blood state, ahead of CGM) ─
+  // ── Blood prediction — warm amber, solid, leads CGM by lag ───────
   CX.beginPath();
-  pts.forEach(function(p, i) {
+  visible.forEach(function(p, i) {
     i === 0 ? CX.moveTo(p.x, p.yBlood) : CX.lineTo(p.x, p.yBlood);
   });
-  CX.strokeStyle = 'rgba(255,190,80,0.55)';  // warm amber — blood
-  CX.lineWidth   = 1.5;
+  CX.strokeStyle = 'rgba(255,185,70,0.60)';
+  CX.lineWidth   = 1.8;
   CX.setLineDash([]);
   CX.stroke();
 
-  // ── Mist wisp trail — links CGM to blood trace, shows lag visually ─
-  // Small soft circles scattered between the two lines
+  // ── Mist wisps linking CGM to blood trace ────────────────────────
   var phi = (_mistFrame || 0) * 0.015;
-  for (var wi = 0; wi < pts.length; wi += 2) {
-    var wp = pts[wi];
-    if (!wp.yCGM || !wp.yBlood) continue;
-    var gapY = wp.yBlood - wp.yCGM; // blood is typically ahead (higher or lower)
-    if (Math.abs(gapY) < 1) continue;
-    var wispFrac  = 0.3 + Math.sin(phi + wi * 0.4) * 0.25;
-    var wispY     = wp.yCGM + gapY * wispFrac;
-    var wispR     = 1.5 + Math.sin(phi * 1.3 + wi * 0.6) * 0.8;
-    var wispAlpha = 0.08 + Math.sin(phi * 0.8 + wi) * 0.04;
+  for (var wi = 0; wi < visible.length; wi += 3) {
+    var wp   = visible[wi];
+    var gapY = wp.yBlood - wp.yCGM;
+    if (Math.abs(gapY) < 2) continue;
+    var wFrac = 0.3 + Math.sin(phi + wi * 0.4) * 0.2;
+    var wY    = wp.yCGM + gapY * wFrac;
+    var wR    = 1.2 + Math.sin(phi * 1.3 + wi * 0.5) * 0.6;
     CX.beginPath();
-    CX.arc(wp.x + Math.sin(phi + wi) * 2, wispY, wispR, 0, Math.PI * 2);
-    CX.fillStyle = 'rgba(255,210,120,' + Math.max(0.02, wispAlpha) + ')';
+    CX.arc(wp.x + Math.sin(phi + wi) * 1.5, wY, wR, 0, Math.PI * 2);
+    CX.fillStyle = 'rgba(255,200,100,0.18)';
     CX.fill();
   }
 
-  // ── CGM prediction — bold solid line ──────────────────────────────
+  // ── CGM prediction — bold, consistent look past and present ──────
   CX.beginPath();
-  pts.forEach(function(p, i) {
+  visible.forEach(function(p, i) {
     i === 0 ? CX.moveTo(p.x, p.yCGM) : CX.lineTo(p.x, p.yCGM);
   });
-  CX.strokeStyle = 'rgba(' + R + ',' + G + ',' + B + ',0.85)';
+  CX.strokeStyle = 'rgba(' + R + ',' + G + ',' + B + ',0.88)';
   CX.lineWidth   = 2.5;
   CX.setLineDash([]);
   CX.stroke();
 
-  // ── Labels: CGM and Blood at 30min intervals ──────────────────────
+  // ── Value labels at 30min intervals ──────────────────────────────
   CX.font = "400 9px 'DM Mono',monospace";
   CX.textAlign = 'center';
-  pts.forEach(function(p) {
-    if (p.mins % 30 !== 0) return;
+  visible.forEach(function(p) {
+    if (p.mins === 0 || p.mins % 30 !== 0) return;
     if (p.x < 0 || p.x > W) return;
-    // CGM label above line
     var col = p.bgCGM < 3.9 ? 'rgba(255,210,40,0.9)'
             : p.bgCGM > 10  ? 'rgba(220,100,40,0.8)'
-            : 'rgba(' + R + ',' + G + ',' + B + ',0.7)';
+            : 'rgba(' + R + ',' + G + ',' + B + ',0.75)';
     CX.fillStyle = col;
     CX.fillText(p.bgCGM.toFixed(1), p.x, p.yCGM - 10);
-    CX.beginPath(); CX.arc(p.x, p.yCGM, 2.5, 0, Math.PI*2);
+    CX.beginPath(); CX.arc(p.x, p.yCGM, 2, 0, Math.PI*2);
     CX.fillStyle = col; CX.fill();
-    // Blood label (small, below blood line)
-    if (Math.abs(p.yBlood - p.yCGM) > 4) {
-      CX.globalAlpha = 0.45;
-      CX.font = "400 7px 'DM Mono',monospace";
-      CX.fillStyle = 'rgba(255,190,80,1)';
-      CX.fillText(p.bgBlood.toFixed(1), p.x, p.yBlood + 10);
-      CX.font = "400 9px 'DM Mono',monospace";
-      CX.globalAlpha = 1;
-    }
   });
 
-  // ── Labels: CGM / Blood trace identifiers at start ────────────────
-  if (pts.length > 0) {
-    var fp = pts[0];
-    CX.globalAlpha = 0.5;
+  // ── Trace labels at first visible point ──────────────────────────
+  var fp = visible[0];
+  if (fp && fp.x > 0 && fp.x < W - 60) {
+    CX.globalAlpha = 0.55;
     CX.font = "400 7px 'DM Mono',monospace";
     CX.textAlign = 'left';
     CX.fillStyle = 'rgba(' + R + ',' + G + ',' + B + ',1)';
-    CX.fillText('CGM', fp.x + 4, fp.yCGM - 4);
-    CX.fillStyle = 'rgba(255,190,80,1)';
-    CX.fillText('blood', fp.x + 4, fp.yBlood + 10);
+    CX.fillText('CGM ›', fp.x + 4, fp.yCGM - 4);
+    CX.fillStyle = 'rgba(255,185,70,1)';
+    CX.fillText('blood ›', fp.x + 4, fp.yBlood + 10);
     CX.globalAlpha = 1;
-  }
-
-  // ── "forecast ›" label ────────────────────────────────────────────
-  if (nowX > 10 && nowX < W - 40) {
-    CX.font = "400 8px 'DM Mono',monospace";
-    CX.textAlign = 'left';
-    CX.fillStyle = 'rgba(' + R + ',' + G + ',' + B + ',0.35)';
-    CX.fillText('forecast ›', nowX + 6, 16);
   }
 
   CX.globalAlpha = 1;
@@ -2478,74 +2435,7 @@ function drawForecastTrace(pal) {
 
 
 function drawFutureClouds(cobPts, iobPts, d, pal) {
-  const nowX = NOW_X * W;
-
-  // Subtle void deepening ahead
-  const mg = CX.createLinearGradient(nowX, 0, W, 0);
-  mg.addColorStop(0,    'rgba(0,0,0,0)');
-  mg.addColorStop(0.08, 'rgba(0,0,0,0.06)');
-  mg.addColorStop(1,    'rgba(0,0,0,0.20)');
-  CX.fillStyle = mg;
-  CX.fillRect(nowX, 0, W - nowX, H);
-
-  // Project COB cloud forward
-  const cobFuture = cobPts.filter(p => p.future);
-  if (cobFuture.length > 1) {
-    const [r,g,b] = COL_COB;
-    const peakCob = Math.max(...cobPts.filter(p=>!p.future).map(p=>p.val));
-    const tf = Math.min(0.5, Math.sqrt(peakCob / 50));
-    CX.save();
-    const grad = CX.createLinearGradient(nowX, 0, W, 0);
-    grad.addColorStop(0,   `rgba(${r},${g},${b},${0.12 * tf})`);
-    grad.addColorStop(1,   `rgba(${r},${g},${b},0)`);
-    CX.globalAlpha = 1;
-    CX.fillStyle   = grad;
-    CX.beginPath();
-    CX.moveTo(nowX, d ? bgToY(d.bg) : H/2);
-    for (const p of cobFuture) CX.lineTo(p.x, p.bgY);
-    for (let i = cobFuture.length-1; i >= 0; i--) CX.lineTo(cobFuture[i].x, cobFuture[i].y);
-    CX.closePath(); CX.fill();
-    // Wispy filament
-    CX.globalAlpha = tf * 0.3;
-    CX.strokeStyle = `rgba(${r},${g},${b},1)`;
-    CX.lineWidth   = 0.8;
-    CX.setLineDash([3, 9]);
-    CX.beginPath();
-    CX.moveTo(nowX, d ? bgToY(d.bg) : H/2);
-    for (const p of cobFuture) CX.lineTo(p.x, p.y);
-    CX.stroke();
-    CX.setLineDash([]);
-    CX.restore();
-  }
-
-  // Project IOB cloud forward
-  const iobFuture = iobPts.filter(p => p.future);
-  if (iobFuture.length > 1) {
-    const [r,g,b] = COL_IOB;
-    const peakIob = Math.max(...iobPts.filter(p=>!p.future).map(p=>p.val));
-    const tf = Math.min(0.5, Math.sqrt(peakIob / 3.0));
-    CX.save();
-    const grad = CX.createLinearGradient(nowX, 0, W, 0);
-    grad.addColorStop(0,   `rgba(${r},${g},${b},${0.12 * tf})`);
-    grad.addColorStop(1,   `rgba(${r},${g},${b},0)`);
-    CX.globalAlpha = 1;
-    CX.fillStyle   = grad;
-    CX.beginPath();
-    CX.moveTo(nowX, d ? bgToY(d.bg) : H/2);
-    for (const p of iobFuture) CX.lineTo(p.x, p.bgY);
-    for (let i = iobFuture.length-1; i >= 0; i--) CX.lineTo(iobFuture[i].x, iobFuture[i].y);
-    CX.closePath(); CX.fill();
-    CX.globalAlpha = tf * 0.3;
-    CX.strokeStyle = `rgba(${r},${g},${b},1)`;
-    CX.lineWidth   = 0.8;
-    CX.setLineDash([3, 9]);
-    CX.beginPath();
-    CX.moveTo(nowX, d ? bgToY(d.bg) : H/2);
-    for (const p of iobFuture) CX.lineTo(p.x, p.y);
-    CX.stroke();
-    CX.setLineDash([]);
-    CX.restore();
-  }
+  // Future clouds removed — forward scrub disabled, predictions via drawForecastTrace
 }
 
 // ── ORB — the present moment, buoyant on the BG line ─────────────────
@@ -2930,7 +2820,11 @@ function drawBolusMarkers(pal) {
       CX.fillStyle = 'rgba(255,255,255,1.0)';
       CX.textAlign   = 'center';
       CX.fillText(lbl, x, cardY + 12);
-      // Person initial removed — was rendering as strange floating character
+      if (who) {
+        CX.globalAlpha = 0.7; CX.font = "400 8px 'DM Mono',monospace";
+        CX.fillText(who, x + lw/2 - 5, cardY + 1);
+        CX.globalAlpha = 1;
+      }
       window._eventCards.push({x:x, y:cardY+8, w:lw+4, h:17, data:b, idx:_bIdx, type:'carb'});
       _chipPos[b.t] = Object.assign(_chipPos[b.t] || {}, { cx: x, carbY: cardY + 8 });
     }
@@ -2985,33 +2879,29 @@ function drawBolusMarkers(pal) {
       if (!_acPos || _acPos.carbY == null) continue;
       var _acx = _acPos.cx;
       var _acy = _acPos.carbY;
-      // Draw arc from right-edge of bolus chip to left-edge of carb chip
-      var _bHalfW = 20; // approximate half-chip width
-      var arcStartX = _abx + _bHalfW;
-      var arcEndX   = _acx - _bHalfW;
-      if (arcEndX <= arcStartX) { arcStartX = _abx; arcEndX = _acx; }
-      var midX    = (arcStartX + arcEndX) / 2;
-      var arcDepth = Math.max(22, Math.abs(_aby - _acy) * 0.3 + 18);
+      // Draw a clear arc from bolus chip to carb chip
+      var midX = (_abx + _acx) / 2;
+      var arcDepth = Math.max(10, Math.abs(_aby - _acy) * 0.2 + 8);
       var cpY = Math.max(_aby, _acy) + arcDepth;
       CX.globalAlpha = 0.7;
       CX.strokeStyle = 'rgba(160,200,255,0.9)';
       CX.lineWidth = 1.5;
       CX.setLineDash([]);
       CX.beginPath();
-      CX.moveTo(arcStartX, _aby);
-      CX.quadraticCurveTo(midX, cpY, arcEndX, _acy);
+      CX.moveTo(_abx, _aby);
+      CX.quadraticCurveTo(midX, cpY, _acx, _acy);
       CX.stroke();
-      // Wait label — below the arc midpoint with clearance from the line
+      // Wait label — sits on the arc midpoint, close to the line
       var waitM = Math.round(gap / 60000);
       if (waitM > 0) {
         var tParam = 0.5;
-        var lblX = (1-tParam)*(1-tParam)*arcStartX + 2*(1-tParam)*tParam*midX + tParam*tParam*arcEndX;
-        var lblY = (1-tParam)*(1-tParam)*_aby + 2*(1-tParam)*tParam*cpY + tParam*tParam*_acy;
+        var lblX = (1-tParam)*(1-tParam)*_abx + 2*(1-tParam)*tParam*midX + tParam*tParam*_acx;
+        var lblY = (1-tParam)*(1-tParam)*_aby + 2*(1-tParam)*tParam*cpY  + tParam*tParam*_acy;
         CX.globalAlpha = 0.75;
         CX.font = "500 8px 'DM Mono',monospace";
         CX.fillStyle = 'rgba(160,200,255,1)';
         CX.textAlign = 'center';
-        CX.fillText(waitM + 'min', lblX, lblY + 12); // +12 not +4 — clear of arc
+        CX.fillText(waitM + 'min', lblX, lblY + 4);
       }
       break; // one link per bolus
     }
@@ -4544,24 +4434,7 @@ function frame(ts) {
   drawForecastTrace(pal);   // forecast BG line beyond now (navigable)
   drawTimeLabels(pal);
 
-  // ── FUTURE MODE INDICATOR — clear signal when scrubbed past now ──
-  var _isScrubFuture = viewTime > CGM_END + 60000;
-  if (_isScrubFuture) {
-    // Blue tint overlay — unmistakably "not now"
-    var _futGrad = CX.createLinearGradient(0, 0, W, 0);
-    _futGrad.addColorStop(0, 'rgba(40,80,200,0)');
-    _futGrad.addColorStop(0.3, 'rgba(40,80,200,0.07)');
-    _futGrad.addColorStop(1, 'rgba(40,80,200,0.13)');
-    CX.fillStyle = _futGrad;
-    CX.fillRect(0, 0, W, H);
-    // "looking ahead" label — top left, clear and calm
-    CX.save();
-    CX.font = "300 10px 'DM Mono',monospace";
-    CX.textAlign = 'left';
-    CX.fillStyle = 'rgba(100,150,255,0.55)';
-    CX.fillText('looking ahead ›', 14, 22);
-    CX.restore();
-  }
+  // Forward scrub disabled — viewTime is capped at CGM_END
 
   // ── THE ORB — buoyant on BG line ────────────────────────────────
   drawOrb(pal, d);
@@ -4619,10 +4492,9 @@ function frame(ts) {
   nowBtn.style.opacity        = awayFromNow ? '0.9' : '0';
   nowBtn.style.pointerEvents  = awayFromNow ? 'auto' : 'none';
   // Label and colour differ for future vs past scrub
-  var _scrubIsFuture = viewTime > (latestT + 60000);
-  nowBtn.textContent = _scrubIsFuture ? '← now' : 'now ›';
-  nowBtn.style.borderColor = _scrubIsFuture ? 'rgba(100,150,255,0.5)' : 'rgba(62,180,120,0.35)';
-  nowBtn.style.color = _scrubIsFuture ? 'rgba(120,160,255,0.9)' : 'rgba(62,200,140,0.85)';
+  nowBtn.textContent = 'now ›';
+  nowBtn.style.borderColor = 'rgba(62,180,120,0.35)';
+  nowBtn.style.color = 'rgba(62,200,140,0.85)';
 
   // time labels handled by drawTimeLabels
 
@@ -4659,7 +4531,7 @@ function _onDragMoveActive(e) {
   if(e.target.closest&&e.target.closest('#sheet,#flow-dock,.dock-btn,#whisper-overlay,#food-mgr-overlay,#hypo-overlay,#corr-overlay,#food-add-overlay,[id$=-overlay],button,input,textarea,select')) return;
   if(e.touches.length===1 && drag.on) {
     e.preventDefault();
-    viewTime=Math.max(CGM_END - 30*86400000, Math.min(CGM_END + 3*3600000, drag.t0-(e.touches[0].clientX-drag.x0)*(viewSpan/W))); _isAtNow=false;
+    viewTime=Math.max(CGM_END - 30*86400000, Math.min(CGM_END, drag.t0-(e.touches[0].clientX-drag.x0)*(viewSpan/W))); _isAtNow=false;
     _maybeLoadOlderHistory();
   } else if(pinch.on&&e.touches.length===2) {
     e.preventDefault();
@@ -4704,7 +4576,7 @@ CV.addEventListener('touchend',()=>{
 },{passive:true});
 let md={on:false,dragging:false,x0:0,t0:0};
 CV.addEventListener('mousedown',e=>{if(!e.target.closest('#sheet,#flow-dock,.dock-btn,#whisper-overlay,#food-mgr-overlay,#hypo-overlay,#corr-overlay,#food-add-overlay,[id$=-overlay],button,input,textarea,select'))md={on:true,dragging:false,x0:e.clientX,t0:viewTime}});
-CV.addEventListener('mousemove',e=>{if(md.on){var dx=e.clientX-md.x0;if(!md.dragging&&Math.abs(dx)<5)return;md.dragging=true;viewTime=Math.max(CGM_END - 30*86400000, Math.min(CGM_END + 3*3600000, md.t0-dx*(viewSpan/W)));_maybeLoadOlderHistory();}});
+CV.addEventListener('mousemove',e=>{if(md.on){var dx=e.clientX-md.x0;if(!md.dragging&&Math.abs(dx)<5)return;md.dragging=true;viewTime=Math.max(CGM_END - 30*86400000, Math.min(CGM_END, md.t0-dx*(viewSpan/W)));_maybeLoadOlderHistory();}});
 CV.addEventListener('mouseup',()=>{md.on=false;});
 
 // ── QUICK JUMP DAY STRIP ──────────────────────────────────────────────────
