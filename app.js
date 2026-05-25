@@ -2337,103 +2337,77 @@ function drawForecastTrace(pal) {
 
   if (curves.length === 0) return;
 
+  // Use only the most recent snapshot — new events fold in via _snapshotPrediction
+  var bestCurve = null;
+  if (_activePredictedCurves.length > 0) {
+    bestCurve = _activePredictedCurves[0].pts;
+  } else if (MEAL_HISTORY.length > 0 && MEAL_HISTORY[0]._predictedCurve) {
+    bestCurve = MEAL_HISTORY[0]._predictedCurve;
+  }
+  if (!bestCurve || bestCurve.length < 2) {
+    var livePts = buildSmartForecast();
+    if (livePts && livePts.length >= 2) bestCurve = livePts;
+  }
+  if (!bestCurve || bestCurve.length < 2) return;
+
+  // Convert absolute t → screen x at current viewTime
+  var mapped = bestCurve.map(function(p) {
+    return {
+      x:       tX(p.t),
+      mins:    p.mins,
+      bgCGM:   p.bgCGM || p.bg || 7,
+      bgBlood: p.bgBlood || p.bgCGM || p.bg || 7,
+      yCGM:    bgToY(p.bgCGM  || p.bg || 7),
+      yBlood:  bgToY(p.bgBlood || p.bgCGM || p.bg || 7)
+    };
+  });
+  var visible = mapped.filter(function(p) { return p.x > -W && p.x < W * 2; });
+  if (visible.length < 2) return;
+
   CX.save();
 
-  curves.forEach(function(pts) {
-    // Convert absolute timestamps to screen x at current viewTime
-    var mapped = pts.map(function(p) {
-      return {
-        x:       tX(p.t),
-        mins:    p.mins,
-        bgCGM:   p.bgCGM || p.bg || 7,
-        bgBlood: p.bgBlood || p.bgCGM || p.bg || 7,
-        yCGM:    bgToY(p.bgCGM || p.bg || 7),
-        yBlood:  bgToY(p.bgBlood || p.bgCGM || p.bg || 7)
-      };
-    });
+  // ── Blood prediction — red, solid, leads CGM by sensor lag ───────
+  CX.beginPath();
+  visible.forEach(function(p, i) {
+    i === 0 ? CX.moveTo(p.x, p.yBlood) : CX.lineTo(p.x, p.yBlood);
+  });
+  CX.strokeStyle = 'rgba(220,80,60,0.55)';
+  CX.lineWidth   = 1.2;
+  CX.setLineDash([]);
+  CX.stroke();
 
-    // Only render points within canvas bounds (±full width margin)
-    var visible = mapped.filter(function(p) { return p.x > -W && p.x < W * 2; });
-    if (visible.length < 2) return;
+  // ── Lag ribbon — filled zone between blood and CGM predictions ────
+  // Shows the sensor lag gap as a soft filled band, like the grey mist
+  CX.beginPath();
+  visible.forEach(function(p, i) {
+    i === 0 ? CX.moveTo(p.x, p.yBlood) : CX.lineTo(p.x, p.yBlood);
+  });
+  for (var ri = visible.length - 1; ri >= 0; ri--) {
+    CX.lineTo(visible[ri].x, visible[ri].yCGM);
+  }
+  CX.closePath();
+  CX.fillStyle = 'rgba(220,180,100,0.08)';
+  CX.fill();
 
-    // ── Mist tunnel — soft uncertainty envelope ───────────────────
-    CX.beginPath();
-    visible.forEach(function(p, i) {
-      var uncert = 0.2 + (p.mins / 30) * 0.4;
-      i === 0 ? CX.moveTo(p.x, bgToY(Math.min(22, p.bgCGM + uncert)))
-              : CX.lineTo(p.x, bgToY(Math.min(22, p.bgCGM + uncert)));
-    });
-    for (var i = visible.length - 1; i >= 0; i--) {
-      var uncert2 = 0.2 + (visible[i].mins / 30) * 0.4;
-      CX.lineTo(visible[i].x, bgToY(Math.max(2, visible[i].bgCGM - uncert2)));
-    }
-    CX.closePath();
-    CX.fillStyle = 'rgba(' + R + ',' + G + ',' + B + ',0.06)';
-    CX.fill();
+  // ── CGM prediction — dashed steel-blue, clearly distinct from actual ─
+  CX.beginPath();
+  visible.forEach(function(p, i) {
+    i === 0 ? CX.moveTo(p.x, p.yCGM) : CX.lineTo(p.x, p.yCGM);
+  });
+  CX.strokeStyle = 'rgba(140,180,220,0.65)';
+  CX.lineWidth   = 1.5;
+  CX.setLineDash([6, 5]);
+  CX.stroke();
+  CX.setLineDash([]);
 
-    // ── Blood prediction — warm amber solid ───────────────────────
-    CX.beginPath();
-    visible.forEach(function(p, i) {
-      i === 0 ? CX.moveTo(p.x, p.yBlood) : CX.lineTo(p.x, p.yBlood);
-    });
-    CX.strokeStyle = 'rgba(255,185,70,0.65)';
-    CX.lineWidth   = 1.8;
-    CX.setLineDash([]);
-    CX.stroke();
-
-    // ── Wisps linking blood to CGM (shows sensor lag gap) ────────
-    for (var wi = 0; wi < visible.length; wi += 3) {
-      var wp   = visible[wi];
-      var gapY = wp.yBlood - wp.yCGM;
-      if (Math.abs(gapY) < 1.5) continue;
-      var wFrac = 0.3 + Math.sin(phi + wi * 0.4) * 0.2;
-      var wY    = wp.yCGM + gapY * wFrac;
-      var wR    = 1.0 + Math.sin(phi * 1.3 + wi * 0.5) * 0.5;
-      CX.beginPath();
-      CX.arc(wp.x + Math.sin(phi + wi) * 1.5, wY, wR, 0, Math.PI * 2);
-      CX.fillStyle = 'rgba(255,200,100,0.22)';
-      CX.fill();
-    }
-
-    // ── CGM prediction — bold solid line ─────────────────────────
-    CX.beginPath();
-    visible.forEach(function(p, i) {
-      i === 0 ? CX.moveTo(p.x, p.yCGM) : CX.lineTo(p.x, p.yCGM);
-    });
-    CX.strokeStyle = 'rgba(' + R + ',' + G + ',' + B + ',0.88)';
-    CX.lineWidth   = 2.5;
-    CX.setLineDash([]);
-    CX.stroke();
-
-    // ── Value labels at 30min intervals ──────────────────────────
-    CX.font = "400 9px 'DM Mono',monospace";
-    CX.textAlign = 'center';
-    visible.forEach(function(p) {
-      if (p.mins === 0 || p.mins % 30 !== 0) return;
-      if (p.x < 4 || p.x > W - 4) return;
-      var col = p.bgCGM < 3.9 ? 'rgba(255,210,40,0.9)'
-              : p.bgCGM > 10  ? 'rgba(220,100,40,0.8)'
-              : 'rgba(' + R + ',' + G + ',' + B + ',0.75)';
-      CX.fillStyle = col;
-      CX.fillText(p.bgCGM.toFixed(1), p.x, p.yCGM - 10);
-      CX.beginPath(); CX.arc(p.x, p.yCGM, 2, 0, Math.PI * 2);
-      CX.fillStyle = col; CX.fill();
-    });
-
-    // ── Trace labels at start of curve ───────────────────────────
-    var fp = visible.find(function(p) { return p.x > 4 && p.x < W - 60; });
-    if (fp) {
-      CX.globalAlpha = 0.50;
-      CX.font = "400 7px 'DM Mono',monospace";
-      CX.textAlign = 'left';
-      CX.fillStyle = 'rgba(' + R + ',' + G + ',' + B + ',1)';
-      CX.fillText('CGM ›', fp.x, fp.yCGM - 5);
-      if (Math.abs(fp.yBlood - fp.yCGM) > 3) {
-        CX.fillStyle = 'rgba(255,185,70,1)';
-        CX.fillText('blood ›', fp.x, fp.yBlood + 10);
-      }
-      CX.globalAlpha = 1;
-    }
+  // ── Value labels at 30min on CGM only ────────────────────────────
+  CX.font = "400 8px 'DM Mono',monospace";
+  CX.textAlign = 'center';
+  visible.forEach(function(p) {
+    if (p.mins === 0 || p.mins % 30 !== 0) return;
+    if (p.x < 4 || p.x > W - 4) return;
+    CX.fillStyle = 'rgba(140,180,220,0.5)';
+    CX.fillText(p.bgCGM.toFixed(1), p.x, p.yCGM - 8);
   });
 
   CX.globalAlpha = 1;
@@ -6475,8 +6449,22 @@ function _backfillPredictedCurves() {
     var baseBG   = meal.pre_bg || 7.0;
     var snap     = meal.therapy_snapshot || {};
     var ISF      = (snap.ratios && snap.ratios[0] && snap.ratios[0].isf) || getISF(anchorT) || 7;
+    var IC_snap  = (snap.ratios && snap.ratios[0] && snap.ratios[0].ic)  || getIC(anchorT)  || 10;
     var lagMins  = 10;
-    var pts      = [];
+
+    // Collect all boluses active at meal time (within 4h before)
+    var activeBoluses = [];
+    LOGGED_EVENTS.forEach(function(ev) {
+      if (!ev.u || ev.u <= 0 || ev.note === 'basal') return;
+      var bAge = (anchorT - ev.t) / 60000; // mins before meal
+      if (bAge >= 0 && bAge <= 240) activeBoluses.push({ t: ev.t, u: ev.u });
+    });
+    // If no LOGGED_EVENTS boluses found, fall back to meal.u
+    if (activeBoluses.length === 0 && meal.u && meal.u > 0) {
+      activeBoluses.push({ t: meal.bolus_t || anchorT, u: meal.u });
+    }
+
+    var pts = [];
 
     for (var i = 0; i <= 36; i++) {
       var mins = i * 5;
@@ -6488,19 +6476,18 @@ function _backfillPredictedCurves() {
         meal.items.forEach(function(food) {
           if (!food.carbs) return;
           var gi  = food.gi || 55;
-          var IC  = (snap.ratios && snap.ratios[0] && snap.ratios[0].ic) || getIC(anchorT) || 10;
-          var a0  = food.carbs * Math.max(0, 1 - _cobFgi(0,   gi));
+          var a0  = food.carbs * Math.max(0, 1 - _cobFgi(0,    gi));
           var af  = food.carbs * Math.max(0, 1 - _cobFgi(mins, gi));
-          cobEffect += Math.max(0, af - a0) / IC * ISF;
+          cobEffect += Math.max(0, af - a0) / IC_snap * ISF;
         });
       }
 
-      // IOB effect — approximate from meal's bolus_u if known
+      // IOB effect from all active boluses at meal time
       var iobEffect = 0;
-      if (meal.u && meal.u > 0) {
-        var bMins = meal.bolus_t ? (anchorT - meal.bolus_t) / 60000 : 0;
-        iobEffect = meal.u * (_iobFn(Math.max(0, bMins)) - _iobFn(Math.max(0, bMins) + mins)) * ISF;
-      }
+      activeBoluses.forEach(function(bolus) {
+        var bMins = (anchorT - bolus.t) / 60000;
+        iobEffect += bolus.u * (_iobFn(Math.max(0, bMins)) - _iobFn(Math.max(0, bMins) + mins)) * ISF;
+      });
 
       var predBlood = Math.max(2.0, Math.min(22, baseBG + cobEffect - iobEffect));
       var cgmM      = Math.max(0, mins - lagMins);
@@ -6509,17 +6496,16 @@ function _backfillPredictedCurves() {
         meal.items.forEach(function(food) {
           if (!food.carbs) return;
           var gi = food.gi || 55;
-          var IC = (snap.ratios && snap.ratios[0] && snap.ratios[0].ic) || getIC(anchorT) || 10;
           var a0 = food.carbs * Math.max(0, 1 - _cobFgi(0,    gi));
           var af = food.carbs * Math.max(0, 1 - _cobFgi(cgmM, gi));
-          cobCGM += Math.max(0, af - a0) / IC * ISF;
+          cobCGM += Math.max(0, af - a0) / IC_snap * ISF;
         });
       }
       var iobCGM = 0;
-      if (meal.u && meal.u > 0) {
-        var bMins2 = meal.bolus_t ? (anchorT - meal.bolus_t) / 60000 : 0;
-        iobCGM = meal.u * (_iobFn(Math.max(0, bMins2)) - _iobFn(Math.max(0, bMins2) + cgmM)) * ISF;
-      }
+      activeBoluses.forEach(function(bolus) {
+        var bMins = (anchorT - bolus.t) / 60000;
+        iobCGM += bolus.u * (_iobFn(Math.max(0, bMins)) - _iobFn(Math.max(0, bMins) + cgmM)) * ISF;
+      });
       var predCGM = Math.max(2.0, Math.min(22, baseBG + cobCGM - iobCGM));
 
       pts.push({ t: ft, mins: mins, bgBlood: predBlood, bgCGM: predCGM, bg: predCGM, predicted_bg: predCGM });
