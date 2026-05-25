@@ -1131,8 +1131,8 @@ function drawBGTrail(pal) {
   if (predC.length > 1) {
     const startPt = pts[pts.length-1] || predC[0];
     const last    = predC[predC.length-1];
-    const endCol  = last.bg > BG_HIGH ? `rgba(230,140,40,` :
-                    last.bg < BG_LOW  ? `rgba(80,130,220,` :
+    const endCol  = last.bgCGM > BG_HIGH ? `rgba(230,140,40,` :
+                    last.bgCGM < BG_LOW  ? `rgba(80,130,220,` :
                     `rgba(${pal.bgLine.join(',')},`;
 
     // Uncertainty bands
@@ -1141,8 +1141,8 @@ function drawBGTrail(pal) {
       CX.globalAlpha = alpha;
       CX.strokeStyle = `rgba(${pal.bgLine.join(',')},1)`;
       CX.lineWidth = 3; CX.setLineDash([3,6]);
-      CX.beginPath(); CX.moveTo(startPt.x, startPt.y+spread);
-      predC.forEach(function(p){ CX.lineTo(p.x, p.y+spread); });
+      CX.beginPath(); CX.moveTo(startPt.x, (startPt.yCGM||startPt.y)+spread);
+      predC.forEach(function(p){ CX.lineTo(p.x, p.yCGM+spread); });
       CX.stroke();
     });
 
@@ -1150,25 +1150,25 @@ function drawBGTrail(pal) {
     CX.globalAlpha = 0.5;
     CX.strokeStyle = endCol + '1)';
     CX.lineWidth = 1.8; CX.setLineDash([4,7]);
-    CX.beginPath(); CX.moveTo(startPt.x, startPt.y);
-    predC.forEach(function(p){ CX.lineTo(p.x, p.y); });
+    CX.beginPath(); CX.moveTo(startPt.x, startPt.yCGM||startPt.y);
+    predC.forEach(function(p){ CX.lineTo(p.x, p.yCGM); });
     CX.stroke(); CX.setLineDash([]);
 
     // Landing dot
     CX.globalAlpha = 0.8;
     CX.fillStyle   = endCol + '0.9)';
     CX.shadowColor = endCol + '0.5)'; CX.shadowBlur = 6;
-    CX.beginPath(); CX.arc(last.x, last.y, 3.5, 0, Math.PI*2); CX.fill();
+    CX.beginPath(); CX.arc(last.x, last.yCGM, 3.5, 0, Math.PI*2); CX.fill();
     CX.shadowBlur = 0;
 
     // Landing value + time label
     CX.globalAlpha = 0.6;
     CX.fillStyle   = endCol + '1)';
     CX.font        = "300 10px 'Fraunces',serif"; CX.textAlign = 'center';
-    CX.fillText(last.bg.toFixed(1), last.x, last.y - 9);
+    CX.fillText(last.bgCGM.toFixed(1), last.x, last.yCGM - 9);
     CX.globalAlpha = 0.3;
     CX.font        = "300 8px 'DM Mono',monospace";
-    CX.fillText('+' + last.mins + 'min', last.x, last.y + 13);
+    CX.fillText('+' + last.mins + 'min', last.x, last.yCGM + 13);
   }
 
   CX.globalAlpha = 1;
@@ -1547,16 +1547,15 @@ function _drawCOBReservoir() {
 
       var sigmaFactor = gi >= 70 ? 0.6 : gi >= 55 ? 1.0 : 1.5;
       var sigma  = _bellSigma(sigmaFactor);
-      var lineY  = dataAt ? bgToY(dataAt(viewTime).bg) : H * 0.5;
-      var availableH = H - lineY - 8;
+      // COB rises from canvas bottom — buoyancy from below, not from CGM line
+      var chipY  = H;
+      var availableH = H * 0.85; // use most of canvas height
       var maxD   = Math.min(availableH * 0.92, 90 * (food.carbs / 20));
       var minD   = Math.min(availableH * 0.12, 18);
       maxD = Math.max(minD, maxD);
 
       var sigmaMins   = peakMin / 2.2;
       var mealT_local = meal.t;
-      // Chip Y — origin point on the CGM line where this bell is born
-      var chipY = bgToY(dataAt(meal.t).bg || dataAt(viewTime).bg);
 
       var bellH = function(px) {
         var t_px = viewTime + (px - NOW_X * W) / W * viewSpan;
@@ -1580,8 +1579,7 @@ function _drawCOBReservoir() {
       // Lower fill: from chipY down to H (shading the space below — carbs are
       // a buoyant force pushing up from the bottom, the fill shows their domain)
       CX.save();
-
-      // Upper region: chipY → bell surface
+      // Bell rises from canvas bottom upward
       CX.beginPath();
       CX.moveTo(0, chipY);
       for (var i = 0; i <= 280; i++) {
@@ -1596,16 +1594,6 @@ function _drawCOBReservoir() {
       gr.addColorStop(0.5, 'rgba(' + rv + ',' + gv + ',' + bv + ',' + (breathe * 0.5) + ')');
       gr.addColorStop(1,   'rgba(' + rv + ',' + gv + ',' + bv + ',0)');
       CX.fillStyle = gr; CX.fill();
-
-      // Lower region: chipY → canvas bottom (soft downward shade)
-      CX.beginPath();
-      CX.moveTo(0, chipY); CX.lineTo(W, chipY); CX.lineTo(W, H); CX.lineTo(0, H); CX.closePath();
-      var grBot = CX.createLinearGradient(0, chipY, 0, H);
-      grBot.addColorStop(0,   'rgba(' + rv + ',' + gv + ',' + bv + ',' + (breathe * 0.55) + ')');
-      grBot.addColorStop(0.4, 'rgba(' + rv + ',' + gv + ',' + bv + ',' + (breathe * 0.25) + ')');
-      grBot.addColorStop(1,   'rgba(' + rv + ',' + gv + ',' + bv + ',0)');
-      CX.fillStyle = grBot; CX.fill();
-
       CX.restore();
 
       // ── Rim — bell surface, always drawn ─────────────────────────────
@@ -1903,43 +1891,75 @@ function _drawIOBReservoir() {
 function buildSmartForecast() {
   var d0    = dataAt(viewTime);
   var bg    = d0.bg;
+  if (!bg || bg <= 0) return [];
   var ISF   = getISF(viewTime);
-  var prev5 = dataAt(viewTime - 5*60000);
-  var roc   = d0.bg - prev5.bg;
   var meals  = _getActiveMealEvents();
-  var boluses= _getActiveBolusEvents();
+  var boluses = _getActiveBolusEvents();
   var pts    = [];
+
+  // Sensor lag model — speed-dependent (faster rise = more lag)
+  // Base lag 10min, add up to 4min on fast rise (>0.1 mmol/5min)
+  var prev5 = dataAt(viewTime - 5 * 60000);
+  var roc5  = bg - (prev5.bg || bg); // mmol change in last 5min
+  var lagMins = 10 + Math.max(0, Math.min(4, roc5 * 8)); // 10-14min
 
   for (var i = 1; i <= 36; i++) {
     var mins = i * 5;
-    var ft   = viewTime + mins*60000;
+    var ft   = viewTime + mins * 60000;
     var fx   = tX(ft);
-    if (fx > W+40) break;
+    if (fx > W + 40) break;
 
+    // COB effect: additional BG rise from carbs absorbed between now and mins
     var cobEffect = 0;
     meals.forEach(function(meal) {
-      // mealMins: minutes since the eat-time (meal.t).
-      // Positive = already eating/absorbed; negative = haven't eaten yet.
       var mealMinsNow    = (viewTime - meal.t) / 60000;
       var mealMinsFuture = mealMinsNow + mins;
       meal.items.forEach(function(food) {
-        var gi = food.gi || 55;
-        // Absorbed carbs up to now and up to forecast point, relative to eat time.
-        // _cobFgi returns 1 when mins<=0 (no absorption yet), 0 when fully absorbed.
-        var absNow    = food.carbs * Math.max(0, 1 - _cobFgi(mealMinsNow, gi));
+        var gi        = food.gi || 55;
+        var IC        = getIC(meal.t) || 10;
+        var absNow    = food.carbs * Math.max(0, 1 - _cobFgi(mealMinsNow,    gi));
         var absFuture = food.carbs * Math.max(0, 1 - _cobFgi(mealMinsFuture, gi));
-        cobEffect += Math.max(0, absFuture - absNow) * 0.055;
+        var addCarbs  = Math.max(0, absFuture - absNow);
+        cobEffect += (addCarbs / IC) * ISF;
       });
     });
 
+    // IOB effect: BG suppression from insulin active between now and mins
     var iobEffect = 0;
     boluses.forEach(function(bolus) {
-      var bMins = (viewTime - bolus.t) / 60000;
-      iobEffect += bolus.u * (_iobFn(bMins) - _iobFn(bMins+mins)) * ISF;
+      var bMins  = (viewTime - bolus.t) / 60000;
+      var bISF   = getISF(bolus.t) || ISF;
+      iobEffect += bolus.u * (_iobFn(bMins) - _iobFn(bMins + mins)) * bISF;
     });
 
-    var predBG = Math.max(1.8, Math.min(22, bg + cobEffect - iobEffect + roc*Math.exp(-mins/20)));
-    pts.push({mins:mins, bg:predBG, x:fx, y:bgToY(predBG)});
+    // Blood glucose prediction — pure event-driven, no roc speculation
+    var predBlood = Math.max(2.0, Math.min(22, bg + cobEffect - iobEffect));
+
+    // CGM prediction — blood prediction shifted right by sensor lag
+    // Find blood BG at (mins - lagMins) as approximation of what CGM shows at mins
+    var cgmMins = Math.max(0, mins - lagMins);
+    var cgmCobEffect = 0;
+    meals.forEach(function(meal) {
+      var mealMinsNow    = (viewTime - meal.t) / 60000;
+      var mealMinsFuture = mealMinsNow + cgmMins;
+      meal.items.forEach(function(food) {
+        var gi        = food.gi || 55;
+        var IC        = getIC(meal.t) || 10;
+        var absNow    = food.carbs * Math.max(0, 1 - _cobFgi(mealMinsNow,    gi));
+        var absFuture = food.carbs * Math.max(0, 1 - _cobFgi(mealMinsFuture, gi));
+        cgmCobEffect += Math.max(0, absFuture - absNow) / IC * ISF;
+      });
+    });
+    var cgmIobEffect = 0;
+    boluses.forEach(function(bolus) {
+      var bMins  = (viewTime - bolus.t) / 60000;
+      var bISF   = getISF(bolus.t) || ISF;
+      cgmIobEffect += bolus.u * (_iobFn(bMins) - _iobFn(bMins + cgmMins)) * bISF;
+    });
+    var predCGM = Math.max(2.0, Math.min(22, bg + cgmCobEffect - cgmIobEffect));
+
+    pts.push({ mins: mins, bgBlood: predBlood, bgCGM: predCGM, x: fx,
+               yBlood: bgToY(predBlood), yCGM: bgToY(predCGM) });
   }
   return pts;
 }
@@ -2313,164 +2333,151 @@ function drawUnknownForce(pal) {
     CX.fillRect(pt.px - 1, pt.cgmY - aura, 2, aura * 2);
   });
 
-  // ── FILLED MIST REGION — between COB top and IOB bottom ─────────────
-  // Build upper and lower mist boundary paths
+  // ── SMOOTH MIST REGION — continuous paths, no column lines ─────────
   var phi2 = _mistFrame * 0.018;
 
-  // Sample enough points for smooth fill — scan column by column
-  for (var mi = 0; mi < mistPts.length - 1; mi++) {
-    var pt  = mistPts[mi];
-    var pt2 = mistPts[mi + 1];
+  // Build smooth upper and lower boundary of the mist zone
+  // Upper boundary: the higher of COB top or IOB bottom surfaces
+  // Lower boundary: the CGM line
+  // Render as one smooth filled region with gradient + wisps
 
-    // The mist zone: between COB top surface and IOB bottom surface
-    // COB top is below CGM (pt.cobTopY > pt.cgmY in screen coords is wrong — cobTopY is ABOVE chip)
-    // cobTopY = chipY - cobH → smaller Y = higher on screen
-    // iobBotY = chipY - iobH → smaller Y = higher on screen
-    // Mist fills from max(cobTopY, iobBotY) up to the CGM line
-    // i.e. the zone where BOTH forces are active but don't match reality
+  // Pass 1: smooth filled region
+  var validPts = mistPts.filter(function(pt) { return pt.cgmY - Math.min(pt.cobTopY, pt.iobBotY) > 2; });
+  if (validPts.length > 1) {
+    var shimmerBase = Math.sin(phi2 * 1.8) * 0.5 + 0.5;
+    var mistAlpha   = 0.07 + shimmerBase * 0.05;
 
-    var topY  = Math.min(pt.cobTopY, pt.iobBotY); // highest surface (smallest Y)
-    var botY  = pt.cgmY;                            // CGM line as floor
-    var topY2 = Math.min(pt2.cobTopY, pt2.iobBotY);
-    var botY2 = pt2.cgmY;
-
-    if (botY - topY < 2) continue; // no meaningful gap
-
-    // Swirling mist: shimmer shifts with time and position
-    var shimmer  = Math.sin(phi2 * 2.1 + pt.px * 0.04) * 0.5 + 0.5;
-    var swirl    = Math.sin(phi2 * 1.3 + pt.px * 0.07 + mi * 0.3) * 3;
-    var mistAlpha = 0.06 + shimmer * 0.08;
-    var mistDepth = botY - topY;
-
-    // Draw filled mist column
-    var mgr = CX.createLinearGradient(0, topY + swirl, 0, botY);
-    mgr.addColorStop(0,   'rgba(160,185,215,' + (mistAlpha * 0.2) + ')');
-    mgr.addColorStop(0.3, 'rgba(175,195,225,' + mistAlpha + ')');
-    mgr.addColorStop(0.7, 'rgba(185,205,230,' + mistAlpha + ')');
-    mgr.addColorStop(1,   'rgba(160,185,215,' + (mistAlpha * 0.3) + ')');
-
+    // Upper boundary (top of mist)
     CX.beginPath();
-    CX.moveTo(pt.px,  topY  + swirl);
-    CX.lineTo(pt2.px, topY2 + swirl);
-    CX.lineTo(pt2.px, botY2);
-    CX.lineTo(pt.px,  botY);
+    validPts.forEach(function(pt, i) {
+      var topY = Math.min(pt.cobTopY, pt.iobBotY);
+      var swirl = Math.sin(phi2 * 1.2 + pt.px * 0.05) * 2.5;
+      i === 0 ? CX.moveTo(pt.px, topY + swirl) : CX.lineTo(pt.px, topY + swirl);
+    });
+    // Lower boundary (CGM line) — traced back
+    for (var mi = validPts.length - 1; mi >= 0; mi--) {
+      CX.lineTo(validPts[mi].px, validPts[mi].cgmY);
+    }
     CX.closePath();
-    CX.fillStyle = mgr;
+
+    // Gradient: misty at top, slightly denser at CGM line
+    var mGr = CX.createLinearGradient(0, 0, 0, H);
+    mGr.addColorStop(0,   'rgba(175,198,228,' + (mistAlpha * 0.4) + ')');
+    mGr.addColorStop(0.5, 'rgba(185,205,232,' + mistAlpha + ')');
+    mGr.addColorStop(1,   'rgba(175,195,225,' + (mistAlpha * 0.6) + ')');
+    CX.fillStyle = mGr;
     CX.fill();
 
-    // Occasional swirl wisps — slow, sparse, ghostly
-    if (mi % 8 === 0 && mistDepth > 8) {
-      var wispY = topY + mistDepth * (0.3 + shimmer * 0.4) + swirl;
-      var wispR = 3 + shimmer * 4;
+    // Pass 2: slow wisp circles — sparse, ghostly, no grid pattern
+    var nWisps = Math.min(8, Math.floor(validPts.length / 8));
+    for (var wi = 0; wi < nWisps; wi++) {
+      var wPt  = validPts[Math.floor((wi / nWisps) * validPts.length)];
+      var topY = Math.min(wPt.cobTopY, wPt.iobBotY);
+      var depth = wPt.cgmY - topY;
+      if (depth < 6) continue;
+      var wPhase = phi2 * 0.9 + wi * 0.8;
+      var wY = topY + depth * (0.25 + Math.sin(wPhase) * 0.3 + 0.3);
+      var wR = 4 + Math.sin(wPhase * 1.3) * 3;
+      var wX = wPt.px + Math.sin(wPhase * 0.7) * 5;
       CX.beginPath();
-      CX.arc(pt.px + swirl * 1.5, wispY, wispR, 0, Math.PI * 2);
-      CX.fillStyle = 'rgba(190,210,235,' + (mistAlpha * 0.35) + ')';
+      CX.arc(wX, wY, wR, 0, Math.PI * 2);
+      CX.fillStyle = 'rgba(195,215,238,' + (mistAlpha * 0.5) + ')';
       CX.fill();
     }
-  }
-
-  // ── PREDICTED (EXPECTED) LINE — ghost of what model said ──────────
-  var residuals = [];
-  var rSteps = 24;
-  for (var ri = 0; ri <= rSteps; ri++) {
-    var t_i    = viewTime - (rSteps - ri) * 5 * 60000;
-    var actual = dataAt(t_i).bg;
-    if (!actual || actual <= 0) continue;
-    var tPrev  = t_i - 5 * 60000;
-    var dPrev  = dataAt(tPrev);
-    var ISF    = getISF(t_i);
-    var cobDelta = dPrev.cob > 0 ? dPrev.cob * (1 - cobF(5)) * 0.055 : 0;
-    var iobDelta = dPrev.iob > 0 ? -dPrev.iob * (1 - iobF(5)) * ISF  : 0;
-    var predicted = dPrev.bg + cobDelta + iobDelta;
-    var x = tX(t_i);
-    if (x > 0 && x < W) residuals.push({ x: x, predicted: predicted });
-  }
-
-  if (residuals.length > 2) {
-    CX.globalAlpha = 0.14;
-    CX.strokeStyle = 'rgba(200,215,235,1)';
-    CX.lineWidth   = 1;
-    CX.setLineDash([2, 8]);
-    CX.beginPath();
-    residuals.forEach(function(pt, i) {
-      var py = bgToY(pt.predicted);
-      i === 0 ? CX.moveTo(pt.x, py) : CX.lineTo(pt.x, py);
-    });
-    CX.stroke();
-    CX.setLineDash([]);
-    CX.globalAlpha = 1;
   }
 
   CX.restore();
 }
 
-// ── FORECAST TRACE — navigable prediction line beyond CGM_END ────────────
-// When the user scrubs forward past "now", the BG trace has no data.
-// This draws the buildSmartForecast() output as a dashed line with
-// uncertainty envelope — letting carers see what River expects to happen.
+// ── FORECAST TRACE — event-driven prediction, two traces ─────────────────
+// Blood prediction: what BG is actually doing based on logged events.
+// CGM prediction: blood shifted by sensor lag — what the sensor will show.
+// Uncertainty tunnel: widens using historical RMSE if available.
 function drawForecastTrace(pal) {
   if (!CGM_END) return;
   var nowX = tX(CGM_END);
-  // Only draw if the forecast region is visible
   if (nowX > W) return;
 
   var pts = buildSmartForecast();
   if (!pts || pts.length < 2) return;
 
+  // Historical RMSE for tunnel width — use model_accuracy if loaded
+  var baseUncert = 0.4; // mmol at t=0
+  var growthRate = 0.8; // additional mmol per 30min
+
   CX.save();
 
-  // ── Uncertainty envelope ─────────────────────────────────────────
-  // Widens over time: ±0.3mmol at 5min → ±1.5mmol at 3h
-  var R = pal.bgLine[0], G = pal.bgLine[1], B = pal.bgLine[2];
+  // ── Uncertainty tunnel — mist-like, widening ──────────────────────
+  // Top and bottom paths of the tunnel around the CGM prediction
+  var phi = (_mistFrame || 0) * 0.012;
   CX.beginPath();
   pts.forEach(function(p, i) {
-    var uncert = 0.3 + (p.mins / 180) * 1.2;
-    var yHi = bgToY(Math.min(22, p.bg + uncert));
-    if (i === 0) CX.moveTo(p.x, yHi); else CX.lineTo(p.x, yHi);
+    var uncert  = baseUncert + (p.mins / 30) * growthRate;
+    var shimmer = Math.sin(phi + i * 0.4) * 0.15;
+    var yHi = bgToY(Math.min(22, p.bgCGM + uncert + shimmer));
+    i === 0 ? CX.moveTo(p.x, yHi) : CX.lineTo(p.x, yHi);
   });
   for (var i = pts.length - 1; i >= 0; i--) {
-    var p2 = pts[i];
-    var uncert2 = 0.3 + (p2.mins / 180) * 1.2;
-    var yLo = bgToY(Math.max(2, p2.bg - uncert2));
+    var p2      = pts[i];
+    var uncert2 = baseUncert + (p2.mins / 30) * growthRate;
+    var shimmer2 = Math.sin(phi + i * 0.4 + 1.5) * 0.15;
+    var yLo = bgToY(Math.max(2, p2.bgCGM - uncert2 + shimmer2));
     CX.lineTo(p2.x, yLo);
   }
   CX.closePath();
-  CX.fillStyle = 'rgba(' + R + ',' + G + ',' + B + ',0.06)';
+  var R = pal.bgLine[0], G = pal.bgLine[1], B = pal.bgLine[2];
+  var tunnelGr = CX.createLinearGradient(nowX, 0, W, 0);
+  tunnelGr.addColorStop(0,   'rgba(180,200,230,0.12)');
+  tunnelGr.addColorStop(0.5, 'rgba(180,200,230,0.07)');
+  tunnelGr.addColorStop(1,   'rgba(180,200,230,0.03)');
+  CX.fillStyle = tunnelGr;
   CX.fill();
 
-  // ── Dashed forecast line ─────────────────────────────────────────
+  // ── Blood prediction — faint whispy shadow, leads CGM trace ───────
+  // Offset slightly left (earlier) of CGM — represents actual blood state
   CX.beginPath();
   pts.forEach(function(p, i) {
-    if (i === 0) CX.moveTo(p.x, p.y); else CX.lineTo(p.x, p.y);
+    i === 0 ? CX.moveTo(p.x, p.yBlood) : CX.lineTo(p.x, p.yBlood);
   });
-  CX.strokeStyle = 'rgba(' + R + ',' + G + ',' + B + ',0.45)';
-  CX.lineWidth   = 1.5;
-  CX.setLineDash([4, 6]);
+  CX.strokeStyle = 'rgba(' + R + ',' + G + ',' + B + ',0.25)';
+  CX.lineWidth   = 1.2;
+  CX.setLineDash([1, 5]);
   CX.stroke();
   CX.setLineDash([]);
 
-  // ── BG value labels at 30min intervals ──────────────────────────
+  // ── CGM prediction — bold solid line ──────────────────────────────
+  // What the sensor is expected to show based on logged events
+  CX.beginPath();
+  pts.forEach(function(p, i) {
+    i === 0 ? CX.moveTo(p.x, p.yCGM) : CX.lineTo(p.x, p.yCGM);
+  });
+  CX.strokeStyle = 'rgba(' + R + ',' + G + ',' + B + ',0.80)';
+  CX.lineWidth   = 2.5;
+  CX.setLineDash([]);
+  CX.stroke();
+
+  // ── Value labels at 30min intervals on CGM trace ─────────────────
   CX.font = "400 9px 'DM Mono',monospace";
   CX.textAlign = 'center';
   pts.forEach(function(p) {
     if (p.mins % 30 !== 0) return;
     if (p.x < 0 || p.x > W) return;
-    var col = p.bg < 3.9 ? 'rgba(255,210,40,0.8)' : p.bg > 10 ? 'rgba(220,100,40,0.7)' : 'rgba(' + R + ',' + G + ',' + B + ',0.6)';
+    var col = p.bgCGM < 3.9 ? 'rgba(255,210,40,0.9)'
+            : p.bgCGM > 10  ? 'rgba(220,100,40,0.8)'
+            : 'rgba(' + R + ',' + G + ',' + B + ',0.7)';
     CX.fillStyle = col;
-    CX.fillText(p.bg.toFixed(1), p.x, p.y - 8);
-    // Small tick
+    CX.fillText(p.bgCGM.toFixed(1), p.x, p.yCGM - 10);
     CX.beginPath();
-    CX.arc(p.x, p.y, 2.5, 0, Math.PI * 2);
-    CX.fillStyle = col;
-    CX.fill();
+    CX.arc(p.x, p.yCGM, 2.5, 0, Math.PI * 2);
+    CX.fillStyle = col; CX.fill();
   });
 
-  // ── "forecast" label near the now line ──────────────────────────
+  // ── "forecast" label ─────────────────────────────────────────────
   if (nowX > 10 && nowX < W - 40) {
     CX.save();
     CX.font = "400 8px 'DM Mono',monospace";
     CX.textAlign = 'left';
-    CX.fillStyle = 'rgba(' + R + ',' + G + ',' + B + ',0.3)';
+    CX.fillStyle = 'rgba(' + R + ',' + G + ',' + B + ',0.35)';
     CX.fillText('forecast ›', nowX + 6, 16);
     CX.restore();
   }
