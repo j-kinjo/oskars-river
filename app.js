@@ -428,6 +428,7 @@ async function syncNow(silent) {
     await loadObservedISF(); // refresh adaptive ISF from bolus_outcomes
     _derivePersonalRamp();   // refresh personalised absorption ramp from meal outcomes
     await _syncTimerEvents(); // cross-device timer state sync
+    _backfillPredictedCurves(); // reconstruct prediction curves for historic meal records
 
     _lastSyncT  = Date.now();
     _syncState  = 'ok';
@@ -6453,9 +6454,90 @@ async function syncMealHistoryFromSupabase() {
       MEAL_HISTORY.sort(function(a,b){ return b.t - a.t; }); // newest first
       saveMealHistory();
     }
+    // Backfill prediction curves for any records missing them
+    _backfillPredictedCurves();
   } catch(e) {
     console.warn('[syncMealHistory pull]', e.message);
   }
+}
+
+// Reconstruct _predictedCurve for MEAL_HISTORY records that don't have one.
+// Uses stored pre_bg and therapy_snapshot to replay the prediction as it would
+// have been computed at log time. Also populates _activePredictedCurves.
+function _backfillPredictedCurves() {
+  var now = Date.now();
+  MEAL_HISTORY.forEach(function(meal) {
+    if (meal._predictedCurve && meal._predictedCurve.length > 1) return; // already have it
+    if (!meal.t) return;
+    if (now - meal.t > 24 * 3600000) return; // only backfill last 24h for rendering
+
+    var anchorT  = meal.t;
+    var baseBG   = meal.pre_bg || 7.0;
+    var snap     = meal.therapy_snapshot || {};
+    var ISF      = (snap.ratios && snap.ratios[0] && snap.ratios[0].isf) || getISF(anchorT) || 7;
+    var lagMins  = 10;
+    var pts      = [];
+
+    for (var i = 0; i <= 36; i++) {
+      var mins = i * 5;
+      var ft   = anchorT + mins * 60000;
+
+      // COB effect from this meal's items
+      var cobEffect = 0;
+      if (meal.items) {
+        meal.items.forEach(function(food) {
+          if (!food.carbs) return;
+          var gi  = food.gi || 55;
+          var IC  = (snap.ratios && snap.ratios[0] && snap.ratios[0].ic) || getIC(anchorT) || 10;
+          var a0  = food.carbs * Math.max(0, 1 - _cobFgi(0,   gi));
+          var af  = food.carbs * Math.max(0, 1 - _cobFgi(mins, gi));
+          cobEffect += Math.max(0, af - a0) / IC * ISF;
+        });
+      }
+
+      // IOB effect — approximate from meal's bolus_u if known
+      var iobEffect = 0;
+      if (meal.u && meal.u > 0) {
+        var bMins = meal.bolus_t ? (anchorT - meal.bolus_t) / 60000 : 0;
+        iobEffect = meal.u * (_iobFn(Math.max(0, bMins)) - _iobFn(Math.max(0, bMins) + mins)) * ISF;
+      }
+
+      var predBlood = Math.max(2.0, Math.min(22, baseBG + cobEffect - iobEffect));
+      var cgmM      = Math.max(0, mins - lagMins);
+      var cobCGM    = 0;
+      if (meal.items) {
+        meal.items.forEach(function(food) {
+          if (!food.carbs) return;
+          var gi = food.gi || 55;
+          var IC = (snap.ratios && snap.ratios[0] && snap.ratios[0].ic) || getIC(anchorT) || 10;
+          var a0 = food.carbs * Math.max(0, 1 - _cobFgi(0,    gi));
+          var af = food.carbs * Math.max(0, 1 - _cobFgi(cgmM, gi));
+          cobCGM += Math.max(0, af - a0) / IC * ISF;
+        });
+      }
+      var iobCGM = 0;
+      if (meal.u && meal.u > 0) {
+        var bMins2 = meal.bolus_t ? (anchorT - meal.bolus_t) / 60000 : 0;
+        iobCGM = meal.u * (_iobFn(Math.max(0, bMins2)) - _iobFn(Math.max(0, bMins2) + cgmM)) * ISF;
+      }
+      var predCGM = Math.max(2.0, Math.min(22, baseBG + cobCGM - iobCGM));
+
+      pts.push({ t: ft, mins: mins, bgBlood: predBlood, bgCGM: predCGM, bg: predCGM, predicted_bg: predCGM });
+    }
+
+    meal._predictedCurve = pts;
+
+    // Also add to _activePredictedCurves if not already present
+    var dup = _activePredictedCurves.some(function(s) {
+      return s.pts && s.pts[0] && Math.abs(s.pts[0].t - anchorT) < 60000;
+    });
+    if (!dup) _activePredictedCurves.push({ loggedAt: anchorT, pts: pts });
+  });
+
+  // Sort newest first, trim to 20
+  _activePredictedCurves.sort(function(a,b){ return b.loggedAt - a.loggedAt; });
+  if (_activePredictedCurves.length > 20) _activePredictedCurves.length = 20;
+  try { localStorage.setItem('river_predicted_curves', JSON.stringify(_activePredictedCurves)); } catch(e) {}
 }
 
 // ═══════════════════════════════════════════════════════════════════════
