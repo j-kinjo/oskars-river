@@ -1804,7 +1804,10 @@ var _activePredictedCurves = (function() {
 })();
 
 function _snapshotPrediction() {
-  var pts = buildSmartForecast();
+  // Anchor to now — so the prediction starts from current BG and shows
+  // the effect of ALL active events from this moment forward.
+  // This means corrections, boluses, hypos immediately shift the curve.
+  var pts = buildSmartForecast(CGM_END || Date.now());
   if (!pts || pts.length < 2) return;
   // Add to front, keep last 20 snapshots (one per event over ~24h)
   _activePredictedCurves.unshift({ loggedAt: Date.now(), pts: pts });
@@ -1814,16 +1817,22 @@ function _snapshotPrediction() {
   // Also store on most recent MEAL_HISTORY entry if present
   if (MEAL_HISTORY && MEAL_HISTORY[0]) MEAL_HISTORY[0]._predictedCurve = pts;
 }
-function buildSmartForecast() {
+function buildSmartForecast(forceAnchorT) {
   var meals   = _getActiveMealEvents();
   var boluses = _getActiveBolusEvents();
   if (meals.length === 0 && boluses.length === 0) return [];
 
-  // Anchor: earliest active event
-  var allTs = [];
-  meals.forEach(function(m)   { allTs.push(m.t); });
-  boluses.forEach(function(b) { allTs.push(b.t); });
-  var anchorT = Math.min.apply(null, allTs);
+  // Anchor: use forced anchor if provided (e.g. now for corrections),
+  // otherwise earliest active event (for meal predictions showing full arc).
+  var anchorT;
+  if (forceAnchorT) {
+    anchorT = forceAnchorT;
+  } else {
+    var allTs = [];
+    meals.forEach(function(m)   { allTs.push(m.t); });
+    boluses.forEach(function(b) { allTs.push(b.t); });
+    anchorT = Math.min.apply(null, allTs);
+  }
 
   var d0  = dataAt(anchorT);
   var bg  = (d0 && d0.bg > 0) ? d0.bg : (dataAt(CGM_END || Date.now()).bg || 7.0);
@@ -2180,116 +2189,92 @@ var _mistFrame = 0;
 
 function drawUnknownForce(pal) {
   _mistFrame++;
+  var phi2 = _mistFrame * 0.018;
 
-  // ── FILLED MIST — swirling between where COB and IOB meet ────────────
-  // We sample the COB top surface and IOB bottom surface at each pixel.
-  // Where they overlap (COB top > IOB bottom from the CGM line), that gap
-  // is the unresolved zone — filled with animated grey mist.
-  // Where they don't overlap, we draw a thin permanent aura around the CGM.
+  // ── MIST = gap between predicted CGM and actual CGM ──────────────────
+  // Get the current best prediction curve
+  var predCurve = null;
+  if (_activePredictedCurves.length > 0) {
+    predCurve = _activePredictedCurves[0].pts;
+  } else if (MEAL_HISTORY.length > 0 && MEAL_HISTORY[0]._predictedCurve) {
+    predCurve = MEAL_HISTORY[0]._predictedCurve;
+  }
+  if (!predCurve || predCurve.length < 2) return;
 
-  var steps = 120; // pixel resolution
+  // Build lookup: absolute time → predicted BG
+  var predMap = {};
+  predCurve.forEach(function(p) { predMap[p.t] = p.bgCGM || p.bg; });
+
+  // Sample across visible canvas — compare predicted vs actual at each pixel
+  var steps = 80;
   var mistPts = [];
-
   for (var si = 0; si <= steps; si++) {
     var px   = (si / steps) * W;
     var t_px = viewTime + (px - NOW_X * W) / W * viewSpan;
+    // Only fill in the past (where we have actual data)
+    if (t_px > (CGM_END || Date.now()) + 60000) continue;
 
-    // CGM actual at this pixel
     var actual = dataAt(t_px).bg;
     if (!actual || actual <= 0) continue;
     var cgmY = bgToY(actual);
 
-    // COB top surface — highest COB bell at this pixel
-    var cobH = 0;
-    var mealEvents = _getActiveMealEvents();
-    mealEvents.forEach(function(meal) {
-      if (!meal.items) return;
-      meal.items.forEach(function(food) {
-        if (!food.carbs || food.carbs <= 0) return;
-        var gi       = food.gi || 55;
-        var peakMin  = Math.max(15, 95 - gi);
-        var peakT    = meal.t + peakMin * 60000;
-        var sigmaM   = peakMin / 2.2;
-        if (t_px < meal.t) return;
-        var rampMins = Math.min(1.0, (t_px - meal.t) / (8 * 60000));
-        var ramp     = rampMins * rampMins * (3 - 2 * rampMins);
-        var maxD     = Math.min((H - cgmY - 8) * 0.92, 90 * (food.carbs / 20));
-        var h        = Math.exp(-0.5 * Math.pow((t_px - peakT) / 60000 / sigmaM, 2)) * maxD * ramp;
-        if (h > cobH) cobH = h;
-      });
-    });
+    // Interpolate prediction at this time
+    var predBG = null;
+    var pts = predCurve;
+    for (var pi = 0; pi < pts.length - 1; pi++) {
+      if (t_px >= pts[pi].t && t_px <= pts[pi+1].t) {
+        var frac = (t_px - pts[pi].t) / (pts[pi+1].t - pts[pi].t);
+        predBG = (pts[pi].bgCGM || pts[pi].bg) * (1 - frac) + (pts[pi+1].bgCGM || pts[pi+1].bg) * frac;
+        break;
+      }
+    }
+    if (predBG === null) continue;
+    var predY = bgToY(predBG);
+    var delta = Math.abs(cgmY - predY);
+    if (delta < 3) continue; // no meaningful gap
 
-    // IOB bottom surface — deepest IOB bell at this pixel
-    var iobH = 0;
-    var bolusEvents = _getActiveBolusEvents();
-    bolusEvents.forEach(function(bolus) {
-      var peakT    = bolus.t + 75 * 60000;
-      var sigmaR   = 32, sigmaF = 70;
-      var diaMins  = (_TREATMENT && _TREATMENT.dia) ? _TREATMENT.dia : 240;
-      var maxD     = Math.min((cgmY - 8) * 0.90, 110 * (bolus.u / 3));
-      var rmpMins  = Math.min(1.0, Math.max(0, (t_px - bolus.t) / (12 * 60000)));
-      var ramp     = rmpMins * rmpMins * (3 - 2 * rmpMins);
-      var md       = (t_px - peakT) / 60000;
-      var sigma    = md < 0 ? sigmaR : sigmaF;
-      var h        = Math.exp(-0.5 * Math.pow(md / sigma, 2)) * maxD * ramp;
-      if (h > iobH) iobH = h;
-    });
-
-    // Chip Y for COB/IOB origin (use CGM at viewTime as reference for now)
-    var chipY = cgmY;
-    var cobTopY = chipY - cobH;  // COB surface: Y above chip
-    var iobBotY = chipY - iobH; // IOB surface: Y above chip
-
-    mistPts.push({ px: px, cgmY: cgmY, cobTopY: cobTopY, iobBotY: iobBotY, cobH: cobH, iobH: iobH });
+    mistPts.push({ px: px, cgmY: cgmY, predY: predY, delta: delta });
   }
 
   if (mistPts.length < 2) return;
 
   CX.save();
 
-  // CGM aura removed — was rendering as grey column artefacts
+  // ── Filled mist — between prediction and actual ───────────────────────
+  var shimmerBase = Math.sin(phi2 * 1.8) * 0.5 + 0.5;
+  var mistAlpha   = 0.07 + shimmerBase * 0.04;
 
-  // ── SMOOTH MIST REGION — single continuous path, no columns ─────────
-  var phi2 = _mistFrame * 0.018;
-  var validPts = mistPts.filter(function(pt) {
-    return pt.cgmY - Math.min(pt.cobTopY, pt.iobBotY) > 18; // meaningful gap only
+  // Build a single path: top edge (prediction or actual, whichever is higher)
+  // then bottom edge (the other one)
+  CX.beginPath();
+  mistPts.forEach(function(pt, i) {
+    var topY  = Math.min(pt.cgmY, pt.predY);
+    var swirl = Math.sin(phi2 * 1.1 + pt.px * 0.05) * 1.5;
+    i === 0 ? CX.moveTo(pt.px, topY + swirl) : CX.lineTo(pt.px, topY + swirl);
   });
+  for (var mi2 = mistPts.length - 1; mi2 >= 0; mi2--) {
+    CX.lineTo(mistPts[mi2].px, Math.max(mistPts[mi2].cgmY, mistPts[mi2].predY));
+  }
+  CX.closePath();
 
-  if (validPts.length > 1) {
-    var shimmerBase = Math.sin(phi2 * 1.8) * 0.5 + 0.5;
-    var mistAlpha   = 0.065 + shimmerBase * 0.045;
+  var mGr = CX.createLinearGradient(0, 0, 0, H);
+  mGr.addColorStop(0,   'rgba(175,198,228,' + (mistAlpha * 0.5) + ')');
+  mGr.addColorStop(0.5, 'rgba(185,205,232,' + mistAlpha + ')');
+  mGr.addColorStop(1,   'rgba(175,195,225,' + (mistAlpha * 0.5) + ')');
+  CX.fillStyle = mGr; CX.fill();
 
+  // Sparse wisps inside the mist zone
+  var nWisps = Math.min(5, Math.floor(mistPts.length / 8));
+  for (var wi = 0; wi < nWisps; wi++) {
+    var wPt = mistPts[Math.floor((wi / nWisps) * mistPts.length)];
+    if (!wPt || wPt.delta < 8) continue;
+    var wPhase = phi2 * 0.9 + wi * 0.8;
+    var wY = Math.min(wPt.cgmY, wPt.predY) + wPt.delta * (0.25 + Math.sin(wPhase) * 0.25 + 0.25);
+    var wR = 3 + Math.sin(wPhase * 1.3) * 2;
     CX.beginPath();
-    validPts.forEach(function(pt, i) {
-      var topY  = Math.min(pt.cobTopY, pt.iobBotY);
-      var swirl = Math.sin(phi2 * 1.2 + pt.px * 0.05) * 2;
-      i === 0 ? CX.moveTo(pt.px, topY + swirl) : CX.lineTo(pt.px, topY + swirl);
-    });
-    for (var mi2 = validPts.length - 1; mi2 >= 0; mi2--) {
-      CX.lineTo(validPts[mi2].px, validPts[mi2].cgmY);
-    }
-    CX.closePath();
-    var mGr = CX.createLinearGradient(0, 0, 0, H);
-    mGr.addColorStop(0,   'rgba(175,198,228,' + (mistAlpha * 0.4) + ')');
-    mGr.addColorStop(0.5, 'rgba(185,205,232,' + mistAlpha + ')');
-    mGr.addColorStop(1,   'rgba(175,195,225,' + (mistAlpha * 0.5) + ')');
-    CX.fillStyle = mGr; CX.fill();
-
-    // Sparse wisps — 6 max, no grid
-    var nWisps = Math.min(6, Math.floor(validPts.length / 10));
-    for (var wi = 0; wi < nWisps; wi++) {
-      var wPt   = validPts[Math.floor((wi / nWisps) * validPts.length)];
-      var wTopY = Math.min(wPt.cobTopY, wPt.iobBotY);
-      var wDepth = wPt.cgmY - wTopY;
-      if (wDepth < 8) continue;
-      var wPhase = phi2 * 0.9 + wi * 0.8;
-      var wY = wTopY + wDepth * (0.25 + Math.sin(wPhase) * 0.25 + 0.25);
-      var wR = 4 + Math.sin(wPhase * 1.3) * 3;
-      CX.beginPath();
-      CX.arc(wPt.px + Math.sin(wPhase * 0.7) * 5, wY, wR, 0, Math.PI * 2);
-      CX.fillStyle = 'rgba(195,215,238,' + (mistAlpha * 0.45) + ')';
-      CX.fill();
-    }
+    CX.arc(wPt.px + Math.sin(wPhase * 0.7) * 4, wY, wR, 0, Math.PI * 2);
+    CX.fillStyle = 'rgba(195,215,238,' + (mistAlpha * 0.5) + ')';
+    CX.fill();
   }
 
   CX.restore();
@@ -2389,13 +2374,13 @@ function drawForecastTrace(pal) {
   CX.fillStyle = 'rgba(220,180,100,0.08)';
   CX.fill();
 
-  // ── CGM prediction — dashed steel-blue, clearly distinct from actual ─
+  // ── CGM prediction — same colour family as actual CGM, dashed, fainter ─
   CX.beginPath();
   visible.forEach(function(p, i) {
     i === 0 ? CX.moveTo(p.x, p.yCGM) : CX.lineTo(p.x, p.yCGM);
   });
-  CX.strokeStyle = 'rgba(140,180,220,0.65)';
-  CX.lineWidth   = 1.5;
+  CX.strokeStyle = 'rgba(' + R + ',' + G + ',' + B + ',0.45)';
+  CX.lineWidth   = 1.2;
   CX.setLineDash([6, 5]);
   CX.stroke();
   CX.setLineDash([]);
@@ -2406,7 +2391,7 @@ function drawForecastTrace(pal) {
   visible.forEach(function(p) {
     if (p.mins === 0 || p.mins % 30 !== 0) return;
     if (p.x < 4 || p.x > W - 4) return;
-    CX.fillStyle = 'rgba(140,180,220,0.5)';
+    CX.fillStyle = 'rgba(' + R + ',' + G + ',' + B + ',0.4)';
     CX.fillText(p.bgCGM.toFixed(1), p.x, p.yCGM - 8);
   });
 
