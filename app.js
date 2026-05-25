@@ -1822,8 +1822,6 @@ function buildSmartForecast(forceAnchorT) {
   var boluses = _getActiveBolusEvents();
   if (meals.length === 0 && boluses.length === 0) return [];
 
-  // Anchor: use forced anchor if provided (e.g. now for corrections),
-  // otherwise earliest active event (for meal predictions showing full arc).
   var anchorT;
   if (forceAnchorT) {
     anchorT = forceAnchorT;
@@ -1837,71 +1835,90 @@ function buildSmartForecast(forceAnchorT) {
   var d0  = dataAt(anchorT);
   var bg  = (d0 && d0.bg > 0) ? d0.bg : (dataAt(CGM_END || Date.now()).bg || 7.0);
   var ISF = getISF(anchorT);
-  var prev5   = dataAt(anchorT - 5 * 60000);
-  var roc5    = bg - ((prev5 && prev5.bg) || bg);
-  var lagMins = 10 + Math.max(0, Math.min(4, roc5 * 8));
+  var lagMins = 10;
   var pts = [];
 
+  // Helper: find covering bolus units for a meal (bolus within 90min before meal)
+  function coveringUnits(meal) {
+    var u = 0;
+    boluses.forEach(function(bolus) {
+      var age = (meal.t - bolus.t) / 60000; // positive = bolus before meal
+      if (age >= -15 && age <= 90) u += bolus.u;
+    });
+    return u;
+  }
+
+  // Helper: average GI for a meal
+  function mealAvgGI(meal) {
+    var totalC = 0, giSum = 0;
+    (meal.items || []).forEach(function(f) {
+      if (f.carbs > 0) { giSum += (f.gi || 55) * f.carbs; totalC += f.carbs; }
+    });
+    return totalC > 0 ? giSum / totalC : 55;
+  }
+
+  // Helper: net BG effect at `mins` minutes from anchor
+  // Uses imbalance formula: (carbs_absorbed - insulin_covered_carbs) / IC * ISF
+  // When bolus perfectly covers carbs, net = 0 (flat BG prediction)
+  function netBGEffect(mins) {
+    var net = 0;
+
+    meals.forEach(function(meal) {
+      if (!meal.items) return;
+      var IC   = getIC(meal.t)  || 10;
+      var ISFm = getISF(meal.t) || ISF;
+      var totalCarbs = 0;
+      meal.items.forEach(function(f) { totalCarbs += (f.carbs || 0); });
+      if (totalCarbs <= 0) return;
+
+      var avgGI     = mealAvgGI(meal);
+      var coverU    = coveringUnits(meal);
+      var mAnchor   = (anchorT - meal.t) / 60000; // mins between meal and anchor (negative = meal after anchor)
+
+      // Carbs absorbed from anchor to anchor+mins
+      var absAtAnchor = totalCarbs * Math.max(0, 1 - _cobFgi(Math.max(0, mAnchor),       avgGI));
+      var absAtFuture = totalCarbs * Math.max(0, 1 - _cobFgi(Math.max(0, mAnchor + mins), avgGI));
+      var carbsWindow = Math.max(0, absAtFuture - absAtAnchor);
+
+      // Insulin covering pro-rated to absorbed fraction
+      var insFrac           = totalCarbs > 0 ? carbsWindow / totalCarbs : 0;
+      var insulinCoveredC   = coverU * IC * insFrac;
+
+      // Net: positive = carbs winning, negative = insulin winning
+      net += (carbsWindow - insulinCoveredC) / IC * ISFm;
+    });
+
+    // Uncovered corrections (boluses not matched to any meal) — pure IOB suppression
+    boluses.forEach(function(bolus) {
+      var covered = meals.some(function(meal) {
+        var age = (meal.t - bolus.t) / 60000;
+        return age >= -15 && age <= 90;
+      });
+      if (covered) return;
+      var bm   = (anchorT - bolus.t) / 60000;
+      var bISF = getISF(bolus.t) || ISF;
+      net -= bolus.u * (_iobFn(Math.max(0, bm)) - _iobFn(Math.max(0, bm) + mins)) * bISF;
+    });
+
+    return net;
+  }
+
   for (var i = 0; i <= 36; i++) {
-    var mins = i * 5;
-    var ft   = anchorT + mins * 60000;
+    var mins    = i * 5;
+    var ft      = anchorT + mins * 60000;
+    var cgmMins = Math.max(0, mins - lagMins);
 
-    var cobEffect = 0;
-    meals.forEach(function(meal) {
-      if (!meal.items) return;
-      var mnow = (anchorT - meal.t) / 60000;
-      var mfut = mnow + mins;
-      meal.items.forEach(function(food) {
-        if (!food.carbs) return;
-        var gi = food.gi || 55;
-        var IC = getIC(meal.t) || 10;
-        var a0 = food.carbs * Math.max(0, 1 - _cobFgi(mnow, gi));
-        var af = food.carbs * Math.max(0, 1 - _cobFgi(mfut, gi));
-        cobEffect += Math.max(0, af - a0) / IC * ISF;
-      });
-    });
-    var iobEffect = 0;
-    boluses.forEach(function(bolus) {
-      var bm   = (anchorT - bolus.t) / 60000;
-      var bISF = getISF(bolus.t) || ISF;
-      iobEffect += bolus.u * (_iobFn(bm) - _iobFn(bm + mins)) * bISF;
-    });
-    var predBlood = Math.max(2.0, Math.min(22, bg + cobEffect - iobEffect));
+    var predBlood = Math.max(2.0, Math.min(22, bg + netBGEffect(mins)));
+    var predCGM   = Math.max(2.0, Math.min(22, bg + netBGEffect(cgmMins)));
 
-    var cgmM   = Math.max(0, mins - lagMins);
-    var cgmCob = 0;
-    meals.forEach(function(meal) {
-      if (!meal.items) return;
-      var mnow = (anchorT - meal.t) / 60000;
-      var mfut = mnow + cgmM;
-      meal.items.forEach(function(food) {
-        if (!food.carbs) return;
-        var gi = food.gi || 55;
-        var IC = getIC(meal.t) || 10;
-        var a0 = food.carbs * Math.max(0, 1 - _cobFgi(mnow, gi));
-        var af = food.carbs * Math.max(0, 1 - _cobFgi(mfut, gi));
-        cgmCob += Math.max(0, af - a0) / IC * ISF;
-      });
-    });
-    var cgmIob = 0;
-    boluses.forEach(function(bolus) {
-      var bm   = (anchorT - bolus.t) / 60000;
-      var bISF = getISF(bolus.t) || ISF;
-      cgmIob += bolus.u * (_iobFn(bm) - _iobFn(bm + cgmM)) * bISF;
-    });
-    var predCGM = Math.max(2.0, Math.min(22, bg + cgmCob - cgmIob));
-
-    // Store absolute timestamp — tX(t) at render time gives correct screen position
     pts.push({
       t: ft, mins: mins,
       bgBlood: predBlood, bgCGM: predCGM,
-      // legacy compat
       bg: predCGM, predicted_bg: predCGM
     });
   }
   return pts;
 }
-
 // ── PARTICLES ────────────────────────────────────────────────────────
 
 function _spawnForceParticle(type, gi) {
