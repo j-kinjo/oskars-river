@@ -1849,15 +1849,18 @@ function _drawIOBReservoir() {
       CX.restore();
     }
 
-    // Label at peak — sits just below the deepest surface point
-    var peakX    = tX(peakT);
-    var peakSurf = bellSurfaceY(peakX);
-    if (peakX > 30 && peakX < W - 30 && peakSurf > 10) {
-      CX.globalAlpha = 0.6;
+    // ── Label — at deepest visible point of the surface ──────────────
+    var bestLabelX = -1, bestLabelSurf = 0;
+    for (var li = 5; li <= 275; li += 5) {
+      var lSurf = bellSurfaceY(li);
+      if (lSurf > bestLabelSurf) { bestLabelSurf = lSurf; bestLabelX = li; }
+    }
+    if (bestLabelX > 0 && bestLabelSurf > 8) {
+      CX.globalAlpha = 0.65;
       CX.fillStyle   = 'rgba(' + rv + ',' + gv + ',' + bv + ',1)';
-      CX.font        = "300 8px 'DM Mono',monospace";
+      CX.font        = "300 9px 'DM Mono',monospace";
       CX.textAlign   = 'center';
-      CX.fillText(bolus.u.toFixed(1) + 'U', peakX, peakSurf + 10);
+      CX.fillText(bolus.u.toFixed(1) + 'U', bestLabelX, bestLabelSurf + 12);
       CX.globalAlpha = 1;
     }
 
@@ -1867,29 +1870,33 @@ function _drawIOBReservoir() {
 
 // Smart forecast — per-food GI curves + IOB decay
 function buildSmartForecast() {
-  var d0  = dataAt(viewTime);
+  // Forecast is always anchored to the last CGM reading (CGM_END), not viewTime.
+  // This means scrubbing doesn't change the prediction — it was set at the moment
+  // of the last known data point. The prediction line stays fixed as you scroll.
+  var anchorT = CGM_END || viewTime;
+  var d0  = dataAt(anchorT);
   var bg  = d0.bg;
   if (!bg || bg <= 0) return [];
-  var ISF    = getISF(viewTime);
+  var ISF    = getISF(anchorT);
   var meals  = _getActiveMealEvents();
   var boluses = _getActiveBolusEvents();
   var pts    = [];
 
   // Speed-dependent sensor lag: 10min base + up to 4min on fast rise
-  var prev5   = dataAt(viewTime - 5 * 60000);
+  var prev5   = dataAt(anchorT - 5 * 60000);
   var roc5    = bg - (prev5.bg || bg);
   var lagMins = 10 + Math.max(0, Math.min(4, roc5 * 8));
 
   for (var i = 1; i <= 36; i++) {
     var mins = i * 5;
-    var ft   = viewTime + mins * 60000;
+    var ft   = anchorT + mins * 60000;
     var fx   = tX(ft);
     if (fx > W + 40) break;
 
     // COB contribution: additional absorbed carbs → BG rise via IC
     var cobEffect = 0;
     meals.forEach(function(meal) {
-      var mealMinsNow    = (viewTime - meal.t) / 60000;
+      var mealMinsNow    = (anchorT - meal.t) / 60000;
       var mealMinsFuture = mealMinsNow + mins;
       meal.items.forEach(function(food) {
         var gi   = food.gi || 55;
@@ -1903,19 +1910,18 @@ function buildSmartForecast() {
     // IOB contribution: insulin depleting → BG suppression
     var iobEffect = 0;
     boluses.forEach(function(bolus) {
-      var bMins = (viewTime - bolus.t) / 60000;
+      var bMins = (anchorT - bolus.t) / 60000;
       var bISF  = getISF(bolus.t) || ISF;
       iobEffect += bolus.u * (_iobFn(bMins) - _iobFn(bMins + mins)) * bISF;
     });
 
-    // Blood glucose — pure event math, no roc speculation
     var predBlood = Math.max(2.0, Math.min(22, bg + cobEffect - iobEffect));
 
     // CGM prediction — blood shifted right by sensor lag
     var cgmMins = Math.max(0, mins - lagMins);
     var cgmCob  = 0;
     meals.forEach(function(meal) {
-      var mealMinsNow    = (viewTime - meal.t) / 60000;
+      var mealMinsNow    = (anchorT - meal.t) / 60000;
       var mealMinsFuture = mealMinsNow + cgmMins;
       meal.items.forEach(function(food) {
         var gi  = food.gi || 55;
@@ -1927,7 +1933,7 @@ function buildSmartForecast() {
     });
     var cgmIob = 0;
     boluses.forEach(function(bolus) {
-      var bMins = (viewTime - bolus.t) / 60000;
+      var bMins = (anchorT - bolus.t) / 60000;
       var bISF  = getISF(bolus.t) || ISF;
       cgmIob += bolus.u * (_iobFn(bMins) - _iobFn(bMins + cgmMins)) * bISF;
     });
@@ -2298,20 +2304,7 @@ function drawUnknownForce(pal) {
 
   CX.save();
 
-  // ── PERMANENT CGM AURA — always present ──────────────────────────────
-  var auraGr = CX.createLinearGradient(0, 0, 0, H);
-  auraGr.addColorStop(0,   'rgba(180,200,220,0)');
-  auraGr.addColorStop(0.5, 'rgba(180,200,220,0.06)');
-  auraGr.addColorStop(1,   'rgba(180,200,220,0)');
-  mistPts.forEach(function(pt) {
-    var aura = 12;
-    var gr = CX.createLinearGradient(pt.px, pt.cgmY - aura, pt.px, pt.cgmY + aura);
-    gr.addColorStop(0,   'rgba(180,200,235,0)');
-    gr.addColorStop(0.5, 'rgba(180,200,235,0.08)');
-    gr.addColorStop(1,   'rgba(180,200,235,0)');
-    CX.fillStyle = gr;
-    CX.fillRect(pt.px - 1, pt.cgmY - aura, 2, aura * 2);
-  });
+  // CGM aura removed — was rendering as chunky column artefacts
 
   // ── SMOOTH MIST REGION — single continuous path, no columns ─────────
   var phi2 = _mistFrame * 0.018;
@@ -2360,10 +2353,15 @@ function drawUnknownForce(pal) {
 }
 
 // ── FORECAST TRACE — navigable prediction line beyond CGM_END ────────────
+// ── FORECAST TRACE — event-driven dual prediction traces ─────────────────
+// Anchored at CGM_END — doesn't change when scrubbing.
+// CGM prediction: bold solid. Blood prediction: whispy offset shadow.
+// Mist wisps trail between the two traces to show the lag gap.
 function drawForecastTrace(pal) {
   if (!CGM_END) return;
   var nowX = tX(CGM_END);
-  if (nowX > W) return;
+  // Render if forecast region is at least partially visible
+  if (nowX > W + 40) return;
 
   var pts = buildSmartForecast();
   if (!pts || pts.length < 2) return;
@@ -2371,54 +2369,70 @@ function drawForecastTrace(pal) {
   var R = pal.bgLine[0], G = pal.bgLine[1], B = pal.bgLine[2];
   CX.save();
 
-  // ── Mist tunnel — widening uncertainty around CGM prediction ─────
-  var phi = (_mistFrame || 0) * 0.012;
+  // ── Mist tunnel — soft widening envelope ─────────────────────────
   CX.beginPath();
   pts.forEach(function(p, i) {
-    var uncert  = 0.35 + (p.mins / 30) * 0.7;
-    var shimmer = Math.sin(phi + i * 0.35) * 0.1;
-    var yHi = bgToY(Math.min(22, p.bgCGM + uncert + shimmer));
+    var uncert  = 0.25 + (p.mins / 30) * 0.5;
+    var yHi = bgToY(Math.min(22, p.bgCGM + uncert));
     i === 0 ? CX.moveTo(p.x, yHi) : CX.lineTo(p.x, yHi);
   });
   for (var i = pts.length - 1; i >= 0; i--) {
-    var p2      = pts[i];
-    var uncert2 = 0.35 + (p2.mins / 30) * 0.7;
-    var shimmer2 = Math.sin(phi + i * 0.35 + 1.5) * 0.1;
-    CX.lineTo(p2.x, bgToY(Math.max(2, p2.bgCGM - uncert2 + shimmer2)));
+    var p2 = pts[i];
+    var uncert2 = 0.25 + (p2.mins / 30) * 0.5;
+    CX.lineTo(p2.x, bgToY(Math.max(2, p2.bgCGM - uncert2)));
   }
   CX.closePath();
   var tunnelGr = CX.createLinearGradient(nowX, 0, W, 0);
-  tunnelGr.addColorStop(0,   'rgba(180,200,230,0.10)');
-  tunnelGr.addColorStop(0.5, 'rgba(180,200,230,0.06)');
-  tunnelGr.addColorStop(1,   'rgba(180,200,230,0.02)');
+  tunnelGr.addColorStop(0,   'rgba(180,200,230,0.08)');
+  tunnelGr.addColorStop(0.6, 'rgba(180,200,230,0.04)');
+  tunnelGr.addColorStop(1,   'rgba(180,200,230,0.01)');
   CX.fillStyle = tunnelGr; CX.fill();
 
-  // ── Blood prediction — whispy shadow (blood leads CGM by lag mins) ─
+  // ── Blood prediction — solid warm line (actual blood state, ahead of CGM) ─
   CX.beginPath();
   pts.forEach(function(p, i) {
     i === 0 ? CX.moveTo(p.x, p.yBlood) : CX.lineTo(p.x, p.yBlood);
   });
-  CX.strokeStyle = 'rgba(' + R + ',' + G + ',' + B + ',0.22)';
-  CX.lineWidth   = 1.0;
-  CX.setLineDash([1, 6]);
-  CX.stroke();
+  CX.strokeStyle = 'rgba(255,190,80,0.55)';  // warm amber — blood
+  CX.lineWidth   = 1.5;
   CX.setLineDash([]);
+  CX.stroke();
+
+  // ── Mist wisp trail — links CGM to blood trace, shows lag visually ─
+  // Small soft circles scattered between the two lines
+  var phi = (_mistFrame || 0) * 0.015;
+  for (var wi = 0; wi < pts.length; wi += 2) {
+    var wp = pts[wi];
+    if (!wp.yCGM || !wp.yBlood) continue;
+    var gapY = wp.yBlood - wp.yCGM; // blood is typically ahead (higher or lower)
+    if (Math.abs(gapY) < 1) continue;
+    var wispFrac  = 0.3 + Math.sin(phi + wi * 0.4) * 0.25;
+    var wispY     = wp.yCGM + gapY * wispFrac;
+    var wispR     = 1.5 + Math.sin(phi * 1.3 + wi * 0.6) * 0.8;
+    var wispAlpha = 0.08 + Math.sin(phi * 0.8 + wi) * 0.04;
+    CX.beginPath();
+    CX.arc(wp.x + Math.sin(phi + wi) * 2, wispY, wispR, 0, Math.PI * 2);
+    CX.fillStyle = 'rgba(255,210,120,' + Math.max(0.02, wispAlpha) + ')';
+    CX.fill();
+  }
 
   // ── CGM prediction — bold solid line ──────────────────────────────
   CX.beginPath();
   pts.forEach(function(p, i) {
     i === 0 ? CX.moveTo(p.x, p.yCGM) : CX.lineTo(p.x, p.yCGM);
   });
-  CX.strokeStyle = 'rgba(' + R + ',' + G + ',' + B + ',0.82)';
+  CX.strokeStyle = 'rgba(' + R + ',' + G + ',' + B + ',0.85)';
   CX.lineWidth   = 2.5;
+  CX.setLineDash([]);
   CX.stroke();
 
-  // ── Value labels at 30min intervals ──────────────────────────────
+  // ── Labels: CGM and Blood at 30min intervals ──────────────────────
   CX.font = "400 9px 'DM Mono',monospace";
   CX.textAlign = 'center';
   pts.forEach(function(p) {
     if (p.mins % 30 !== 0) return;
     if (p.x < 0 || p.x > W) return;
+    // CGM label above line
     var col = p.bgCGM < 3.9 ? 'rgba(255,210,40,0.9)'
             : p.bgCGM > 10  ? 'rgba(220,100,40,0.8)'
             : 'rgba(' + R + ',' + G + ',' + B + ',0.7)';
@@ -2426,7 +2440,29 @@ function drawForecastTrace(pal) {
     CX.fillText(p.bgCGM.toFixed(1), p.x, p.yCGM - 10);
     CX.beginPath(); CX.arc(p.x, p.yCGM, 2.5, 0, Math.PI*2);
     CX.fillStyle = col; CX.fill();
+    // Blood label (small, below blood line)
+    if (Math.abs(p.yBlood - p.yCGM) > 4) {
+      CX.globalAlpha = 0.45;
+      CX.font = "400 7px 'DM Mono',monospace";
+      CX.fillStyle = 'rgba(255,190,80,1)';
+      CX.fillText(p.bgBlood.toFixed(1), p.x, p.yBlood + 10);
+      CX.font = "400 9px 'DM Mono',monospace";
+      CX.globalAlpha = 1;
+    }
   });
+
+  // ── Labels: CGM / Blood trace identifiers at start ────────────────
+  if (pts.length > 0) {
+    var fp = pts[0];
+    CX.globalAlpha = 0.5;
+    CX.font = "400 7px 'DM Mono',monospace";
+    CX.textAlign = 'left';
+    CX.fillStyle = 'rgba(' + R + ',' + G + ',' + B + ',1)';
+    CX.fillText('CGM', fp.x + 4, fp.yCGM - 4);
+    CX.fillStyle = 'rgba(255,190,80,1)';
+    CX.fillText('blood', fp.x + 4, fp.yBlood + 10);
+    CX.globalAlpha = 1;
+  }
 
   // ── "forecast ›" label ────────────────────────────────────────────
   if (nowX > 10 && nowX < W - 40) {
@@ -2894,11 +2930,7 @@ function drawBolusMarkers(pal) {
       CX.fillStyle = 'rgba(255,255,255,1.0)';
       CX.textAlign   = 'center';
       CX.fillText(lbl, x, cardY + 12);
-      if (who) {
-        CX.globalAlpha = 0.7; CX.font = "400 8px 'DM Mono',monospace";
-        CX.fillText(who, x + lw/2 - 5, cardY + 1);
-        CX.globalAlpha = 1;
-      }
+      // Person initial removed — was rendering as strange floating character
       window._eventCards.push({x:x, y:cardY+8, w:lw+4, h:17, data:b, idx:_bIdx, type:'carb'});
       _chipPos[b.t] = Object.assign(_chipPos[b.t] || {}, { cx: x, carbY: cardY + 8 });
     }
@@ -2953,29 +2985,33 @@ function drawBolusMarkers(pal) {
       if (!_acPos || _acPos.carbY == null) continue;
       var _acx = _acPos.cx;
       var _acy = _acPos.carbY;
-      // Draw a clear arc from bolus chip to carb chip
-      var midX = (_abx + _acx) / 2;
-      var arcDepth = Math.max(10, Math.abs(_aby - _acy) * 0.2 + 8);
+      // Draw arc from right-edge of bolus chip to left-edge of carb chip
+      var _bHalfW = 20; // approximate half-chip width
+      var arcStartX = _abx + _bHalfW;
+      var arcEndX   = _acx - _bHalfW;
+      if (arcEndX <= arcStartX) { arcStartX = _abx; arcEndX = _acx; }
+      var midX    = (arcStartX + arcEndX) / 2;
+      var arcDepth = Math.max(22, Math.abs(_aby - _acy) * 0.3 + 18);
       var cpY = Math.max(_aby, _acy) + arcDepth;
       CX.globalAlpha = 0.7;
       CX.strokeStyle = 'rgba(160,200,255,0.9)';
       CX.lineWidth = 1.5;
       CX.setLineDash([]);
       CX.beginPath();
-      CX.moveTo(_abx, _aby);
-      CX.quadraticCurveTo(midX, cpY, _acx, _acy);
+      CX.moveTo(arcStartX, _aby);
+      CX.quadraticCurveTo(midX, cpY, arcEndX, _acy);
       CX.stroke();
-      // Wait label — sits on the arc midpoint, close to the line
+      // Wait label — below the arc midpoint with clearance from the line
       var waitM = Math.round(gap / 60000);
       if (waitM > 0) {
         var tParam = 0.5;
-        var lblX = (1-tParam)*(1-tParam)*_abx + 2*(1-tParam)*tParam*midX + tParam*tParam*_acx;
-        var lblY = (1-tParam)*(1-tParam)*_aby + 2*(1-tParam)*tParam*cpY  + tParam*tParam*_acy;
+        var lblX = (1-tParam)*(1-tParam)*arcStartX + 2*(1-tParam)*tParam*midX + tParam*tParam*arcEndX;
+        var lblY = (1-tParam)*(1-tParam)*_aby + 2*(1-tParam)*tParam*cpY + tParam*tParam*_acy;
         CX.globalAlpha = 0.75;
         CX.font = "500 8px 'DM Mono',monospace";
         CX.fillStyle = 'rgba(160,200,255,1)';
         CX.textAlign = 'center';
-        CX.fillText(waitM + 'min', lblX, lblY + 4);
+        CX.fillText(waitM + 'min', lblX, lblY + 12); // +12 not +4 — clear of arc
       }
       break; // one link per bolus
     }
