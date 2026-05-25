@@ -1782,47 +1782,7 @@ function _drawIOBReservoir() {
       CX.fill();
     }
 
-    // ── THREE-CURVE OVERLAY — dashed curves at surface level ────────
-    var sigmaF_eff  = sigmaFMins * 1.35;
-    var bellSurf_eff = function(px) {
-      var t_px = viewTime + (px - NOW_X * W) / W * viewSpan;
-      var md   = (t_px - peakT) / 60000;
-      var rmp  = Math.min(1.0, Math.max(0, (t_px - bolusT_local) / (12 * 60000)));
-      var ramp = rmp * rmp * (3 - 2 * rmp);
-      var sig  = md < 0 ? sigmaRMins : sigmaF_eff;
-      return Math.exp(-0.5 * Math.pow(md / sig, 2)) * maxD * ramp;
-    };
-    CX.save();
-    CX.beginPath();
-    for (var i2 = 0; i2 <= 280; i2++) {
-      var px2 = (i2 / 280) * W;
-      i2 === 0 ? CX.moveTo(px2, bellSurf_eff(px2)) : CX.lineTo(px2, bellSurf_eff(px2));
-    }
-    CX.strokeStyle = 'rgba(' + rv + ',' + gv + ',' + bv + ',0.28)';
-    CX.lineWidth = 1.0; CX.setLineDash([5, 5]); CX.stroke(); CX.setLineDash([]);
-    CX.restore();
-
-    if (window._medianReturnMins && window._medianReturnMins > 0 &&
-        Math.abs(window._medianReturnMins - 240) > 15) {
-      var sigmaF_obs  = window._medianReturnMins * (sigmaFMins / 240);
-      var bellSurf_obs = function(px) {
-        var t_px = viewTime + (px - NOW_X * W) / W * viewSpan;
-        var md   = (t_px - peakT) / 60000;
-        var rmp  = Math.min(1.0, Math.max(0, (t_px - bolusT_local) / (12 * 60000)));
-        var ramp = rmp * rmp * (3 - 2 * rmp);
-        var sig  = md < 0 ? sigmaRMins : sigmaF_obs;
-        return Math.exp(-0.5 * Math.pow(md / sig, 2)) * maxD * ramp;
-      };
-      CX.save();
-      CX.beginPath();
-      for (var i3 = 0; i3 <= 280; i3++) {
-        var px3 = (i3 / 280) * W;
-        i3 === 0 ? CX.moveTo(px3, bellSurf_obs(px3)) : CX.lineTo(px3, bellSurf_obs(px3));
-      }
-      CX.strokeStyle = 'rgba(180,220,255,0.22)';
-      CX.lineWidth = 0.8; CX.setLineDash([2, 5]); CX.stroke(); CX.setLineDash([]);
-      CX.restore();
-    }
+    // Three-curve DIA overlay removed — was source of grey dashes across canvas
 
     // Label at peak — sits just below the deepest surface point
     var peakX    = tX(peakT);
@@ -1849,9 +1809,13 @@ function buildSmartForecast() {
   var boluses = _getActiveBolusEvents();
   if (meals.length === 0 && boluses.length === 0) return [];
 
-  // Anchor to now (CGM_END) — prediction always starts at the orb and runs forward.
-  // All active events contribute their remaining COB/IOB effect from now.
-  var anchorT = CGM_END || Date.now();
+  // Anchor to the earliest active event — the full prediction curve runs from there.
+  // This shows the prediction as a historical trace from the event time forward,
+  // visible both in the past (where mist shows delta vs actual) and future.
+  var allTs = [];
+  meals.forEach(function(m)   { allTs.push(m.t); });
+  boluses.forEach(function(b) { allTs.push(b.t); });
+  var anchorT = Math.min.apply(null, allTs);
 
   // BG at anchor
   var d0 = dataAt(anchorT);
@@ -2342,8 +2306,9 @@ function drawForecastTrace(pal) {
   var pts = buildSmartForecast();
   if (!pts || pts.length < 2) return;
 
-  // Only draw points that fall within the visible canvas (±100px margin)
-  var visible = pts.filter(function(p) { return p.x > -100 && p.x < W + 100; });
+  // Include all points that span the visible canvas — even if some are off-screen
+  // This ensures the curve passes through the visible area correctly
+  var visible = pts.filter(function(p) { return p.x > -W && p.x < W * 2; });
   if (visible.length < 2) return;
 
   var R = pal.bgLine[0], G = pal.bgLine[1], B = pal.bgLine[2];
@@ -3512,33 +3477,25 @@ function updateHUD(d, pal) {
     if (miLb) miLb.style.color = 'rgba(' + pal.iobR[0] + ',' + pal.iobR[1] + ',' + pal.iobR[2] + ',' + (0.3 + iobFrac*0.3) + ')';
   }
 
-  // Mana pill — position between COB and IOB reservoir peaks, living in the flow
+  // Mana pill — fixed position to the right of the orb, IOB above / COB below
+  // No longer tracks reservoir peaks (too jumpy) — anchored relative to orb
   var pill = document.getElementById('mana-pill');
   if (pill) {
-    var H_px = window.innerHeight;
-    var hasCOB = d.cob > 0.5 && _lastCOBPeakY > 0;
-    var hasIOB = d.iob > 0.1 && _lastIOBPeakY > 0;
-    if (hasCOB && hasIOB) {
-      // Float midway between the two reservoir peaks
-      var cobY = _lastCOBPeakY;         // px from top, COB peak (near BG line from below)
-      var iobY = _lastIOBPeakY;         // px from top, IOB peak (near BG line from above)
-      var midY = (cobY + iobY) / 2;
-      // Convert to bottom offset (for CSS bottom property)
-      var bottomPx = Math.max(60, H_px - midY - 20);
-      pill.style.bottom = bottomPx + 'px';
-      pill.style.opacity = '1';
-    } else if (hasCOB) {
-      var bottomPx = Math.max(60, H_px - _lastCOBPeakY + 16);
-      pill.style.bottom = bottomPx + 'px';
-      pill.style.opacity = '1';
-    } else if (hasIOB) {
-      var bottomPx = Math.max(60, H_px - _lastIOBPeakY - 36);
-      pill.style.bottom = bottomPx + 'px';
-      pill.style.opacity = '1';
-    } else {
-      // Nothing active — hide gently
-      pill.style.opacity = '0';
-    }
+    var orbX = NOW_X * W;
+    var orbY = d ? bgToY(d.bg) : window.innerHeight / 2;
+    var hasActive = d.cob > 0.5 || d.iob > 0.1;
+    pill.style.opacity = hasActive ? '1' : '0';
+    // Position pill canvas-relative: right of orb
+    // Use fixed CSS positioning relative to window
+    var pillRight = Math.round(window.innerWidth * (1 - NOW_X) - 60);
+    pill.style.left  = 'auto';
+    pill.style.right = pillRight + 'px';
+    pill.style.transform = 'none';
+    pill.style.bottom = 'auto';
+    // Centre vertically on the orb screen position
+    var orbScreenY = Math.round((orbY / H) * window.innerHeight);
+    pill.style.top = Math.max(40, orbScreenY - 24) + 'px';
+    pill.style.flexDirection = 'column-reverse'; // IOB (second in DOM) appears above COB
   }
 }
 
