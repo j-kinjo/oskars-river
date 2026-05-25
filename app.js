@@ -1774,14 +1774,18 @@ function _drawIOBReservoir() {
     // Three-curve DIA overlay removed — was source of grey dashes across canvas
 
     // Label at peak — sits just below the deepest surface point
-    var peakX    = tX(peakT);
-    var peakSurf = bellSurfaceY(peakX);
-    if (peakX > 30 && peakX < W - 30 && peakSurf > 10) {
-      CX.globalAlpha = 0.6;
+    // Label at deepest visible surface point — scan on-screen pixels
+    var bestLabelX = -1, bestLabelSurf = 0;
+    for (var li = 5; li <= 275; li += 5) {
+      var lSurf = bellSurfaceY(li);
+      if (lSurf > bestLabelSurf) { bestLabelSurf = lSurf; bestLabelX = li; }
+    }
+    if (bestLabelX > 0 && bestLabelSurf > 8) {
+      CX.globalAlpha = 0.65;
       CX.fillStyle   = 'rgba(' + rv + ',' + gv + ',' + bv + ',1)';
-      CX.font        = "300 8px 'DM Mono',monospace";
+      CX.font        = "300 9px 'DM Mono',monospace";
       CX.textAlign   = 'center';
-      CX.fillText(bolus.u.toFixed(1) + 'U', peakX, peakSurf + 10);
+      CX.fillText(bolus.u.toFixed(1) + 'U', bestLabelX, bestLabelSurf + 12);
       CX.globalAlpha = 1;
     }
 
@@ -6416,44 +6420,85 @@ async function syncMealToSupabase(meal) {
 async function syncMealHistoryFromSupabase() {
   if (!SUPABASE_READY) return;
   try {
-    // Pull all meal history — this is the longitudinal record, no time window cap
     var oldest = MEAL_HISTORY.length > 0
       ? Math.min.apply(null, MEAL_HISTORY.map(function(m){ return m.t; }))
       : 0;
-    var since = oldest > 0 ? oldest - 24 * 3600000 : 0; // overlap by 1 day to catch edits
+    var since = oldest > 0 ? oldest - 24 * 3600000 : 0;
     var rows = await _sbFetch(
-      'meal_history?t=gte.' + since + '&order=t.desc&limit=500',
+      'meal_history?t=gte.' + since + '&order=t.desc&limit=500&select=t,name,total_carbs,items,bolus_u,pre_bg,therapy_snapshot,source,logged_by,predicted_curve',
       { method: 'GET' }
     );
     if (!Array.isArray(rows) || rows.length === 0) return;
-    var localTs = new Set(MEAL_HISTORY.map(function(m){ return m.t; }));
+    var localMap = {};
+    MEAL_HISTORY.forEach(function(m) { localMap[m.t] = m; });
     var added = 0;
     rows.forEach(function(row) {
-      if (localTs.has(row.t)) return;
       var items = row.items;
       if (typeof items === 'string') { try { items = JSON.parse(items); } catch(e) { items = null; } }
-      MEAL_HISTORY.push({
-        t: row.t,
-        name: row.name,
-        totalCarbs: row.total_carbs,
-        items: items,
-        u: row.bolus_u,
-        pre_bg: row.pre_bg,
-        therapy_snapshot: row.therapy_snapshot,
-        source: row.source,
-        logged_by: row.logged_by,
-      });
-      added++;
+      // Parse predicted_curve from Supabase
+      var predCurve = row.predicted_curve;
+      if (typeof predCurve === 'string') { try { predCurve = JSON.parse(predCurve); } catch(e) { predCurve = null; } }
+
+      if (localMap[row.t]) {
+        // Update existing record with Supabase predicted_curve if available
+        if (predCurve && predCurve.length > 1) {
+          localMap[row.t]._predictedCurve = predCurve;
+        }
+      } else {
+        var rec = {
+          t: row.t,
+          name: row.name,
+          totalCarbs: row.total_carbs,
+          items: items,
+          u: row.bolus_u,
+          pre_bg: row.pre_bg,
+          therapy_snapshot: row.therapy_snapshot,
+          source: row.source,
+          logged_by: row.logged_by,
+        };
+        if (predCurve && predCurve.length > 1) rec._predictedCurve = predCurve;
+        MEAL_HISTORY.push(rec);
+        added++;
+      }
     });
     if (added > 0) {
-      MEAL_HISTORY.sort(function(a,b){ return b.t - a.t; }); // newest first
+      MEAL_HISTORY.sort(function(a,b){ return b.t - a.t; });
       saveMealHistory();
     }
-    // Backfill prediction curves for any records missing them
+    // Only backfill JS-computed curves for records still missing them
     _backfillPredictedCurves();
+    // Populate _activePredictedCurves from Supabase-sourced curves
+    _loadActiveCurvesFromMealHistory();
   } catch(e) {
     console.warn('[syncMealHistory pull]', e.message);
   }
+}
+
+// Load _activePredictedCurves from MEAL_HISTORY._predictedCurve values.
+// Called after syncMealHistoryFromSupabase so Supabase-computed curves take precedence.
+function _loadActiveCurvesFromMealHistory() {
+  var refT = CGM_END || Date.now();
+  MEAL_HISTORY.forEach(function(meal) {
+    if (!meal._predictedCurve || meal._predictedCurve.length < 2) return;
+    var anchorT = meal._predictedCurve[0].t;
+    if (Math.abs(anchorT - refT) > 24 * 3600000) return; // only last 24h
+    var dup = _activePredictedCurves.some(function(s) {
+      return s.pts && s.pts[0] && Math.abs(s.pts[0].t - anchorT) < 60000;
+    });
+    if (!dup) {
+      _activePredictedCurves.push({ loggedAt: anchorT, pts: meal._predictedCurve });
+    } else {
+      // Replace with Supabase version (more accurate)
+      _activePredictedCurves.forEach(function(s) {
+        if (s.pts && s.pts[0] && Math.abs(s.pts[0].t - anchorT) < 60000) {
+          s.pts = meal._predictedCurve;
+        }
+      });
+    }
+  });
+  _activePredictedCurves.sort(function(a,b){ return b.loggedAt - a.loggedAt; });
+  if (_activePredictedCurves.length > 20) _activePredictedCurves.length = 20;
+  try { localStorage.setItem('river_predicted_curves_v' + _PRED_FORMULA_VERSION, JSON.stringify(_activePredictedCurves)); } catch(e) {}
 }
 
 // Reconstruct _predictedCurve for MEAL_HISTORY records that don't have one.
