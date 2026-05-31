@@ -449,6 +449,7 @@ async function syncNow(silent) {
 function startSyncPolling() {
   if (!SUPABASE_READY) return;
   syncNow(true); // immediate on startup
+  loadSensorOutages();    // load outage history
   _syncTimer = setInterval(function(){ syncNow(true); }, 5 * 60000);
   // Check for duplicate events in Supabase (symptom of missing UNIQUE constraint on events.t)
   setTimeout(_checkForDuplicateEvents, 8000);
@@ -802,7 +803,8 @@ resize();
 window.addEventListener('resize', resize);
 
 // ── VIEW STATE ───────────────────────────────────────────────
-let viewTime = CGM_END;
+// Wall clock is the master timeline. CGM data attaches to it.
+let viewTime = Date.now();
 let viewSpan = 4 * 3600000;
 const MIN_SPAN = 20*60000, MAX_SPAN = 72*3600000;
 
@@ -3151,64 +3153,54 @@ function drawRiverPebble(pal) {
 
 // ── NO-DATA ORB — pulsing grey when sensor gap is active ──────────────
 function drawNoDataOrb(pal) {
+  // With wall-clock timeline, the orb is always at NOW_X — no longer pinned to last CGM reading.
+  // Instead: when there is an active sensor gap, draw a shimmer lane along the BG line
+  // from the last known reading to the current moment, and update the stale-warn element.
   if (HISTORY_RAW.length === 0) return;
   var lastT  = HISTORY_RAW[HISTORY_RAW.length-1].t;
   var gapMs  = Date.now() - lastT;
-  var isLive = _isAtNow || Math.abs(viewTime - lastT) < 5*60000;
-  if (!isLive) return;                        // only show when viewing 'now'
-  if (gapMs < 10 * 60000) return;            // only trigger after 10 min gap
-  var gapMins = Math.floor(gapMs / 60000);
-
-  // Position orb at the last known reading's x position, at its y
-  var lastReading = HISTORY_RAW[HISTORY_RAW.length-1];
-  var ox = tX(lastReading.t);
-  var oy = bgToY(lastReading.bg);
-
-  // Constrain to canvas — if scrolled, use NOW_X
-  if (ox < 20 || ox > W - 20) ox = NOW_X * W;
-
-  var pulse = 0.5 + 0.5 * Math.sin(phi * 2.5);
-
-  CX.save();
-
-  // Outer pulsing rings — muted grey-blue
-  for (var ring = 0; ring < 3; ring++) {
-    var rAge    = (phi * 0.8 + ring * 1.1) % 3;
-    var rRadius = 10 + rAge * 22;
-    var rAlpha  = (1 - rAge / 3) * 0.3;
-    CX.globalAlpha = rAlpha;
-    CX.strokeStyle = 'rgba(160,180,200,1)';
-    CX.lineWidth   = 0.8;
-    CX.beginPath(); CX.arc(ox, oy, Math.max(1, rRadius), 0, Math.PI*2); CX.stroke();
+  if (gapMs < 10 * 60000) {
+    var sw = document.getElementById('stale-warn');
+    if (sw) sw.style.display = 'none';
+    return;
   }
-
-  // Core grey orb
-  var orbR = 7 + pulse * 3;
-  var grad = CX.createRadialGradient(ox, oy, 0, ox, oy, orbR * 2);
-  grad.addColorStop(0,   'rgba(180,200,220,' + (0.6 + pulse * 0.2) + ')');
-  grad.addColorStop(0.5, 'rgba(120,140,170,' + (0.3 + pulse * 0.1) + ')');
-  grad.addColorStop(1,   'rgba(80,100,140,0)');
-  CX.globalAlpha = 0.85;
-  CX.fillStyle   = grad;
-  CX.beginPath(); CX.arc(ox, oy, orbR * 2, 0, Math.PI*2); CX.fill();
-
-  // Inner dot
-  CX.globalAlpha = 0.7 + pulse * 0.3;
-  CX.fillStyle   = 'rgba(180,200,230,1)';
-  CX.shadowColor = 'rgba(150,180,220,0.8)'; CX.shadowBlur = 8;
-  CX.beginPath(); CX.arc(ox, oy, orbR * 0.5, 0, Math.PI*2); CX.fill();
-  CX.shadowBlur  = 0;
-
-  // Label: "no data Xm" just above the orb
-  CX.globalAlpha = 0.65 + pulse * 0.2;
-  CX.font        = "400 9px 'DM Mono',monospace";
-  CX.fillStyle   = 'rgba(160,185,210,1)';
-  CX.textAlign   = 'center';
-  CX.fillText('no data ' + gapMins + 'm', ox, oy - orbR * 2 - 6);
-
-  CX.globalAlpha = 1; CX.restore();
-
-  // Also drive the stale-warn HTML element
+  var gapMins = Math.floor(gapMs / 60000);
+  var lastReading = HISTORY_RAW[HISTORY_RAW.length-1];
+  var x0 = tX(lastReading.t);
+  var x1 = tX(Date.now());
+  var midY = bgToY(lastReading.bg);
+  if (x1 > 0 && x0 < W) {
+    x0 = Math.max(0, x0);
+    x1 = Math.min(W, x1);
+    var pulse = 0.5 + 0.5 * Math.sin(phi * 1.8);
+    CX.save();
+    var laneGrad = CX.createLinearGradient(x0, 0, x1, 0);
+    laneGrad.addColorStop(0,   'rgba(130,155,185,' + (0.08 + pulse * 0.04) + ')');
+    laneGrad.addColorStop(0.5, 'rgba(150,175,205,' + (0.14 + pulse * 0.06) + ')');
+    laneGrad.addColorStop(1,   'rgba(100,130,170,0)');
+    CX.fillStyle = laneGrad;
+    CX.fillRect(x0, midY - 28, x1 - x0, 56);
+    CX.setLineDash([3, 7]);
+    CX.lineDashOffset = -(phi * 18) % 10;
+    CX.strokeStyle = 'rgba(140,168,200,' + (0.3 + pulse * 0.15) + ')';
+    CX.lineWidth = 1.2;
+    CX.beginPath();
+    CX.moveTo(x0, midY);
+    CX.lineTo(x1, midY);
+    CX.stroke();
+    CX.setLineDash([]);
+    CX.lineDashOffset = 0;
+    var labelX = Math.min(x1 - 4, Math.max(x0 + 4, (x0 + x1) / 2));
+    if (x1 - x0 > 40) {
+      CX.globalAlpha = 0.5 + pulse * 0.2;
+      CX.font        = "400 9px 'DM Mono',monospace";
+      CX.fillStyle   = 'rgba(150,175,205,1)';
+      CX.textAlign   = 'center';
+      CX.fillText('no sensor · ' + gapMins + 'm', labelX, midY - 34);
+    }
+    CX.globalAlpha = 1;
+    CX.restore();
+  }
   var sw = document.getElementById('stale-warn');
   if (sw) {
     sw.style.display = 'block';
@@ -3542,7 +3534,7 @@ function updateHUD(d, pal) {
 
 function returnToNow() {
   _isAtNow = true;
-  viewTime = HISTORY_RAW.length > 0 ? HISTORY_RAW[HISTORY_RAW.length-1].t : Date.now();
+  viewTime = Date.now(); // wall clock — not CGM_END
   viewSpan = 2 * 3600000; // fixed 2h
   var nb = document.getElementById('now-btn');
   if (nb) nb.style.opacity = '0';
@@ -4390,6 +4382,8 @@ function frame(ts) {
   phi+=0.4*dt;
   treeScrollX+=10*dt; // river current speed
 
+  // Wall clock drives the timeline. When live, viewTime IS Date.now().
+  if (_isAtNow) viewTime = Date.now();
   const d   = dataAt(viewTime);
   const pal = palette(viewTime);
   if (!d || !pal) { requestAnimationFrame(frame); return; }
@@ -4422,6 +4416,7 @@ function frame(ts) {
   // ── EVENT MARKERS — ripples where forces entered ───────────────
   drawBolusMarkers(pal);
   drawBasalReservoir(pal);  // subtle always-present basal drip
+  drawSensorOutageZones();   // amber haze for logged outages
   drawBloodPricks();         // red diamond prick markers
 
   // ── CONTEXT ─────────────────────────────────────────────────────
@@ -4453,9 +4448,8 @@ function frame(ts) {
     _pulseAlpha *= 0.94;
   }
 
-  // Show "return to now" when scrolled away from latest data
-  const latestT = HISTORY_RAW.length > 0 ? HISTORY_RAW[HISTORY_RAW.length-1].t : Date.now();
-  const awayFromNow = (latestT - viewTime) > 8 * 60000;
+  // Show "return to now" when scrolled away from wall-clock now
+  const awayFromNow = (Date.now() - viewTime) > 8 * 60000;
   var nowBtn = document.getElementById('now-btn');
   if (!nowBtn) {
     // Create it if missing — position on right so it never gets lost during zoom/scroll
@@ -4498,7 +4492,8 @@ function frame(ts) {
   drawHypoPulse(pal);
   updateHUD(d, pal);
   updateNudgeChipVisibility();
-  _maybeDetectGhostEvent(); // throttled to 5min — write to ghost_events
+  _maybeDetectGhostEvent(); // throttled to 5min
+  _maybeDetectOutage();     // throttled to 60s — auto-log sensor gaps
   if (!window._ghostPebbleCards) window._ghostPebbleCards = [];
   window._ghostPebbleCards = [];
   drawGhostPebbles(pal);
@@ -4527,7 +4522,7 @@ function _onDragMoveActive(e) {
   if(e.target.closest&&e.target.closest('#sheet,#flow-dock,.dock-btn,#whisper-overlay,#food-mgr-overlay,#hypo-overlay,#corr-overlay,#food-add-overlay,[id$=-overlay],button,input,textarea,select')) return;
   if(e.touches.length===1 && drag.on) {
     e.preventDefault();
-    viewTime=Math.max(CGM_END - 30*86400000, Math.min(CGM_END, drag.t0-(e.touches[0].clientX-drag.x0)*(viewSpan/W))); _isAtNow=false;
+    viewTime=Math.max(CGM_START, Math.min(Date.now(), drag.t0-(e.touches[0].clientX-drag.x0)*(viewSpan/W))); _isAtNow=false;
     _maybeLoadOlderHistory();
   } else if(pinch.on&&e.touches.length===2) {
     e.preventDefault();
@@ -4572,7 +4567,7 @@ CV.addEventListener('touchend',()=>{
 },{passive:true});
 let md={on:false,dragging:false,x0:0,t0:0};
 CV.addEventListener('mousedown',e=>{if(!e.target.closest('#sheet,#flow-dock,.dock-btn,#whisper-overlay,#food-mgr-overlay,#hypo-overlay,#corr-overlay,#food-add-overlay,[id$=-overlay],button,input,textarea,select'))md={on:true,dragging:false,x0:e.clientX,t0:viewTime}});
-CV.addEventListener('mousemove',e=>{if(md.on){var dx=e.clientX-md.x0;if(!md.dragging&&Math.abs(dx)<5)return;md.dragging=true;viewTime=Math.max(CGM_END - 30*86400000, Math.min(CGM_END, md.t0-dx*(viewSpan/W)));_maybeLoadOlderHistory();}});
+CV.addEventListener('mousemove',e=>{if(md.on){var dx=e.clientX-md.x0;if(!md.dragging&&Math.abs(dx)<5)return;md.dragging=true;viewTime=Math.max(CGM_START, Math.min(Date.now(), md.t0-dx*(viewSpan/W)));_maybeLoadOlderHistory();}});
 CV.addEventListener('mouseup',()=>{md.on=false;});
 
 // ── QUICK JUMP DAY STRIP ──────────────────────────────────────────────────
@@ -9561,12 +9556,7 @@ function logMealEntry(carbsOnly) {
 
   try { localStorage.setItem('river_session',JSON.stringify(SESSION)); } catch(e) {}
 
-  if (t > CGM_END) {
-    var lastBg = HISTORY_RAW.length > 0 ? HISTORY_RAW[HISTORY_RAW.length-1].bg : 7.0;
-    HISTORY_RAW.push({t: t, bg: lastBg, iob: 0, cob: 0, pen: 1});
-    updateCGMBounds();
-    viewTime = CGM_END;
-  }
+  // Wall clock is master — no need to extend HISTORY_RAW for future events
 
   // Save to meal history
   if (_mealItems.length > 0) {
@@ -11122,7 +11112,7 @@ async function startLivePolling(sourceId, cfg) {
       ingestReadings(recent);
       setLiveStatus('live', `${recent.length} readings loaded`);
       // Snap to now after first backfill
-      viewTime = CGM_END;
+      viewTime = Date.now(); // wall clock master
       _isAtNow = true;
     }
   } catch(e) {
@@ -11203,9 +11193,9 @@ function ingestReadings(readings) {
   HISTORY_RAW.sort((a,b) => a.t - b.t);
   updateCGMBounds();
   // Snap to now if: user is at now, first data arriving, or viewTime is out of range
-  const wasAtNow = _isAtNow || (CGM_END - viewTime) < 10 * 60000;
-  if (wasAtNow || viewTime < CGM_START || viewTime > CGM_END + 60000) {
-    viewTime = CGM_END;
+  const wasAtNow = _isAtNow || (Date.now() - viewTime) < 10 * 60000;
+  if (wasAtNow || viewTime < CGM_START || viewTime > Date.now() + 60000) {
+    viewTime = Date.now(); // wall clock master
     _isAtNow = true;
   }
   if (changed) persistReadings();
@@ -12083,6 +12073,7 @@ function openOrbRadialMenu(pressX) {
     { label: 'hypo',       icon: '⬡', fn: 'openHypoLog()',        col: 'rgba(255,210,40,0.9)'  },
     { label: 'prick',      icon: '◆', fn: 'openBloodPrickLog()',  col: 'rgba(220,60,80,0.9)'   },
     { label: 'basal',      icon: '▬', fn: 'openBasalLog()',       col: 'rgba(40,200,160,0.9)'  },
+    { label: 'outage',     icon: '📡', fn: 'openOutageLog()',      col: 'rgba(200,175,80,0.9)'  },
     { label: 'patterns',   icon: '◑', fn: 'openPatternExplorer()', col: 'rgba(160,120,240,0.9)' },
     { label: 'whisper',    icon: '◌', fn: 'openWhisper()',        col: 'rgba(140,200,180,0.9)' },
   ];
@@ -12983,7 +12974,8 @@ function openDebugPanel() {
     '<canvas id="backfill-bar-canvas" width="400" height="16" style="width:100%;height:16px;border-radius:4px;cursor:pointer"></canvas>' +
     '<div id="backfill-bar-stats" style="font-size:8px;color:rgba(180,200,180,0.5);margin-top:4px"></div>' +
     '<button onclick="_jumpToNextGap()" style="margin-top:6px;padding:3px 8px;border-radius:5px;border:1px solid rgba(80,160,220,0.3);background:rgba(80,160,220,0.06);color:rgba(80,160,220,0.7);font-family:monospace;font-size:8px;cursor:pointer">jump to next gap ○</button>' +
-    '<button onclick="showDayStrip();document.getElementById(\'debug-panel\').remove()" style="margin-top:4px;padding:3px 8px;border-radius:5px;border:1px solid rgba(62,180,120,0.3);background:rgba(62,180,120,0.06);color:rgba(62,180,120,0.7);font-family:monospace;font-size:8px;cursor:pointer">📅 day strip</button>';
+    '<button onclick="showDayStrip();document.getElementById(\'debug-panel\').remove()" style="margin-top:4px;padding:3px 8px;border-radius:5px;border:1px solid rgba(62,180,120,0.3);background:rgba(62,180,120,0.06);color:rgba(62,180,120,0.7);font-family:monospace;font-size:8px;cursor:pointer">📅 day strip</button>' +
+    '<button onclick="openOutageHistory();document.getElementById(\'debug-panel\').remove()" style="margin-top:4px;margin-left:4px;padding:3px 8px;border-radius:5px;border:1px solid rgba(200,175,80,0.3);background:rgba(200,175,80,0.06);color:rgba(200,175,80,0.7);font-family:monospace;font-size:8px;cursor:pointer">📡 outages</button>';
   el.appendChild(bpDiv);
   _renderBackfillBar(bpDiv.querySelector('#backfill-bar-canvas'), bpDiv.querySelector('#backfill-bar-stats'));
 
@@ -14320,6 +14312,458 @@ function saveEventEdit(idx) {
 }
 
 // ══════════════════════════════════════════════════════════════════════
+// SENSOR OUTAGE SYSTEM
+// Outages are first-class events — logged at lived time, independent of
+// CGM trace data. Backfill does not remove them. They represent the true
+// experience of having no live data, which the trace cannot show once filled.
+// ══════════════════════════════════════════════════════════════════════
+
+var SENSOR_OUTAGES = []; // { id, start_t, end_t, cause_category, cause_note }
+var _outageCheckTimer = null;
+var _activeOutageId   = null; // uuid of the currently open outage, if any
+
+// Load from Supabase on startup
+async function loadSensorOutages() {
+  if (!SUPABASE_READY) return;
+  try {
+    var rows = await _sbFetch('sensor_outages?order=start_t.desc&limit=100', {});
+    if (Array.isArray(rows)) {
+      SENSOR_OUTAGES.length = 0;
+      rows.forEach(function(r) {
+        SENSOR_OUTAGES.push({
+          id:             r.id,
+          start_t:        r.start_t,
+          end_t:          r.end_t || null,
+          cause_category: r.cause_category || 'unknown',
+          cause_note:     r.cause_note || ''
+        });
+      });
+    }
+  } catch(e) { console.warn('[outage] load failed:', e.message); }
+}
+
+// Called from the frame loop (throttled) — auto-detects a new outage
+var _lastOutageCheck = 0;
+function _maybeDetectOutage() {
+  var now = Date.now();
+  if (now - _lastOutageCheck < 60000) return; // check every 60s
+  _lastOutageCheck = now;
+
+  if (HISTORY_RAW.length === 0) return;
+  var lastT  = HISTORY_RAW[HISTORY_RAW.length-1].t;
+  var gapMs  = now - lastT;
+
+  if (gapMs >= 20 * 60000) {
+    // We have a sensor gap ≥20 min
+    // Check if we already have an open outage covering this gap
+    var alreadyLogged = SENSOR_OUTAGES.some(function(o) {
+      return o.end_t === null && Math.abs(o.start_t - lastT) < 5 * 60000;
+    });
+    if (!alreadyLogged && !_activeOutageId) {
+      // Auto-open outage — start_t anchored to last known reading
+      _openOutage(lastT);
+    }
+  } else if (_activeOutageId) {
+    // Gap closed (sensor recovered) — auto-close the outage
+    _closeOutage(now);
+  }
+}
+
+async function _openOutage(startT) {
+  if (_activeOutageId) return; // already open
+  if (!SUPABASE_READY) return;
+  try {
+    var result = await _sbFetch('sensor_outages', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Prefer': 'return=representation' },
+      body: [{ start_t: startT, cause_category: 'unknown', device_id: _thisPersonId || 'unknown' }]
+    });
+    if (Array.isArray(result) && result[0] && result[0].id) {
+      _activeOutageId = result[0].id;
+      SENSOR_OUTAGES.unshift({
+        id:             result[0].id,
+        start_t:        startT,
+        end_t:          null,
+        cause_category: 'unknown',
+        cause_note:     ''
+      });
+      // Prompt user to log cause — non-blocking nudge
+      _showOutageNudge(startT);
+    }
+  } catch(e) { console.warn('[outage] open failed:', e.message); }
+}
+
+async function _closeOutage(endT) {
+  if (!_activeOutageId || !SUPABASE_READY) return;
+  var id = _activeOutageId;
+  _activeOutageId = null;
+  try {
+    await _sbFetch('sensor_outages?id=eq.' + id, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json', 'Prefer': 'return=minimal' },
+      body: { end_t: endT }
+    });
+    var idx = SENSOR_OUTAGES.findIndex(function(o){ return o.id === id; });
+    if (idx >= 0) SENSOR_OUTAGES[idx].end_t = endT;
+    // Remove the nudge if still showing
+    var nudge = document.getElementById('outage-nudge');
+    if (nudge) nudge.remove();
+    showToast('sensor recovered · outage logged');
+  } catch(e) { console.warn('[outage] close failed:', e.message); }
+}
+
+// Non-blocking nudge — appears at bottom of screen, one tap to log cause
+function _showOutageNudge(startT) {
+  var ex = document.getElementById('outage-nudge');
+  if (ex) return; // already showing
+
+  var el = document.createElement('div');
+  el.id = 'outage-nudge';
+  el.style.cssText = [
+    'position:fixed', 'bottom:80px', 'left:50%', 'transform:translateX(-50%)',
+    'z-index:65', 'background:rgba(10,18,36,0.92)', 'backdrop-filter:blur(14px)',
+    'border:1px solid rgba(160,175,210,0.25)', 'border-radius:14px',
+    'padding:12px 16px', 'display:flex', 'align-items:center', 'gap:10px',
+    'max-width:300px', 'opacity:0', 'transition:opacity .25s'
+  ].join(';');
+
+  var gapMins = Math.round((Date.now() - startT) / 60000);
+  el.innerHTML =
+    '<div style="font-size:18px">📡</div>' +
+    '<div style="flex:1">' +
+      '<div style="font-family:\'DM Mono\',monospace;font-size:9px;letter-spacing:1px;' +
+        'text-transform:uppercase;color:rgba(160,175,210,0.6);margin-bottom:2px">sensor gap · ' + gapMins + 'm</div>' +
+      '<div style="font-family:\'Fraunces\',serif;font-style:italic;font-weight:200;' +
+        'font-size:13px;color:rgba(180,195,230,0.9)">log what happened?</div>' +
+    '</div>' +
+    '<button onclick="openOutageLog()" style="padding:7px 12px;border-radius:9px;' +
+      'border:1px solid rgba(160,175,210,0.3);background:rgba(40,55,100,0.4);' +
+      'font-family:\'DM Mono\',monospace;font-size:9px;letter-spacing:0.5px;' +
+      'text-transform:uppercase;color:rgba(180,200,240,0.85);cursor:pointer;' +
+      'touch-action:manipulation">log</button>' +
+    '<button onclick="document.getElementById(\'outage-nudge\').remove()" ' +
+      'style="background:none;border:none;cursor:pointer;font-size:18px;' +
+      'color:rgba(140,155,190,0.4);padding:2px;line-height:1">×</button>';
+
+  document.body.appendChild(el);
+  requestAnimationFrame(function(){ el.style.opacity = '1'; });
+
+  // Auto-dismiss after 30s
+  setTimeout(function() {
+    var n = document.getElementById('outage-nudge');
+    if (n) { n.style.opacity = '0'; setTimeout(function(){ if(n.parentNode) n.remove(); }, 300); }
+  }, 30000);
+}
+
+// Full outage logging modal
+function openOutageLog() {
+  var nudge = document.getElementById('outage-nudge');
+  if (nudge) nudge.remove();
+
+  var ex = document.getElementById('outage-overlay');
+  if (ex) { ex.remove(); return; }
+
+  // Find the active outage or most recent
+  var outage = SENSOR_OUTAGES.find(function(o){ return o.end_t === null; })
+            || SENSOR_OUTAGES[0];
+
+  var startStr = outage
+    ? new Date(outage.start_t).toLocaleTimeString('en-GB', {hour:'2-digit', minute:'2-digit'})
+    : '--:--';
+  var gapMins = outage ? Math.round((Date.now() - outage.start_t) / 60000) : 0;
+
+  var causes = [
+    { key: 'heat',         label: '🌡️ heat', desc: 'overheating / hot weather' },
+    { key: 'water',        label: '💧 water', desc: 'pool, bath, shower' },
+    { key: 'adhesion',     label: '🩹 adhesion', desc: 'sensor lifting / fell off' },
+    { key: 'compression',  label: '🛏️ compression', desc: 'lying on sensor' },
+    { key: 'bluetooth',    label: '📶 bluetooth', desc: 'signal / pairing lost' },
+    { key: 'sensor_error', label: '⚠️ sensor error', desc: 'device reported error' },
+    { key: 'unknown',      label: '❓ unknown', desc: '' }
+  ];
+
+  var currentCause = outage ? outage.cause_category : 'unknown';
+
+  var el = document.createElement('div');
+  el.id = 'outage-overlay';
+  el.style.cssText = 'position:fixed;inset:0;z-index:72;background:rgba(8,14,30,0.95);' +
+    'backdrop-filter:blur(18px);display:flex;flex-direction:column;align-items:center;' +
+    'justify-content:center;padding:28px;opacity:0;transition:opacity .2s;pointer-events:auto';
+  el.addEventListener('click', function(e){ if(e.target===el) el.remove(); });
+
+  var causeButtons = causes.map(function(c) {
+    var isSelected = c.key === currentCause;
+    return '<button onclick="_outageSelectCause(\'' + c.key + '\')" id="oc-' + c.key + '" ' +
+      'style="width:100%;padding:10px 12px;border-radius:10px;text-align:left;cursor:pointer;' +
+      'font-family:\'DM Mono\',monospace;font-size:11px;letter-spacing:0.3px;' +
+      'border:1px solid ' + (isSelected ? 'rgba(160,185,240,0.5)' : 'rgba(160,175,210,0.15)') + ';' +
+      'background:' + (isSelected ? 'rgba(40,60,120,0.4)' : 'transparent') + ';' +
+      'color:' + (isSelected ? 'rgba(190,210,255,0.95)' : 'rgba(150,165,200,0.7)') + ';' +
+      'touch-action:manipulation">' +
+      c.label + (c.desc ? '<span style="opacity:0.45;margin-left:6px">' + c.desc + '</span>' : '') +
+    '</button>';
+  }).join('');
+
+  el.innerHTML =
+    '<div style="max-width:320px;width:100%">' +
+      '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">' +
+        '<div style="font-family:\'Fraunces\',serif;font-style:italic;font-weight:200;' +
+          'font-size:22px;color:rgba(160,185,240,0.9)">📡 sensor gap</div>' +
+        '<button onclick="document.getElementById(\'outage-overlay\').remove()" ' +
+          'style="background:none;border:none;cursor:pointer;font-size:22px;' +
+          'color:rgba(140,155,190,0.5);padding:4px">×</button>' +
+      '</div>' +
+      '<div style="font-family:\'DM Mono\',monospace;font-size:9px;letter-spacing:1px;' +
+        'text-transform:uppercase;color:rgba(140,155,190,0.5);margin-bottom:20px">' +
+        'started ' + startStr + ' · ' + gapMins + 'm ago' +
+      '</div>' +
+
+      '<div style="font-family:\'DM Mono\',monospace;font-size:8px;letter-spacing:1.2px;' +
+        'text-transform:uppercase;color:rgba(140,155,190,0.45);margin-bottom:8px">what happened?</div>' +
+      '<div style="display:flex;flex-direction:column;gap:6px;margin-bottom:16px">' +
+        causeButtons +
+      '</div>' +
+
+      '<div style="font-family:\'DM Mono\',monospace;font-size:8px;letter-spacing:1.2px;' +
+        'text-transform:uppercase;color:rgba(140,155,190,0.45);margin-bottom:6px">notes (optional)</div>' +
+      '<textarea id="outage-note" rows="2" placeholder="e.g. spent 3h in pool, sensor started falling off..." ' +
+        'style="width:100%;box-sizing:border-box;padding:9px 12px;border-radius:8px;' +
+        'border:1px solid rgba(160,175,210,0.2);background:rgba(20,30,60,0.4);' +
+        'font-family:\'DM Mono\',monospace;font-size:11px;color:rgba(170,185,225,0.85);' +
+        'resize:none;outline:none;margin-bottom:16px">' + (outage ? outage.cause_note || '' : '') + '</textarea>' +
+
+      '<button onclick="saveOutageLog()" ' +
+        'style="width:100%;padding:13px;border-radius:10px;border:1px solid rgba(160,185,240,0.3);' +
+        'background:rgba(30,50,110,0.4);font-family:\'Fraunces\',serif;font-style:italic;' +
+        'font-weight:200;font-size:17px;color:rgba(180,205,255,0.9);cursor:pointer;' +
+        'touch-action:manipulation">save outage</button>' +
+    '</div>';
+
+  document.body.appendChild(el);
+  requestAnimationFrame(function(){ el.style.opacity = '1'; });
+}
+
+var _selectedOutageCause = null;
+function _outageSelectCause(key) {
+  _selectedOutageCause = key;
+  // Update button styles
+  var causes = ['heat','water','adhesion','compression','bluetooth','sensor_error','unknown'];
+  causes.forEach(function(c) {
+    var btn = document.getElementById('oc-' + c);
+    if (!btn) return;
+    var sel = c === key;
+    btn.style.borderColor   = sel ? 'rgba(160,185,240,0.5)' : 'rgba(160,175,210,0.15)';
+    btn.style.background    = sel ? 'rgba(40,60,120,0.4)'   : 'transparent';
+    btn.style.color         = sel ? 'rgba(190,210,255,0.95)' : 'rgba(150,165,200,0.7)';
+  });
+}
+
+async function saveOutageLog() {
+  var cause = _selectedOutageCause;
+  var note  = (document.getElementById('outage-note') || {}).value || '';
+
+  // Find the target outage (open or most recent)
+  var outage = SENSOR_OUTAGES.find(function(o){ return o.end_t === null; })
+            || SENSOR_OUTAGES[0];
+  if (!outage || !outage.id) {
+    document.getElementById('outage-overlay').remove();
+    return;
+  }
+
+  var patch = {};
+  if (cause) patch.cause_category = cause;
+  if (note)  patch.cause_note = note;
+
+  if (!SUPABASE_READY || Object.keys(patch).length === 0) {
+    document.getElementById('outage-overlay').remove();
+    return;
+  }
+
+  try {
+    await _sbFetch('sensor_outages?id=eq.' + outage.id, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json', 'Prefer': 'return=minimal' },
+      body: patch
+    });
+    // Update local
+    if (cause) outage.cause_category = cause;
+    if (note)  outage.cause_note = note;
+    showToast('outage saved');
+  } catch(e) {
+    console.warn('[outage] save failed:', e.message);
+    showToast('save failed — try again');
+  }
+
+  _selectedOutageCause = null;
+  var el = document.getElementById('outage-overlay');
+  if (el) el.remove();
+}
+
+// Draw logged sensor outage zones on the river canvas
+// These persist even after CGM backfill — they represent lived experience
+function drawSensorOutageZones() {
+  if (!SENSOR_OUTAGES || SENSOR_OUTAGES.length === 0) return;
+
+  var now = Date.now();
+  var viewLeft  = viewTime - viewSpan * NOW_X;
+  var viewRight = viewTime + viewSpan * (1 - NOW_X);
+
+  SENSOR_OUTAGES.forEach(function(o) {
+    var oStart = o.start_t;
+    var oEnd   = o.end_t || now; // still open
+
+    // Skip if entirely out of viewport
+    if (oEnd < viewLeft || oStart > viewRight) return;
+
+    var x0 = tX(oStart);
+    var x1 = tX(oEnd);
+    x0 = Math.max(0, x0);
+    x1 = Math.min(W, x1);
+    if (x1 <= x0) return;
+
+    var pulse = 0.5 + 0.5 * Math.sin(phi * 1.2);
+
+    CX.save();
+
+    // Background haze — warmer grey/amber for a "known gap" vs the blue of unknown gaps
+    var zoneGrad = CX.createLinearGradient(x0, 0, x1, 0);
+    zoneGrad.addColorStop(0,   'rgba(180,160,100,0.0)');
+    zoneGrad.addColorStop(0.15, 'rgba(170,150,90,0.07)');
+    zoneGrad.addColorStop(0.85, 'rgba(170,150,90,0.07)');
+    zoneGrad.addColorStop(1,   'rgba(180,160,100,0.0)');
+    CX.fillStyle = zoneGrad;
+    CX.fillRect(x0, 0, x1 - x0, H);
+
+    // Top + bottom amber edge lines
+    CX.strokeStyle = 'rgba(200,175,100,' + (0.18 + pulse * 0.06) + ')';
+    CX.lineWidth = 0.8;
+    CX.setLineDash([4, 8]);
+    CX.beginPath(); CX.moveTo(x0, 4); CX.lineTo(x1, 4); CX.stroke();
+    CX.beginPath(); CX.moveTo(x0, H - 4); CX.lineTo(x1, H - 4); CX.stroke();
+    CX.setLineDash([]);
+
+    // Label — cause + duration
+    var durationMins = Math.round((oEnd - oStart) / 60000);
+    var causeLabel = {
+      heat: '🌡️ heat', water: '💧 water', adhesion: '🩹 adhesion',
+      compression: '🛏️ compression', bluetooth: '📶 bt', sensor_error: '⚠️ error', unknown: '📡 gap'
+    }[o.cause_category] || '📡 gap';
+    var zoneWidth = x1 - x0;
+    if (zoneWidth > 30) {
+      var labelX = Math.max(x0 + 4, Math.min(x1 - 4, (x0 + x1) / 2));
+      CX.globalAlpha = 0.55 + pulse * 0.1;
+      CX.font = "400 9px 'DM Mono',monospace";
+      CX.fillStyle   = 'rgba(210,190,120,1)';
+      CX.textAlign   = 'center';
+      CX.fillText(causeLabel + ' · ' + durationMins + 'm', labelX, 18);
+    }
+
+    CX.globalAlpha = 1;
+    CX.restore();
+  });
+}
+
+// Outage history screen
+function openOutageHistory() {
+  var ex = document.getElementById('outage-history-overlay');
+  if (ex) { ex.remove(); return; }
+
+  var el = document.createElement('div');
+  el.id = 'outage-history-overlay';
+  el.style.cssText = 'position:fixed;inset:0;z-index:72;background:rgba(8,14,30,0.97);' +
+    'backdrop-filter:blur(18px);overflow-y:auto;padding:28px 20px;opacity:0;transition:opacity .2s';
+
+  var html =
+    '<div style="max-width:400px;margin:0 auto">' +
+      '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:20px">' +
+        '<div style="font-family:\'Fraunces\',serif;font-style:italic;font-weight:200;' +
+          'font-size:22px;color:rgba(210,190,120,0.9)">📡 sensor outages</div>' +
+        '<button onclick="document.getElementById(\'outage-history-overlay\').remove()" ' +
+          'style="background:none;border:none;cursor:pointer;font-size:22px;' +
+          'color:rgba(180,165,110,0.5);padding:4px">×</button>' +
+      '</div>';
+
+  if (SENSOR_OUTAGES.length === 0) {
+    html += '<div style="font-family:\'DM Mono\',monospace;font-size:11px;' +
+      'color:rgba(150,160,180,0.5);text-align:center;padding:40px 0">no outages logged yet</div>';
+  } else {
+    // Summary stats
+    var totalOutages = SENSOR_OUTAGES.length;
+    var totalMins = SENSOR_OUTAGES.reduce(function(acc, o) {
+      return acc + Math.round(((o.end_t || Date.now()) - o.start_t) / 60000);
+    }, 0);
+    var causeCounts = {};
+    SENSOR_OUTAGES.forEach(function(o) {
+      causeCounts[o.cause_category] = (causeCounts[o.cause_category] || 0) + 1;
+    });
+    var topCause = Object.entries(causeCounts).sort(function(a,b){ return b[1]-a[1]; })[0];
+
+    html +=
+      '<div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;margin-bottom:20px">' +
+        _outageStatBox(totalOutages + '', 'total outages') +
+        _outageStatBox(totalMins >= 60 ? Math.round(totalMins/60) + 'h' : totalMins + 'm', 'total lost') +
+        _outageStatBox(topCause ? topCause[0] : '—', 'top cause') +
+      '</div>';
+
+    // Outage list
+    SENSOR_OUTAGES.forEach(function(o, i) {
+      var dMins = Math.round(((o.end_t || Date.now()) - o.start_t) / 60000);
+      var startDt = new Date(o.start_t);
+      var dateStr = startDt.toLocaleDateString('en-GB', {day:'numeric', month:'short'});
+      var timeStr = startDt.toLocaleTimeString('en-GB', {hour:'2-digit', minute:'2-digit'});
+      var statusStr = o.end_t ? (dMins + 'm') : (dMins + 'm · open');
+      var causeLabel = {
+        heat: '🌡️ heat', water: '💧 water', adhesion: '🩹 adhesion',
+        compression: '🛏️ compression', bluetooth: '📶 bluetooth',
+        sensor_error: '⚠️ sensor error', unknown: '❓ unknown'
+      }[o.cause_category] || '❓ unknown';
+
+      html +=
+        '<div style="padding:12px 14px;border-radius:12px;border:1px solid rgba(200,180,110,0.15);' +
+          'background:rgba(20,28,55,0.4);margin-bottom:8px;cursor:pointer" ' +
+          'onclick="openOutageDetail(\'' + o.id + '\')">' +
+          '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px">' +
+            '<div style="font-family:\'DM Mono\',monospace;font-size:10px;' +
+              'color:rgba(210,190,120,0.85)">' + dateStr + ' · ' + timeStr + '</div>' +
+            '<div style="font-family:\'DM Mono\',monospace;font-size:10px;' +
+              'color:' + (o.end_t ? 'rgba(140,155,185,0.6)' : 'rgba(220,180,80,0.8)') + '">' + statusStr + '</div>' +
+          '</div>' +
+          '<div style="font-family:\'Fraunces\',serif;font-style:italic;font-weight:200;' +
+            'font-size:14px;color:rgba(190,175,130,0.9)">' + causeLabel + '</div>' +
+          (o.cause_note ? '<div style="font-family:\'DM Mono\',monospace;font-size:9px;' +
+            'color:rgba(150,160,185,0.55);margin-top:4px">' + o.cause_note + '</div>' : '') +
+        '</div>';
+    });
+  }
+
+  html += '</div>';
+  el.innerHTML = html;
+  document.body.appendChild(el);
+  requestAnimationFrame(function(){ el.style.opacity = '1'; });
+}
+
+function _outageStatBox(val, label) {
+  return '<div style="background:rgba(20,28,55,0.5);border:1px solid rgba(200,180,110,0.15);' +
+    'border-radius:10px;padding:10px;text-align:center">' +
+    '<div style="font-family:\'DM Mono\',monospace;font-size:16px;font-weight:500;' +
+      'color:rgba(210,190,120,0.9);margin-bottom:3px">' + val + '</div>' +
+    '<div style="font-family:\'DM Mono\',monospace;font-size:8px;letter-spacing:1px;' +
+      'text-transform:uppercase;color:rgba(150,160,185,0.5)">' + label + '</div>' +
+  '</div>';
+}
+
+function openOutageDetail(id) {
+  // Jump the river to the outage time and close history screen
+  var outage = SENSOR_OUTAGES.find(function(o){ return o.id === id; });
+  if (!outage) return;
+  var el = document.getElementById('outage-history-overlay');
+  if (el) el.remove();
+  viewTime  = outage.start_t + Math.round(((outage.end_t || Date.now()) - outage.start_t) / 2);
+  viewSpan  = 2 * 3600000;
+  _isAtNow  = false;
+}
+
+// ══════════════════════════════════════════════════════════════════════
 // BLOOD PRICK LOGGING
 // ══════════════════════════════════════════════════════════════════════
 
@@ -15522,12 +15966,12 @@ window.addEventListener('load',()=>{
 
   // If no embedded history, start at now
   if (HISTORY_RAW.length === 0) updateCGMBounds();
-  viewTime = CGM_END || Date.now();
+  viewTime = Date.now(); // wall clock master
   viewSpan = 2*3600000;
   try{
     SESSION=JSON.parse(localStorage.getItem('river_session')||'[]'); SESSION=SESSION.filter(s=>(Date.now()-s.t)<6*3600000);
   }catch(e){}
-  const pal=palette(CGM_END);
+  const pal=palette(Date.now());
   document.body.style.background='#05070f';
   document.getElementById('loading').style.background='#05070f';
 
