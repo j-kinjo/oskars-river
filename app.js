@@ -3153,58 +3153,98 @@ function drawRiverPebble(pal) {
 
 // ── NO-DATA ORB — pulsing grey when sensor gap is active ──────────────
 function drawNoDataOrb(pal) {
-  // With wall-clock timeline, the orb is always at NOW_X — no longer pinned to last CGM reading.
-  // Instead: when there is an active sensor gap, draw a shimmer lane along the BG line
-  // from the last known reading to the current moment, and update the stale-warn element.
+  // Only draw when: first poll done, viewing live (isAtNow), and gap > 10min
+  if (!_cgmPolledOnce) return;           // suppress false positive on cold load
+  if (!_isAtNow) return;                 // hide when scrubbing history
   if (HISTORY_RAW.length === 0) return;
-  var lastT  = HISTORY_RAW[HISTORY_RAW.length-1].t;
-  var gapMs  = Date.now() - lastT;
+
+  var lastT   = HISTORY_RAW[HISTORY_RAW.length-1].t;
+  var gapMs   = Date.now() - lastT;
+  var gapMins = Math.floor(gapMs / 60000); // integer minutes — never milliseconds
+
   if (gapMs < 10 * 60000) {
+    // Gap closed — hide stale warn
     var sw = document.getElementById('stale-warn');
     if (sw) sw.style.display = 'none';
     return;
   }
-  var gapMins = Math.floor(gapMs / 60000);
+
   var lastReading = HISTORY_RAW[HISTORY_RAW.length-1];
-  var x0 = tX(lastReading.t);
-  var x1 = tX(Date.now());
+  var x0 = tX(lastReading.t); // x of last known reading
+  var x1 = NOW_X * W;         // always the orb position — Date.now() when live
   var midY = bgToY(lastReading.bg);
-  if (x1 > 0 && x0 < W) {
-    x0 = Math.max(0, x0);
-    x1 = Math.min(W, x1);
-    var pulse = 0.5 + 0.5 * Math.sin(phi * 1.8);
-    CX.save();
-    var laneGrad = CX.createLinearGradient(x0, 0, x1, 0);
-    laneGrad.addColorStop(0,   'rgba(130,155,185,' + (0.08 + pulse * 0.04) + ')');
-    laneGrad.addColorStop(0.5, 'rgba(150,175,205,' + (0.14 + pulse * 0.06) + ')');
-    laneGrad.addColorStop(1,   'rgba(100,130,170,0)');
-    CX.fillStyle = laneGrad;
-    CX.fillRect(x0, midY - 28, x1 - x0, 56);
-    CX.setLineDash([3, 7]);
-    CX.lineDashOffset = -(phi * 18) % 10;
-    CX.strokeStyle = 'rgba(140,168,200,' + (0.3 + pulse * 0.15) + ')';
+
+  // Only draw if the gap zone is visible
+  if (x1 <= 0 || x0 >= W) {
+    var sw = document.getElementById('stale-warn');
+    if (sw) sw.style.display = 'none';
+    return;
+  }
+
+  var x0c = Math.max(0, x0);
+  var x1c = Math.min(W, x1);
+  if (x1c <= x0c) return;
+
+  var pulse = 0.5 + 0.5 * Math.sin(phi * 1.8);
+
+  CX.save();
+
+  // Soft blue-grey fog across the gap
+  var laneGrad = CX.createLinearGradient(x0c, 0, x1c, 0);
+  laneGrad.addColorStop(0,    'rgba(130,155,185,' + (0.05 + pulse * 0.03) + ')');
+  laneGrad.addColorStop(0.3,  'rgba(150,175,205,' + (0.12 + pulse * 0.05) + ')');
+  laneGrad.addColorStop(1,    'rgba(100,130,170,0)');
+  CX.fillStyle = laneGrad;
+  CX.fillRect(x0c, midY - 32, x1c - x0c, 64);
+
+  // Marching dashed line — "searching"
+  CX.setLineDash([3, 8]);
+  CX.lineDashOffset = -(phi * 18) % 11;
+  CX.strokeStyle = 'rgba(140,168,200,' + (0.25 + pulse * 0.12) + ')';
+  CX.lineWidth = 1.0;
+  CX.beginPath();
+  CX.moveTo(x0c, midY);
+  CX.lineTo(x1c, midY);
+  CX.stroke();
+  CX.setLineDash([]);
+  CX.lineDashOffset = 0;
+
+  // ── START BOUNDARY — vertical tick at last known reading ──
+  if (x0 >= 0 && x0 <= W) {
+    CX.strokeStyle = 'rgba(140,165,200,0.55)';
     CX.lineWidth = 1.2;
     CX.beginPath();
-    CX.moveTo(x0, midY);
-    CX.lineTo(x1, midY);
+    CX.moveTo(x0, midY - 20);
+    CX.lineTo(x0, midY + 20);
     CX.stroke();
-    CX.setLineDash([]);
-    CX.lineDashOffset = 0;
-    var labelX = Math.min(x1 - 4, Math.max(x0 + 4, (x0 + x1) / 2));
-    if (x1 - x0 > 40) {
-      CX.globalAlpha = 0.5 + pulse * 0.2;
-      CX.font        = "400 9px 'DM Mono',monospace";
-      CX.fillStyle   = 'rgba(150,175,205,1)';
-      CX.textAlign   = 'center';
-      CX.fillText('no sensor · ' + gapMins + 'm', labelX, midY - 34);
-    }
+    // "last reading" label below tick
+    CX.globalAlpha = 0.45;
+    CX.font = "400 10px 'DM Mono',monospace";
+    CX.fillStyle  = 'rgba(150,175,205,1)';
+    CX.textAlign  = 'center';
+    CX.fillText('last reading', x0, midY + 34);
     CX.globalAlpha = 1;
-    CX.restore();
   }
+
+  // ── CENTRE LABEL — duration, only if zone is wide enough ──
+  var zoneW = x1c - x0c;
+  if (zoneW > 60) {
+    var labelX = x0c + zoneW * 0.5;
+    CX.globalAlpha = 0.6 + pulse * 0.15;
+    CX.font = "400 11px 'DM Mono',monospace";
+    CX.fillStyle   = 'rgba(155,180,215,1)';
+    CX.textAlign   = 'center';
+    CX.fillText('no sensor  ' + gapMins + 'm', labelX, midY - 38);
+    CX.globalAlpha = 1;
+  }
+
+  CX.restore();
+
+  // Drive stale-warn HTML element (single source — updateHUD no longer writes it)
   var sw = document.getElementById('stale-warn');
   if (sw) {
     sw.style.display = 'block';
-    sw.textContent   = 'no reading for ' + gapMins + 'm';
+    sw.textContent   = 'no sensor · ' + gapMins + 'm';
   }
 }
 
@@ -3442,14 +3482,8 @@ function updateHUD(d, pal) {
   }
   if (!d || !pal || typeof d.bg !== 'number' || isNaN(d.bg)) return;
 
-  // Stale data warning
-  var staleWarn = document.getElementById('stale-warn');
-  if (staleWarn) {
-    var minsStale = _lastReadingT > 0 ? Math.round((Date.now()-_lastReadingT)/60000) : 0;
-    var isStale   = minsStale > 12 && _lastReadingT > 0;
-    staleWarn.style.display = isStale ? 'block' : 'none';
-    if (isStale) staleWarn.textContent = 'no reading for ' + minsStale + 'm';
-  }
+  // Stale-warn element is managed exclusively by drawNoDataOrb()
+  // (removed from here to prevent duplication and millisecond-value bugs)
 
   // BG number + trend arrow — prefer CGM trend field from latest reading
   var latestRaw = HISTORY_RAW.length > 0 ? HISTORY_RAW[HISTORY_RAW.length-1] : null;
@@ -4567,7 +4601,7 @@ CV.addEventListener('touchend',()=>{
 },{passive:true});
 let md={on:false,dragging:false,x0:0,t0:0};
 CV.addEventListener('mousedown',e=>{if(!e.target.closest('#sheet,#flow-dock,.dock-btn,#whisper-overlay,#food-mgr-overlay,#hypo-overlay,#corr-overlay,#food-add-overlay,[id$=-overlay],button,input,textarea,select'))md={on:true,dragging:false,x0:e.clientX,t0:viewTime}});
-CV.addEventListener('mousemove',e=>{if(md.on){var dx=e.clientX-md.x0;if(!md.dragging&&Math.abs(dx)<5)return;md.dragging=true;viewTime=Math.max(CGM_START, Math.min(Date.now(), md.t0-dx*(viewSpan/W)));_maybeLoadOlderHistory();}});
+CV.addEventListener('mousemove',e=>{if(md.on){var dx=e.clientX-md.x0;if(!md.dragging&&Math.abs(dx)<5)return;md.dragging=true;_isAtNow=false;viewTime=Math.max(CGM_START, Math.min(Date.now(), md.t0-dx*(viewSpan/W)));_maybeLoadOlderHistory();}});
 CV.addEventListener('mouseup',()=>{md.on=false;});
 
 // ── QUICK JUMP DAY STRIP ──────────────────────────────────────────────────
@@ -11083,6 +11117,7 @@ function clearCGMConfig() {
 // ── LIVE POLLING ─────────────────────────────────────────────────────────
 let _pollTimer     = null;
 let _liveConnected = false;
+let _cgmPolledOnce = false; // suppresses outage detection until first poll is done
 let _lastReadingT  = 0;
 let _sourceCfg     = null;
 let _sourceId      = null;
@@ -11137,6 +11172,8 @@ async function startLivePolling(sourceId, cfg) {
       _liveConnected = false;
       setLiveStatus('error', e.message);
       console.warn('CGM poll failed:', e);
+    } finally {
+      _cgmPolledOnce = true; // first poll attempted — gap detection now valid
     }
   }
 
@@ -14345,6 +14382,7 @@ async function loadSensorOutages() {
 // Called from the frame loop (throttled) — auto-detects a new outage
 var _lastOutageCheck = 0;
 function _maybeDetectOutage() {
+  if (!_cgmPolledOnce) return;           // don't log outages before first poll
   var now = Date.now();
   if (now - _lastOutageCheck < 60000) return; // check every 60s
   _lastOutageCheck = now;
@@ -14610,52 +14648,77 @@ function drawSensorOutageZones() {
 
   SENSOR_OUTAGES.forEach(function(o) {
     var oStart = o.start_t;
-    var oEnd   = o.end_t || now; // still open
+    var oEnd   = o.end_t || now;
 
-    // Skip if entirely out of viewport
     if (oEnd < viewLeft || oStart > viewRight) return;
 
     var x0 = tX(oStart);
     var x1 = tX(oEnd);
-    x0 = Math.max(0, x0);
-    x1 = Math.min(W, x1);
-    if (x1 <= x0) return;
+    var x0c = Math.max(0, x0);
+    var x1c = Math.min(W, x1);
+    if (x1c <= x0c) return;
 
     var pulse = 0.5 + 0.5 * Math.sin(phi * 1.2);
+    var zoneW = x1c - x0c;
 
     CX.save();
 
-    // Background haze — warmer grey/amber for a "known gap" vs the blue of unknown gaps
-    var zoneGrad = CX.createLinearGradient(x0, 0, x1, 0);
-    zoneGrad.addColorStop(0,   'rgba(180,160,100,0.0)');
-    zoneGrad.addColorStop(0.15, 'rgba(170,150,90,0.07)');
-    zoneGrad.addColorStop(0.85, 'rgba(170,150,90,0.07)');
-    zoneGrad.addColorStop(1,   'rgba(180,160,100,0.0)');
+    // Amber haze fill — full height, feathered edges
+    var zoneGrad = CX.createLinearGradient(x0c, 0, x1c, 0);
+    zoneGrad.addColorStop(0,    'rgba(180,160,100,0.0)');
+    zoneGrad.addColorStop(0.12, 'rgba(170,150,90,0.08)');
+    zoneGrad.addColorStop(0.88, 'rgba(170,150,90,0.08)');
+    zoneGrad.addColorStop(1,    'rgba(180,160,100,0.0)');
     CX.fillStyle = zoneGrad;
-    CX.fillRect(x0, 0, x1 - x0, H);
+    CX.fillRect(x0c, 0, zoneW, H);
 
-    // Top + bottom amber edge lines
-    CX.strokeStyle = 'rgba(200,175,100,' + (0.18 + pulse * 0.06) + ')';
-    CX.lineWidth = 0.8;
-    CX.setLineDash([4, 8]);
-    CX.beginPath(); CX.moveTo(x0, 4); CX.lineTo(x1, 4); CX.stroke();
-    CX.beginPath(); CX.moveTo(x0, H - 4); CX.lineTo(x1, H - 4); CX.stroke();
-    CX.setLineDash([]);
-
-    // Label — cause + duration
-    var durationMins = Math.round((oEnd - oStart) / 60000);
-    var causeLabel = {
-      heat: '🌡️ heat', water: '💧 water', adhesion: '🩹 adhesion',
-      compression: '🛏️ compression', bluetooth: '📶 bt', sensor_error: '⚠️ error', unknown: '📡 gap'
-    }[o.cause_category] || '📡 gap';
-    var zoneWidth = x1 - x0;
-    if (zoneWidth > 30) {
-      var labelX = Math.max(x0 + 4, Math.min(x1 - 4, (x0 + x1) / 2));
-      CX.globalAlpha = 0.55 + pulse * 0.1;
+    // ── START BOUNDARY ── clear vertical line at outage start
+    if (x0 >= 0 && x0 <= W) {
+      CX.strokeStyle = 'rgba(200,175,100,0.6)';
+      CX.lineWidth = 1.5;
+      CX.setLineDash([]);
+      CX.beginPath();
+      CX.moveTo(x0, 0); CX.lineTo(x0, H);
+      CX.stroke();
+      // "gap start" label
+      CX.globalAlpha = 0.6;
       CX.font = "400 9px 'DM Mono',monospace";
       CX.fillStyle   = 'rgba(210,190,120,1)';
+      CX.textAlign   = 'left';
+      CX.fillText('◀ gap start', x0 + 4, 14);
+      CX.globalAlpha = 1;
+    }
+
+    // ── END BOUNDARY ── clear vertical line at outage end (only if it has ended)
+    if (o.end_t && x1 >= 0 && x1 <= W) {
+      CX.strokeStyle = 'rgba(200,175,100,0.6)';
+      CX.lineWidth = 1.5;
+      CX.setLineDash([]);
+      CX.beginPath();
+      CX.moveTo(x1, 0); CX.lineTo(x1, H);
+      CX.stroke();
+      CX.globalAlpha = 0.6;
+      CX.font = "400 9px 'DM Mono',monospace";
+      CX.fillStyle   = 'rgba(210,190,120,1)';
+      CX.textAlign   = 'right';
+      CX.fillText('gap end ▶', x1 - 4, 14);
+      CX.globalAlpha = 1;
+    }
+
+    // ── CENTRE LABEL — cause + duration, only when zone is wide enough ──
+    if (zoneW > 50) {
+      var durationMins = Math.round((oEnd - oStart) / 60000);
+      var causeLabel = {
+        heat: '🌡️ heat', water: '💧 water', adhesion: '🩹 adhesion',
+        compression: '🛏️ compression', bluetooth: '📶 bt', sensor_error: '⚠️ error', unknown: '📡 gap'
+      }[o.cause_category] || '📡 gap';
+
+      var labelX = Math.max(x0c + 4, Math.min(x1c - 4, (x0c + x1c) / 2));
+      CX.globalAlpha = 0.6 + pulse * 0.1;
+      CX.font = "400 11px 'DM Mono',monospace";
+      CX.fillStyle   = 'rgba(210,190,120,1)';
       CX.textAlign   = 'center';
-      CX.fillText(causeLabel + ' · ' + durationMins + 'm', labelX, 18);
+      CX.fillText(causeLabel + '  ' + durationMins + 'm', labelX, 30);
     }
 
     CX.globalAlpha = 1;
