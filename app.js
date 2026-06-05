@@ -3248,6 +3248,25 @@ function drawNoDataOrb(pal) {
   }
 }
 
+// Lightweight replacement for drawNoDataOrb() when canvas visuals are stubbed.
+// Keeps the stale-warn text element alive without drawing fog/orb on canvas.
+function _updateStaleWarnOnly() {
+  if (!_cgmPolledOnce) return;
+  if (!_isAtNow) return;
+  if (HISTORY_RAW.length === 0) return;
+  var lastT   = HISTORY_RAW[HISTORY_RAW.length-1].t;
+  var gapMs   = Date.now() - lastT;
+  var gapMins = Math.floor(gapMs / 60000);
+  var sw = document.getElementById('stale-warn');
+  if (!sw) return;
+  if (gapMs < 10 * 60000) {
+    sw.style.display = 'none';
+  } else {
+    sw.style.display = 'block';
+    sw.textContent   = 'no sensor · ' + gapMins + 'm';
+  }
+}
+
 // ── SMART ALERT SYSTEM ──────────────────────────────────────────────
 // Hypo: act NOW — urgent, escalating
 // Hyper: only alert when correction window is open (IOB clear, safe gap)
@@ -4057,7 +4076,7 @@ async function _syncTimerEvents() {
         }
       }
     }
-    _renderTimerOverlay();
+    // _renderTimerOverlay(); // [STUBBED] timer pills hidden pending UX fix
   } catch(e) {
     console.warn('[Timer] sync failed:', e);
   }
@@ -4172,7 +4191,7 @@ function _updateTimers() {
   }
 
   console.log('[Timer eval] BG:', latestBG, 'states:', _activeTimers.ketone.state, _activeTimers.hypo.state, _activeTimers.correction.state);
-  _renderTimerOverlay();
+  // _renderTimerOverlay(); // [STUBBED] timer pills hidden pending UX fix
 }
 
 // ── Helper: format ms to H:MM or MM:SS ───────────────────────────────────
@@ -4213,7 +4232,7 @@ function _ketoneHide(reason) {
   }
   _activeTimers.ketone._optionsOpen = false;
   _saveTimerState();
-  _renderTimerOverlay();
+  // _renderTimerOverlay(); // [STUBBED]
 }
 
 // ── _ketoneMinimise — collapse to dot ────────────────────────────────────
@@ -4221,7 +4240,7 @@ function _ketoneMinimise() {
   _activeTimers.ketone.minimised    = true;
   _activeTimers.ketone._optionsOpen = false;
   _saveTimerState();
-  _renderTimerOverlay();
+  // _renderTimerOverlay(); // [STUBBED]
 }
 
 // ── openKetoneModal — stub for Step 4 ────────────────────────────────────
@@ -4231,7 +4250,13 @@ function openKetoneModal() {
 }
 
 // ── _renderTimerOverlay — build/update DOM pill container ─────────────────
+// [STUBBED] Pills are hidden until clear/persist bugs are fixed. All state/sync logic intact.
 function _renderTimerOverlay() {
+  // STUB: hide timer overlay UI — reinstate once clear/persist logic is fixed
+  var el = document.getElementById('timer-overlay');
+  if (el) el.innerHTML = '';
+  return;
+  // --- original render below (unreachable until stub removed) ---
   var el = document.getElementById('timer-overlay');
   if (!el) {
     el = document.createElement('div');
@@ -4450,7 +4475,7 @@ function frame(ts) {
   // ── EVENT MARKERS — ripples where forces entered ───────────────
   drawBolusMarkers(pal);
   drawBasalReservoir(pal);  // subtle always-present basal drip
-  drawSensorOutageZones();   // amber haze for logged outages
+  // drawSensorOutageZones();   // [STUBBED] amber haze — hidden pending better UX
   drawBloodPricks();         // red diamond prick markers
 
   // ── CONTEXT ─────────────────────────────────────────────────────
@@ -4468,7 +4493,8 @@ function frame(ts) {
   drawNowPulse(pal, d);
   drawRiverPebble(pal);
   drawHoverTooltip(pal);
-  drawNoDataOrb(pal);  // pulsing grey orb during active sensor gap
+  // drawNoDataOrb(pal);  // [STUBBED] sensor gap fog/orb — hidden pending better UX
+  _updateStaleWarnOnly(); // still drives stale-warn text element
 
   // Live reading pulse — flashes when new data arrives
   if (_pulseAlpha > 0.01) {
@@ -14426,7 +14452,7 @@ async function _openOutage(startT) {
         cause_note:     ''
       });
       // Prompt user to log cause — non-blocking nudge
-      _showOutageNudge(startT);
+      // _showOutageNudge(startT); // [STUBBED] outage nudge hidden pending UX review
     }
   } catch(e) { console.warn('[outage] open failed:', e.message); }
 }
