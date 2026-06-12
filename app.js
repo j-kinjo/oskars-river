@@ -7198,7 +7198,7 @@ function logPlate() {
     (function(){
       var _snap = buildSmartForecast();
       if (MEAL_HISTORY[0]) MEAL_HISTORY[0]._predictedCurve = _snap;
-      _pushActivePredictedCurve(_snap, MEAL_HISTORY[0] ? MEAL_HISTORY[0].t : Date.now());
+      _pushActivePredictedCurve(_snap, Date.now());
       syncMealToSupabase(MEAL_HISTORY[0]);
       scheduleMealOutcome(MEAL_HISTORY[0], _snap);
     })();
@@ -9669,7 +9669,7 @@ function logMealEntry(carbsOnly) {
     (function(){
       var _snap = buildSmartForecast();
       if (MEAL_HISTORY[0]) MEAL_HISTORY[0]._predictedCurve = _snap;
-      _pushActivePredictedCurve(_snap, MEAL_HISTORY[0] ? MEAL_HISTORY[0].t : Date.now());
+      _pushActivePredictedCurve(_snap, Date.now());
       syncMealToSupabase(MEAL_HISTORY[0]);
       scheduleMealOutcome(MEAL_HISTORY[0], _snap);
     })();
@@ -9717,7 +9717,7 @@ function confirmBolus(units) {
     (function(){
       var _snap = buildSmartForecast();
       if (MEAL_HISTORY[0]) MEAL_HISTORY[0]._predictedCurve = _snap;
-      _pushActivePredictedCurve(_snap, MEAL_HISTORY[0] ? MEAL_HISTORY[0].t : Date.now());
+      _pushActivePredictedCurve(_snap, Date.now());
       syncMealToSupabase(MEAL_HISTORY[0]);
       scheduleMealOutcome(MEAL_HISTORY[0], _snap);
     })();
@@ -18082,7 +18082,7 @@ function commitPadImport() {
     (function(){
       var _snap = buildSmartForecast();
       if (MEAL_HISTORY[0]) MEAL_HISTORY[0]._predictedCurve = _snap;
-      _pushActivePredictedCurve(_snap, MEAL_HISTORY[0] ? MEAL_HISTORY[0].t : Date.now());
+      _pushActivePredictedCurve(_snap, Date.now());
       syncMealToSupabase(MEAL_HISTORY[0]);
       scheduleMealOutcome(MEAL_HISTORY[0], _snap);
     })();
