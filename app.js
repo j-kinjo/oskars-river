@@ -15877,10 +15877,13 @@ function _pickLogInsulin(name, btnEl) {
 
 // Build a single-insulin `insulins` array from a legacy bolus_type string —
 // used when reading old therapy_history rows that predate multi-insulin support.
-function _deriveInsulinsFromBolusType(bolusType) {
+// legacyDia: the row's existing top-level `dia` (e.g. 150 for Oskar's 2.5hr) —
+// takes priority over the generic INSULIN_PROFILES default (240/210) so the
+// migration doesn't silently widen a patient-configured DIA.
+function _deriveInsulinsFromBolusType(bolusType, legacyDia) {
   var name = bolusType || 'Novorapid';
   var p = INSULIN_PROFILES[name] || INSULIN_PROFILES.Novorapid;
-  return [{ name: name, peakMins: p.peakMins, diaMins: p.diaMins, active: true, isDefault: true }];
+  return [{ name: name, peakMins: p.peakMins, diaMins: legacyDia || p.diaMins, active: true, isDefault: true }];
 }
 
 var _TREATMENT_DEFAULTS = {
@@ -15920,7 +15923,7 @@ async function _loadTreatmentSettings() {
         // from the legacy bolus_type so existing setups keep working.
         var insulinsList = (Array.isArray(r.insulins) && r.insulins.length)
           ? r.insulins
-          : _deriveInsulinsFromBolusType(r.bolus_type);
+          : _deriveInsulinsFromBolusType(r.bolus_type, r.dia);
         var defaultIns = insulinsList.find(function(i){ return i.isDefault; }) || insulinsList[0];
         _TREATMENT = Object.assign({}, _TREATMENT_DEFAULTS, {
           basalDose:     r.basal_dose,
@@ -16135,7 +16138,8 @@ function _renderTreatmentForm(el) {
       'line-height:1.6;margin:6px 0 4px;padding:0 2px">' +
       'tap <b>default</b> to set the primary insulin used for new doses · ' +
       'toggle <b>active</b> to keep an insulin available in the at-dose selector ' +
-      'without making it the default' +
+      'without making it the default · peak/DIA per insulin are editable and ' +
+      'versioned with every save' +
     '</div>' +
     '<div style="' + ls + 'color:rgba(140,180,220,0.5)">treatment change applies from</div>' +
     effectiveTimeHTML +
@@ -16201,21 +16205,39 @@ function _insulinRowsHTML() {
       'color:' + (on ? onColor.replace('OPACITY', '0.9') : 'rgba(200,220,240,0.4)') + ';cursor:pointer">' + label + '</button>';
   };
 
+  var numInp = function(id, val, opts) {
+    return '<input id="' + id + '" type="number" value="' + val + '" ' +
+      'min="' + opts.min + '" max="' + opts.max + '" step="' + opts.step + '" ' +
+      'onchange="_setInsulinTiming(\'' + opts.name + '\',\'' + opts.field + '\',this.value)" ' +
+      'style="width:46px;padding:4px 6px;border-radius:6px;' +
+      'border:1px solid var(--rv-panel-border);background:var(--rv-panel-bg);' +
+      'font-family:\'DM Mono\',monospace;font-size:11px;color:rgba(200,220,240,0.85);' +
+      'text-align:center;outline:none">';
+  };
+
   var rows = insulins.map(function(ins) {
-    var info = (INSULIN_PROFILES[ins.name] || {}).info ||
-      ('peak ~' + ins.peakMins + ' min · ' + Math.round(ins.diaMins/60*10)/10 + ' hr tail');
-    return '<div style="' + rowStyle + '">' +
-      '<div>' +
+    var rowId = 'tr-ins-' + ins.name.replace(/[^a-z0-9]/gi,'');
+    return '<div style="' + rowStyle + 'flex-direction:column;align-items:stretch;gap:8px">' +
+      '<div style="display:flex;align-items:center;justify-content:space-between">' +
         '<div style="font-size:11px;color:rgba(200,220,240,0.85)">' + ins.name +
           (ins.isDefault ? ' <span style="font-size:8px;color:rgba(100,200,160,0.7);letter-spacing:0.5px;text-transform:uppercase">· default</span>' : '') +
         '</div>' +
-        '<div style="font-size:9px;color:rgba(160,200,180,0.5);margin-top:2px">' + info + '</div>' +
+        '<div style="display:flex;gap:6px;flex-shrink:0">' +
+          '<button onclick="_setDefaultInsulinUI(\'' + ins.name + '\')" ' +
+            btn('default', !!ins.isDefault, 'rgba(100,200,160,OPACITY)') +
+          '<button onclick="_toggleInsulinActive(\'' + ins.name + '\')" ' +
+            btn(ins.active ? 'active' : 'inactive', !!ins.active, 'rgba(80,140,220,OPACITY)') +
+        '</div>' +
       '</div>' +
-      '<div style="display:flex;gap:6px;flex-shrink:0">' +
-        '<button onclick="_setDefaultInsulinUI(\'' + ins.name + '\')" ' +
-          btn('default', !!ins.isDefault, 'rgba(100,200,160,OPACITY)') +
-        '<button onclick="_toggleInsulinActive(\'' + ins.name + '\')" ' +
-          btn(ins.active ? 'active' : 'inactive', !!ins.active, 'rgba(80,140,220,OPACITY)') +
+      '<div style="display:flex;align-items:center;gap:14px">' +
+        '<div style="display:flex;align-items:center;gap:6px">' +
+          numInp(rowId + '-peak', ins.peakMins, {min:10, max:180, step:5, name:ins.name, field:'peakMins'}) +
+          '<span style="font-size:9px;color:rgba(160,200,180,0.5)">peak min</span>' +
+        '</div>' +
+        '<div style="display:flex;align-items:center;gap:6px">' +
+          numInp(rowId + '-dia', +(ins.diaMins/60).toFixed(1), {min:1, max:8, step:0.5, name:ins.name, field:'diaMins'}) +
+          '<span style="font-size:9px;color:rgba(160,200,180,0.5)">DIA hrs</span>' +
+        '</div>' +
       '</div>' +
     '</div>';
   }).join('');
@@ -16259,6 +16281,18 @@ function _setDefaultInsulinUI(name) {
     if (i.name === name) i.active = true;
   });
   _refreshInsulinSection();
+}
+
+// Updates peak/DIA for one insulin in the rotation — patient-configurable
+// (e.g. Oskar's bolus calc uses 2.5hr DIA, not the generic Novorapid 4hr
+// default). Persisted via the normal save → versioned in therapy_history.insulins.
+function _setInsulinTiming(name, field, rawValue) {
+  if (!_TREATMENT) return;
+  var ins = (_TREATMENT.insulins || []).find(function(i){ return i.name === name; });
+  if (!ins) return;
+  var v = parseFloat(rawValue);
+  if (!v || v <= 0) return;
+  ins[field] = (field === 'diaMins') ? Math.round(v * 60) : Math.round(v); // DIA input is in hours
 }
 
 // Toggles whether an insulin is "in rotation" (offered at correction/meal
@@ -16493,7 +16527,8 @@ function saveTreatmentForm() {
   var getN = function(id) { var el = document.getElementById('tr-' + id); return el ? parseFloat(el.value) || 0 : 0; };
   var getS = function(id) { var el = document.getElementById('tr-' + id); return el ? el.value : ''; };
   var insulinsList = (_TREATMENT && _TREATMENT.insulins) || _TREATMENT_DEFAULTS.insulins;
-  var newDefault   = (insulinsList.find(function(i){ return i.isDefault; }) || insulinsList[0]).name;
+  var defaultEntry = insulinsList.find(function(i){ return i.isDefault; }) || insulinsList[0];
+  var newDefault   = defaultEntry.name;
   var updated = {
     basalDose:     getN('basal'),
     basalType:     'Degludec',
@@ -16502,7 +16537,9 @@ function saveTreatmentForm() {
     insulins:      insulinsList,
     hypoThreshold: getN('hypo-thr'),
     hypoCarbs:     getN('hypo-carbs'),
-    dia:           (_TREATMENT && _TREATMENT.dia) || 150,
+    // Legacy single-DIA fallback (used by iobF when no insulin is specified) —
+    // kept in sync with the default insulin's (now patient-editable) DIA.
+    dia:           defaultEntry.diaMins || (_TREATMENT && _TREATMENT.dia) || 150,
     ratios: (_TREATMENT || _TREATMENT_DEFAULTS).ratios.map(function(row, i) {
       return {
         start:  row.start  || null,
