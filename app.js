@@ -15989,32 +15989,96 @@ async function _saveTreatmentSettings(data, effectiveT) {
   _therapyHistoryCache = null;
 }
 
-// ── RETROACTIVE INSULIN CORRECTION ────────────────────────────────────
-// When a treatment change is backdated (effectiveT in the past), every
-// bolus/correction/meal event logged from that point onward was actually
-// given with the NEW insulin — even though it was recorded before this
-// settings save happened. This stamps insulin_type on those events so the
-// IOB curve renders with the correct pharmacokinetic shape retroactively.
-async function _correctEventsInsulin(fromT, insulinName) {
-  if (!fromT || !insulinName) return;
-  // Local state — in-memory + cached events, so the canvas updates immediately
+// ── RETROACTIVE THERAPY CORRECTION ────────────────────────────────────
+// River is a SECONDARY record of therapy — the pump/pen app is primary,
+// and changes there often only get reflected here days later. Whenever a
+// settings save is backdated ("applies from" in the past), every event
+// logged from that point onward was actually under the NEW settings, even
+// though it was recorded under the old ones. This corrects:
+//   - insulin_type on bolus/correction events (drives the IOB curve shape)
+//   - therapy_snapshot on events/meal_history/bolus_outcomes (ISF/IC/basal/
+//     insulin active at that moment — drives historical analysis/replay)
+// Local in-memory + localStorage are corrected immediately (canvas updates
+// without reload); Supabase is corrected best-effort, bounded per table —
+// larger backdates beyond the cap should go through a SQL backfill session
+// (see RIVER_ERD.md maintenance notes).
+var THERAPY_CORRECTION_CAP = 200; // rows per table — keep inline correction bounded
+
+// Builds the therapy_snapshot a logged event/meal/outcome at time `t` would
+// have captured under `settings` (the just-saved treatment) — mirrors
+// _currentTherapySnapshot() but for an arbitrary (possibly backdated) settings object.
+function _snapshotFromTherapy(settings, t) {
+  var seg = _ratioForTime(settings.ratios, t);
+  var insulins = settings.insulins || _TREATMENT_DEFAULTS.insulins;
+  var defaultIns = insulins.find(function(i){ return i.isDefault; }) || insulins[0];
+  return {
+    period: seg ? (seg.start + '-' + seg.end) : null,
+    isf: seg && seg.isf,
+    ic:  seg && seg.ic,
+    basal: settings.basalDose,
+    basalType: settings.basalType,
+    insulinType: defaultIns ? defaultIns.name : 'Novorapid',
+  };
+}
+
+async function _correctTherapyForBackdate(fromT, updated) {
+  if (!fromT) return;
+  var insulins   = updated.insulins || _TREATMENT_DEFAULTS.insulins;
+  var defaultIns = insulins.find(function(i){ return i.isDefault; }) || insulins[0];
+
+  // ── Local in-memory + localStorage — immediate canvas/UI correctness ────
   [SESSION, LOGGED_EVENTS, BOLUS_EVENTS].forEach(function(arr) {
     (arr || []).forEach(function(ev) {
-      if (ev && ev.t >= fromT && (ev.u || 0) > 0) ev.insulin_type = insulinName;
+      if (!ev || ev.t < fromT) return;
+      if ((ev.u || 0) > 0) ev.insulin_type = defaultIns.name;
+      if (ev.therapy_snapshot) ev.therapy_snapshot = _snapshotFromTherapy(updated, ev.t);
     });
+  });
+  (MEAL_HISTORY || []).forEach(function(m) {
+    if (m && m.t >= fromT && m.therapy_snapshot) m.therapy_snapshot = _snapshotFromTherapy(updated, m.t);
   });
   try { localStorage.setItem('river_logged', JSON.stringify(LOGGED_EVENTS)); } catch(e) {}
   try { localStorage.setItem('river_session', JSON.stringify(SESSION)); } catch(e) {}
+  try { saveMealHistory(); } catch(e) {}
 
   if (!SUPABASE_READY) return;
+
+  // ── Supabase: insulin_type — single value for all matching rows, cheap bulk PATCH ──
   try {
     await _sbFetch('events?t=gte.' + Math.round(fromT) + '&u=gt.0', {
-      method: 'PATCH',
-      prefer: 'return=minimal',
-      body: { insulin_type: insulinName },
+      method: 'PATCH', prefer: 'return=minimal',
+      body: { insulin_type: defaultIns.name },
     });
-  } catch(e) { console.warn('[treatment] insulin correction PATCH failed:', e.message); }
+  } catch(e) { console.warn('[treatment] insulin_type correction PATCH failed:', e.message); }
+
+  // ── Supabase: therapy_snapshot — varies per row (time-of-day ratio
+  // segment), so correct row-by-row, bounded by THERAPY_CORRECTION_CAP.
+  ['events', 'meal_history', 'bolus_outcomes'].forEach(function(table) {
+    (async function() {
+      try {
+        var rows = await _sbFetch(
+          table + '?t=gte.' + Math.round(fromT) + '&therapy_snapshot=not.is.null' +
+          '&select=t&order=t.asc&limit=' + THERAPY_CORRECTION_CAP,
+          {}
+        );
+        for (var i = 0; i < (rows || []).length; i++) {
+          var snap = _snapshotFromTherapy(updated, rows[i].t);
+          try {
+            await _sbFetch(table + '?t=eq.' + rows[i].t, {
+              method: 'PATCH', prefer: 'return=minimal',
+              body: { therapy_snapshot: snap },
+            });
+          } catch(e) { /* best-effort — skip this row */ }
+        }
+        if (rows && rows.length === THERAPY_CORRECTION_CAP) {
+          console.warn('[treatment] ' + table + ' therapy_snapshot correction hit the ' +
+            THERAPY_CORRECTION_CAP + '-row cap — older rows need a SQL backfill session');
+        }
+      } catch(e) { console.warn('[treatment] ' + table + ' therapy_snapshot correction failed:', e.message); }
+    })();
+  });
 }
+
 
 function openTreatmentPanel() {
   var ex = document.getElementById('treatment-overlay');
@@ -16070,10 +16134,7 @@ function _renderTreatmentForm(el) {
   };
 
   // ── bolus insulin — multi-insulin rotation ───────────────────────────────
-  // Snapshot the default insulin at render time so saveTreatmentForm can
-  // detect a switch and offer the retroactive correction.
   if (!t.insulins || !t.insulins.length) t.insulins = JSON.parse(JSON.stringify(_TREATMENT_DEFAULTS.insulins));
-  window._treatmentDefaultInsulinAtOpen = (t.insulins.find(function(i){return i.isDefault;}) || t.insulins[0]).name;
 
   var insulinRows = _insulinRowsHTML();
   var effectiveTimeHTML = timePickerHTML('tr-effective-time', new Date(), false);
@@ -16141,13 +16202,16 @@ function _renderTreatmentForm(el) {
       'without making it the default · peak/DIA per insulin are editable and ' +
       'versioned with every save' +
     '</div>' +
-    '<div style="' + ls + 'color:rgba(140,180,220,0.5)">treatment change applies from</div>' +
+    '<div style="' + ls + 'color:rgba(140,180,220,0.5)">this save applies from</div>' +
     effectiveTimeHTML +
     '<div style="font-family:\'DM Mono\',monospace;font-size:8px;color:rgba(120,140,160,0.4);' +
       'line-height:1.6;margin:-4px 0 4px;padding:0 2px">' +
-      'if you switched insulin a few days ago, set this to when the switch actually ' +
-      'happened — any bolus/correction logged from that time onward will be ' +
-      'corrected to the new default insulin' +
+      'River is a secondary record — the pump/pen app is primary, so changes ' +
+      'here are often entered after the fact. If anything on this screen ' +
+      '(insulin, ratios, basal, DIA, hypo settings) actually changed earlier, ' +
+      'set this to when it really happened. Every bolus/correction/meal logged ' +
+      'from that time onward will be corrected to match — insulin curve shape, ' +
+      'ISF/IC/basal snapshot, all of it' +
     '</div>' +
 
     // ── hypo ─────────────────────────────────────────────────────────────────
@@ -16552,18 +16616,21 @@ function saveTreatmentForm() {
     })
   };
 
-  // "applies from" — lets a treatment change be backdated to when it was
-  // actually implemented (e.g. switching to Fiasp a couple of days ago).
+  // "applies from" — lets ANY treatment change (ratios, basal, hypo, DIA,
+  // insulin) be backdated to when it actually took effect on the
+  // pump/pen — River is a secondary record and edits here are often
+  // retrospective. Anything more than a few minutes in the past triggers
+  // the retroactive correction below.
   var effectiveT = getTimeVal('tr-effective-time');
-  var prevDefault = window._treatmentDefaultInsulinAtOpen;
+  var isBackdated = (Date.now() - effectiveT) > 5 * 60000;
 
   _saveTreatmentSettings(updated, effectiveT).then(function() {
-    // If the default insulin changed and was backdated, retroactively stamp
-    // every bolus/correction logged since then with the new insulin —
-    // corrects the IOB curve shape for events already on the canvas.
-    if (newDefault !== prevDefault && effectiveT < Date.now()) {
-      _correctEventsInsulin(effectiveT, newDefault).then(function() {
-        showToast('treatment saved ✓\n' + newDefault + ' applied from ' +
+    if (isBackdated) {
+      // Retroactively correct insulin_type + therapy_snapshot on every
+      // event/meal/outcome logged since effectiveT — they were under
+      // these new settings even though logged before this save.
+      _correctTherapyForBackdate(effectiveT, updated).then(function() {
+        showToast('treatment saved ✓\napplied from ' +
           new Date(effectiveT).toLocaleString('en-GB',{day:'numeric',month:'short',hour:'2-digit',minute:'2-digit'}) +
           ' — past entries corrected');
         _ptCache = null;
