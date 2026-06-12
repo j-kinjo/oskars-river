@@ -1877,11 +1877,20 @@ function _removeActivePredictedCurve(t) {
     try { localStorage.setItem('river_predicted_curves_v' + _PRED_FORMULA_VERSION, JSON.stringify(_activePredictedCurves)); } catch(e) {}
   }
   if (MEAL_HISTORY) {
+    var mealsTouched = false;
     MEAL_HISTORY.forEach(function(meal) {
-      if (meal._predictedCurve && meal._predictedCurve[0] && Math.abs(meal._predictedCurve[0].t - t) < 60000) {
+      var curveAnchorMatch = meal._predictedCurve && meal._predictedCurve[0] &&
+        Math.abs(meal._predictedCurve[0].t - t) < 60000;
+      var mealTimeMatch = Math.abs(meal.t - t) < 60000;
+      if (curveAnchorMatch || mealTimeMatch) {
         delete meal._predictedCurve;
+        // Mark so _backfillPredictedCurves doesn't regenerate this ghost
+        // on the next sync — the underlying event was deliberately deleted.
+        meal._curveDeleted = true;
+        mealsTouched = true;
       }
     });
+    if (mealsTouched) saveMealHistory();
   }
 }
 
@@ -6739,6 +6748,7 @@ function _loadActiveCurvesFromMealHistory() {
 function _backfillPredictedCurves() {
   var now = Date.now();
   MEAL_HISTORY.forEach(function(meal) {
+    if (meal._curveDeleted) return; // user deleted this event — don't resurrect the ghost
     if (meal._predictedCurve && meal._predictedCurve.length > 1) return; // already have it
     if (!meal.t) return;
     if (now - meal.t > 24 * 3600000) return; // only backfill last 24h for rendering
@@ -15415,6 +15425,52 @@ function _saveDeletedTs() {
     _deletedEventTs = new Set(arr);
   } catch(_e) {}
 }
+
+// ── ORPHAN PREDICTION CURVE CLEANUP (one-time, on load) ───────────────
+// Catches "ghost" prediction curves left anchored to timestamps for events
+// that were deleted before _removeActivePredictedCurve existed (or where the
+// anchor time didn't line up exactly with the event's own t). Anything whose
+// anchor falls within 60s of a blocklisted deleted-event timestamp is purged
+// from _activePredictedCurves and from MEAL_HISTORY._predictedCurve.
+(function _pruneGhostPredictedCurves() {
+  if (!_deletedEventTs || _deletedEventTs.size === 0) return;
+  var deletedTs = Array.from(_deletedEventTs);
+  function isOrphan(anchorT) {
+    if (anchorT == null) return false;
+    for (var k = 0; k < deletedTs.length; k++) {
+      if (Math.abs(anchorT - deletedTs[k]) < 60000) return true;
+    }
+    return false;
+  }
+
+  var curvesChanged = false;
+  for (var i = _activePredictedCurves.length - 1; i >= 0; i--) {
+    var s = _activePredictedCurves[i];
+    var anchorT = s.pts && s.pts[0] && s.pts[0].t;
+    if (isOrphan(anchorT)) { _activePredictedCurves.splice(i, 1); curvesChanged = true; }
+  }
+  if (curvesChanged) {
+    try { localStorage.setItem('river_predicted_curves_v' + _PRED_FORMULA_VERSION, JSON.stringify(_activePredictedCurves)); } catch(e) {}
+  }
+
+  var mealsChanged = false;
+  MEAL_HISTORY.forEach(function(meal) {
+    var anchorT = meal._predictedCurve && meal._predictedCurve[0] && meal._predictedCurve[0].t;
+    if (isOrphan(anchorT) || isOrphan(meal.t)) {
+      if (meal._predictedCurve) { delete meal._predictedCurve; mealsChanged = true; }
+      if (!meal._curveDeleted)  { meal._curveDeleted = true;   mealsChanged = true; }
+    }
+  });
+  if (mealsChanged) saveMealHistory();
+})();
+
+// ── BACKFILL ON LOAD ────────────────────────────────────────────────
+// Previously only ran inside syncNow (gated on SUPABASE_READY). Run it
+// unconditionally here too so historic prediction curves reconstruct for
+// today's events even before/without a Supabase sync (e.g. a curve that
+// got cleared by _removeActivePredictedCurve for an unrelated event due
+// to anchor-time matching, or first load offline).
+_backfillPredictedCurves();
 
 function deleteEvent(idx) {
   var ev = LOGGED_EVENTS[idx];
