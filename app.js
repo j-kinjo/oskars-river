@@ -1869,7 +1869,7 @@ function _removeActivePredictedCurve(t) {
   var before = _activePredictedCurves.length;
   for (var i = _activePredictedCurves.length - 1; i >= 0; i--) {
     var s = _activePredictedCurves[i];
-    if (s.pts && s.pts[0] && Math.abs(s.pts[0].t - t) < 60000) {
+    if (s.pts && s.pts[0] && s.pts[0].t === t) {
       _activePredictedCurves.splice(i, 1);
     }
   }
@@ -1880,7 +1880,7 @@ function _removeActivePredictedCurve(t) {
     var mealsTouched = false;
     MEAL_HISTORY.forEach(function(meal) {
       var curveAnchorMatch = meal._predictedCurve && meal._predictedCurve[0] &&
-        Math.abs(meal._predictedCurve[0].t - t) < 60000;
+        meal._predictedCurve[0].t === t;
       if (curveAnchorMatch) {
         delete meal._predictedCurve;
         // Mark so _backfillPredictedCurves doesn't regenerate this ghost
@@ -6787,12 +6787,23 @@ function _backfillPredictedCurves() {
       items: (meal.items && meal.items.length) ? meal.items : [{ name: 'meal', carbs: totalCarbs, gi: avgGI }]
     }];
 
-    // Covering units — boluses within 90min before this meal
+    // Covering units — boluses within 90min before this meal, attributed
+    // only if this is the NEAREST meal to that bolus. Without this, a
+    // single bolus given between two closely-logged meals (e.g. 13 min
+    // apart) gets counted in full against BOTH meals' curves, making each
+    // look massively over-bolused and predicting a crash to the floor.
     var activeBoluses = [];
     LOGGED_EVENTS.forEach(function(ev) {
       if (!ev.u || ev.u <= 0 || ev.note === 'basal') return;
       var bAge = (anchorT - ev.t) / 60000;
-      if (bAge >= -15 && bAge <= 90) activeBoluses.push({ t: ev.t, u: ev.u });
+      if (bAge < -15 || bAge > 90) return;
+      var myDist = Math.abs(ev.t - anchorT);
+      var closerToOther = MEAL_HISTORY.some(function(other) {
+        if (other === meal || !other.t) return false;
+        return Math.abs(ev.t - other.t) < myDist;
+      });
+      if (closerToOther) return;
+      activeBoluses.push({ t: ev.t, u: ev.u });
     });
     if (activeBoluses.length === 0 && meal.u && meal.u > 0) {
       activeBoluses.push({ t: meal.bolus_t || anchorT, u: meal.u });
@@ -15444,10 +15455,7 @@ function _saveDeletedTs() {
   var deletedTs = Array.from(_deletedEventTs);
   function isOrphan(anchorT) {
     if (anchorT == null) return false;
-    for (var k = 0; k < deletedTs.length; k++) {
-      if (Math.abs(anchorT - deletedTs[k]) < 60000) return true;
-    }
-    return false;
+    return deletedTs.indexOf(anchorT) !== -1;
   }
 
   var curvesChanged = false;
