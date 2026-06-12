@@ -1816,17 +1816,42 @@ var _activePredictedCurves = (function() {
   } catch(e) { return []; }
 })();
 
+
+// Push a prediction snapshot onto _activePredictedCurves — dedupes by anchor
+// time, keeps newest-first order, trims to 20, persists to localStorage.
+// Shared by _snapshotPrediction and the meal-logging call sites so any new
+// curve (whichever path produced it) is immediately the one the canvas
+// "mist" overlay and forecast trace pick up — not whatever was already there
+// from a previous session's localStorage cache.
+function _pushActivePredictedCurve(pts, loggedAt) {
+  if (!pts || pts.length < 2) return;
+  var anchorT = pts[0].t;
+  loggedAt = loggedAt || anchorT;
+  var dup = _activePredictedCurves.some(function(s) {
+    return s.pts && s.pts[0] && Math.abs(s.pts[0].t - anchorT) < 60000;
+  });
+  if (dup) {
+    _activePredictedCurves.forEach(function(s) {
+      if (s.pts && s.pts[0] && Math.abs(s.pts[0].t - anchorT) < 60000) {
+        s.pts = pts;
+        s.loggedAt = loggedAt;
+      }
+    });
+  } else {
+    _activePredictedCurves.unshift({ loggedAt: loggedAt, pts: pts });
+  }
+  _activePredictedCurves.sort(function(a,b){ return b.loggedAt - a.loggedAt; });
+  if (_activePredictedCurves.length > 20) _activePredictedCurves.length = 20;
+  try { localStorage.setItem('river_predicted_curves_v' + _PRED_FORMULA_VERSION, JSON.stringify(_activePredictedCurves)); } catch(e) {}
+}
+
 function _snapshotPrediction() {
   // Anchor to now — so the prediction starts from current BG and shows
   // the effect of ALL active events from this moment forward.
   // This means corrections, boluses, hypos immediately shift the curve.
   var pts = buildSmartForecast(CGM_END || Date.now());
   if (!pts || pts.length < 2) return;
-  // Add to front, keep last 20 snapshots (one per event over ~24h)
-  _activePredictedCurves.unshift({ loggedAt: Date.now(), pts: pts });
-  if (_activePredictedCurves.length > 20) _activePredictedCurves.length = 20;
-  // Persist to localStorage so it survives page refresh
-  try { localStorage.setItem('river_predicted_curves_v' + _PRED_FORMULA_VERSION, JSON.stringify(_activePredictedCurves)); } catch(e) {}
+  _pushActivePredictedCurve(pts, Date.now());
   // Also store on most recent MEAL_HISTORY entry if present
   if (MEAL_HISTORY && MEAL_HISTORY[0]) MEAL_HISTORY[0]._predictedCurve = pts;
 }
@@ -7173,6 +7198,7 @@ function logPlate() {
     (function(){
       var _snap = buildSmartForecast();
       if (MEAL_HISTORY[0]) MEAL_HISTORY[0]._predictedCurve = _snap;
+      _pushActivePredictedCurve(_snap, MEAL_HISTORY[0] ? MEAL_HISTORY[0].t : Date.now());
       syncMealToSupabase(MEAL_HISTORY[0]);
       scheduleMealOutcome(MEAL_HISTORY[0], _snap);
     })();
@@ -9643,6 +9669,7 @@ function logMealEntry(carbsOnly) {
     (function(){
       var _snap = buildSmartForecast();
       if (MEAL_HISTORY[0]) MEAL_HISTORY[0]._predictedCurve = _snap;
+      _pushActivePredictedCurve(_snap, MEAL_HISTORY[0] ? MEAL_HISTORY[0].t : Date.now());
       syncMealToSupabase(MEAL_HISTORY[0]);
       scheduleMealOutcome(MEAL_HISTORY[0], _snap);
     })();
@@ -9690,6 +9717,7 @@ function confirmBolus(units) {
     (function(){
       var _snap = buildSmartForecast();
       if (MEAL_HISTORY[0]) MEAL_HISTORY[0]._predictedCurve = _snap;
+      _pushActivePredictedCurve(_snap, MEAL_HISTORY[0] ? MEAL_HISTORY[0].t : Date.now());
       syncMealToSupabase(MEAL_HISTORY[0]);
       scheduleMealOutcome(MEAL_HISTORY[0], _snap);
     })();
@@ -18054,6 +18082,7 @@ function commitPadImport() {
     (function(){
       var _snap = buildSmartForecast();
       if (MEAL_HISTORY[0]) MEAL_HISTORY[0]._predictedCurve = _snap;
+      _pushActivePredictedCurve(_snap, MEAL_HISTORY[0] ? MEAL_HISTORY[0].t : Date.now());
       syncMealToSupabase(MEAL_HISTORY[0]);
       scheduleMealOutcome(MEAL_HISTORY[0], _snap);
     })();
