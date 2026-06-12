@@ -1881,8 +1881,7 @@ function _removeActivePredictedCurve(t) {
     MEAL_HISTORY.forEach(function(meal) {
       var curveAnchorMatch = meal._predictedCurve && meal._predictedCurve[0] &&
         Math.abs(meal._predictedCurve[0].t - t) < 60000;
-      var mealTimeMatch = Math.abs(meal.t - t) < 60000;
-      if (curveAnchorMatch || mealTimeMatch) {
+      if (curveAnchorMatch) {
         delete meal._predictedCurve;
         // Mark so _backfillPredictedCurves doesn't regenerate this ghost
         // on the next sync — the underlying event was deliberately deleted.
@@ -6674,6 +6673,10 @@ async function syncMealHistoryFromSupabase() {
     MEAL_HISTORY.forEach(function(m) { localMap[m.t] = m; });
     var added = 0;
     rows.forEach(function(row) {
+      // Skip rows for events the user has explicitly deleted locally —
+      // otherwise a ghost prediction curve gets re-pulled on every sync.
+      if (typeof _deletedEventTs !== 'undefined' && _deletedEventTs.has(row.t)) return;
+
       var items = row.items;
       if (typeof items === 'string') { try { items = JSON.parse(items); } catch(e) { items = null; } }
       // Parse predicted_curve from Supabase
@@ -6681,6 +6684,8 @@ async function syncMealHistoryFromSupabase() {
       if (typeof predCurve === 'string') { try { predCurve = JSON.parse(predCurve); } catch(e) { predCurve = null; } }
 
       if (localMap[row.t]) {
+        // Don't resurrect a curve the user deliberately cleared locally
+        if (localMap[row.t]._curveDeleted) return;
         // Update existing record with Supabase predicted_curve if available
         if (predCurve && predCurve.length > 1) {
           localMap[row.t]._predictedCurve = predCurve;
@@ -15456,8 +15461,8 @@ function _saveDeletedTs() {
   var mealsChanged = false;
   MEAL_HISTORY.forEach(function(meal) {
     var anchorT = meal._predictedCurve && meal._predictedCurve[0] && meal._predictedCurve[0].t;
-    if (isOrphan(anchorT) || isOrphan(meal.t)) {
-      if (meal._predictedCurve) { delete meal._predictedCurve; mealsChanged = true; }
+    if (isOrphan(anchorT)) {
+      delete meal._predictedCurve; mealsChanged = true;
       if (!meal._curveDeleted)  { meal._curveDeleted = true;   mealsChanged = true; }
     }
   });
