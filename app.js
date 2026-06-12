@@ -847,24 +847,41 @@ function dataAt(t) {
     const m=(t-s.t)/60000;
     if (m<0||m>240) continue;
     if (s.note === 'basal') continue; // basal is not rapid-acting — no IOB curve
-    si += (s.u||0)*iobF(m);
+    si += (s.u||0)*iobF(m, _insulinForEvent(s));
     sc += (s.c||0)*cobF(m);
   }
   return { bg:h.bg, iob:h.iob+si, cob:h.cob+sc, pen:h.pen };
 }
 
-var _iobNormCache = {}; // cache {diaMins: norm} to avoid recomputing every frame
-function iobF(m) {
-  var diaMins = (_TREATMENT && _TREATMENT.dia) ? _TREATMENT.dia : 240;
+var _iobNormCache = {}; // cache {'diaMins_peakMins': norm} to avoid recomputing every frame
+// Generic biexponential-shaped IOB decay curve. peakMins defaults to the
+// historic 0.3125*diaMins fraction (== 75min @ 240min DIA, i.e. Novorapid)
+// when not given explicitly — insulin-specific peaks (e.g. Fiasp ~55min)
+// should be passed in via _getInsulinProfile().
+function _iobShape(m, diaMins, peakMins) {
+  diaMins  = diaMins  || 240;
+  peakMins = peakMins || (diaMins * 0.3125);
   if (m<=0) return 1; if (m>=diaMins) return 0;
-  var peakM = diaMins * 0.3125;
+  var peakM = peakMins;
   var tailM = diaMins - peakM;
-  if (!_iobNormCache[diaMins]) {
+  var cacheKey = diaMins + '_' + peakM;
+  if (!_iobNormCache[cacheKey]) {
     var norm=0; for(var x=0;x<diaMins;x+=2) norm+=(x<=peakM?x/peakM:Math.max(0,1-(x-peakM)/tailM))*2;
-    _iobNormCache[diaMins] = norm;
+    _iobNormCache[cacheKey] = norm;
   }
   var d=0; for(var x=0;x<m;x+=2) d+=(x<=peakM?x/peakM:Math.max(0,1-(x-peakM)/tailM))*2;
-  return Math.max(0,1-Math.min(1,d/_iobNormCache[diaMins]));
+  return Math.max(0,1-Math.min(1,d/_iobNormCache[cacheKey]));
+}
+// insulinName: which insulin was used for this dose — resolves to its
+// pharmacokinetic profile (Novorapid/Fiasp/etc). Falls back to the current
+// default insulin, then to _TREATMENT.dia, then the 240min hardcoded default.
+function iobF(m, insulinName) {
+  if (insulinName) {
+    var p = _getInsulinProfile(insulinName);
+    return _iobShape(m, p.diaMins, p.peakMins);
+  }
+  var diaMins = (_TREATMENT && _TREATMENT.dia) ? _TREATMENT.dia : 240;
+  return _iobShape(m, diaMins);
 }
 function cobF(m,gi=60) {
   if (m<=0) return 1; if (m>=240) return 0;
@@ -1371,7 +1388,7 @@ function _getActiveBolusEvents() {
     var key = Math.round(ev.t / 30000);
     if (seen[key]) return;
     seen[key] = true;
-    events.push({ t: ev.t, u: ev.u });
+    events.push({ t: ev.t, u: ev.u, insulin_type: _insulinForEvent(ev) });
   });
   return events.sort(function(a,b){ return a.t-b.t; });
 }
@@ -1444,18 +1461,10 @@ function _cobFgi(mins, gi) {
   return Math.max(0, 1 - Math.min(1, 0.5*(1+Math.tanh(0.7978845608*(z+0.044715*z*z*z)))));
 }
 
-function _iobFn(mins, diaMins) {
-  diaMins = diaMins || 240;
-  if (mins <= 0) return 1; if (mins >= diaMins) return 0;
-  var peakM = diaMins * 0.3125;
-  var tailM = diaMins - peakM;
-  if (!_iobNormCache[diaMins]) {
-    var norm=0; for(var x=0;x<diaMins;x+=2) norm+=(x<=peakM?x/peakM:Math.max(0,1-(x-peakM)/tailM))*2;
-    _iobNormCache[diaMins] = norm;
-  }
-  var d = 0;
-  for (var x = 0; x < mins; x += 2) d += (x <= peakM ? x/peakM : Math.max(0,1-(x-peakM)/tailM))*2;
-  return Math.max(0, 1 - Math.min(1, d / _iobNormCache[diaMins]));
+// Thin wrapper over the shared _iobShape — kept for call sites that pass
+// diaMins/peakMins directly (e.g. per-insulin curve rendering).
+function _iobFn(mins, diaMins, peakMins) {
+  return _iobShape(mins, diaMins, peakMins);
 }
 
 // Zoom-aware sigma: bell width scales with viewSpan so it looks right at any zoom
@@ -1651,12 +1660,16 @@ function _drawIOBReservoir() {
 
   bolusEvents.forEach(function(bolus) {
     var elapsedMin  = (viewTime - bolus.t) / 60000;
-    var diaMins     = (_TREATMENT && _TREATMENT.dia) ? _TREATMENT.dia : 240;
-    var remaining   = _iobFn(elapsedMin, diaMins);
+    var insProfile  = _getInsulinProfile(bolus.insulin_type);
+    var diaMins     = insProfile.diaMins;
+    var peakMins    = insProfile.peakMins;
+    var remaining   = _iobFn(elapsedMin, diaMins, peakMins);
 
-    var peakT       = bolus.t + 75 * 60000;
-    var sigmaRMins  = 32;
-    var sigmaFMins  = 70;
+    var peakT       = bolus.t + peakMins * 60000;
+    // Bell sigma scales with the insulin's peak/tail timing — ratios
+    // preserve the original Novorapid feel (32min rise / 70min fall @ 75/240).
+    var sigmaRMins  = peakMins * (32 / 75);
+    var sigmaFMins  = (diaMins - peakMins) * (70 / 165);
 
     // Chip Y — origin on CGM line where this bell is born
     var chipY     = bgToY(dataAt(bolus.t).bg || dataAt(viewTime).bg);
@@ -1957,7 +1970,9 @@ function _computeForecastCurve(anchorT, bg, meals, boluses, historicalRatios) {
       if (covered) return;
       var bm   = (anchorT - bolus.t) / 60000;
       var bISF = getISF(bolus.t, historicalRatios) || ISF;
-      net -= bolus.u * (_iobFn(Math.max(0, bm)) - _iobFn(Math.max(0, bm) + mins)) * bISF;
+      var bProfile = _getInsulinProfile(bolus.insulin_type);
+      net -= bolus.u * (_iobFn(Math.max(0, bm), bProfile.diaMins, bProfile.peakMins) -
+                         _iobFn(Math.max(0, bm) + mins, bProfile.diaMins, bProfile.peakMins)) * bISF;
     });
 
     return net;
@@ -6579,6 +6594,7 @@ function _currentTherapySnapshot(t) {
     isf: seg.isf, ic: seg.ic,
     basal: _TREATMENT && _TREATMENT.basalDose,
     basalType: _TREATMENT && _TREATMENT.basalType,
+    insulinType: _currentSelectedInsulin(),
   };
 }
 
@@ -7025,6 +7041,7 @@ function openKitchen() {
   _sheetMode  = 'kitchen';
   _plateItems = [];
   _plateBolused = false;
+  window._selectedInsulinType = null; // reset to default — re-derived by _insulinSelectorHTML
   renderSheet();
   document.getElementById('sheet').classList.add('open');
   document.getElementById('overlay').classList.add('open');
@@ -7165,6 +7182,8 @@ function renderKitchen() {
             '<input id="wait-mins" type="number" value="'+eatWait+'" min="0" max="60" step="5" onchange="setWaitDirect(this.value)" style="width:40px;text-align:center;padding:4px;border-radius:6px;border:1px solid var(--rv-panel-border);background:var(--rv-input-bg);font-family:\'DM Mono\',monospace;font-size:12px;color:var(--rv-text-secondary);outline:none">' +
             '<button onclick="setWait(5)" style="width:28px;height:28px;border-radius:7px;border:1px solid var(--rv-panel-border);background:var(--rv-input-bg);color:var(--rv-text-secondary);font-size:16px;cursor:pointer">+</button>' +
           '</div>' +
+          // Insulin selector (only shown when >1 insulin active)
+          _insulinSelectorHTML('rgba(60,130,220,OPACITY)') +
           // Bolus input
           '<div style="display:flex;align-items:center;gap:10px;margin-bottom:10px">' +
             '<input id="plate-bolus" type="number" inputmode="decimal" placeholder="'+bolus.total.toFixed(1)+'" step="0.5" min="0" max="20" ' +
@@ -7247,20 +7266,22 @@ function bolusNow() {
   if (u > 20) { showToast('⚠️ ' + u.toFixed(1) + 'U is very high — max 20U per entry'); return; }
   if (u > 15) { showToast('⚠️ ' + u.toFixed(1) + 'U logged — double-check this dose'); }
   var t = getEntryTime() || Date.now();
+  var insType = _currentSelectedInsulin();
   SESSION.push({t:t, c:0, u:u});
-  LOGGED_EVENTS.push({t:t, c:0, u:u, note:'bolus', logged_by:_thisPersonId||'unknown', local:true});
+  LOGGED_EVENTS.push({t:t, c:0, u:u, note:'bolus', insulin_type:insType, logged_by:_thisPersonId||'unknown', local:true});
   try{localStorage.setItem('river_session',JSON.stringify(SESSION));}catch(e){}
   try{localStorage.setItem('river_logged',JSON.stringify(LOGGED_EVENTS));}catch(e){}
   topUpIOB(u);
   // Snapshot IOB prediction curve for outcome tracking
   (function() {
-    var bolusEv = {t:t, u:u, logged_by:_thisPersonId||'unknown'};
+    var bolusEv = {t:t, u:u, insulin_type:insType, logged_by:_thisPersonId||'unknown'};
     var iobCurve = [];
     var d0 = dataAt(t);
     var ISF = _currentTherapySnapshot(t);
     var isf = ISF ? ISF.isf : 6.5;
+    var insProfile = _getInsulinProfile(insType);
     for (var m = 5; m <= 240; m += 5) {
-      var predBG = d0 ? Math.max(1.8, d0.bg - u * (1 - _iobFn(m)) * isf) : 0;
+      var predBG = d0 ? Math.max(1.8, d0.bg - u * (1 - _iobFn(m, insProfile.diaMins, insProfile.peakMins)) * isf) : 0;
       iobCurve.push({mins: m, bg: +predBG.toFixed(2)});
     }
     _createBolusOutcomeBaseline(bolusEv, iobCurve);
@@ -7850,6 +7871,7 @@ function openSheet() {
   _mealItems  = [];
   _bolusGiven = false;
   _sheetMode  = 'meal';
+  window._selectedInsulinType = null; // reset to default — re-derived by _insulinSelectorHTML
   // Meal mode: full-screen dark overlay, consistent with correction/hypo screens
   var s = document.getElementById('sheet');
   if (s) {
@@ -8085,6 +8107,9 @@ function renderSheet() {
           '</div>' +
         '</div>' +
 
+        // Insulin selector (only shown when >1 insulin active)
+        _insulinSelectorHTML('rgba(40,85,200,OPACITY)') +
+
         // Bolus input
         '<div style="font-family:\'DM Mono\',monospace;font-size:9px;color:rgba(180,200,220,0.6);' +
           'letter-spacing:1px;text-transform:uppercase;margin-bottom:8px">insulin given</div>' +
@@ -8185,6 +8210,7 @@ function renderSheet() {
     (totalCarbs === 0 ?
       '<div style="padding:0 18px;margin-bottom:12px">' +
         '<div style="font-family:\'DM Mono\',monospace;font-size:9px;color:rgba(180,200,220,0.6);letter-spacing:1px;text-transform:uppercase;margin-bottom:8px">manual bolus / correction</div>' +
+        _insulinSelectorHTML('rgba(40,85,200,OPACITY)') +
         '<div style="display:flex;align-items:center;gap:10px">' +
           '<div style="width:8px;height:8px;border-radius:50%;background:rgba(40,85,200,0.8);flex-shrink:0"></div>' +
           '<input id="in-i" type="number" inputmode="decimal" placeholder="units" min="0" max="20" step="0.5"' +
@@ -9742,7 +9768,7 @@ function logMealEntry(carbsOnly) {
   if (u > 0) {
     var bolusT = _safeEventT(t);
     SESSION.push({t: bolusT, c: 0, u: u});
-    LOGGED_EVENTS.push({t: bolusT, c: 0, u: u, note: 'bolus', local: true});
+    LOGGED_EVENTS.push({t: bolusT, c: 0, u: u, note: 'bolus', insulin_type: _currentSelectedInsulin(), local: true});
   }
 
   var carbT = _safeEventT(t + eatWaitNow * 60000); // when carbs enter the system
@@ -9873,7 +9899,7 @@ function commitManualBolus() {
   if (u > 20) { showToast('⚠️ ' + u.toFixed(1) + 'U is very high — max 20U per entry'); return; }
   if (u > 15) { showToast('⚠️ ' + u.toFixed(1) + 'U logged — double-check this dose'); }
   var t = typeof getEntryTime === 'function' ? getEntryTime() : Date.now();
-  SESSION.push({t: t, c: 0, u: u});
+  SESSION.push({t: t, c: 0, u: u, insulin_type: _currentSelectedInsulin()});
   try { localStorage.setItem('river_session',JSON.stringify(SESSION)); } catch(e) {}
   _snapshotPrediction();
   showToast('💧 ' + u.toFixed(1) + 'U logged');
@@ -11205,6 +11231,7 @@ function commitBasalLog() {
 }
 
 function openCorrectionLog(){
+  window._selectedInsulinType = null; // reset to default — re-derived by _insulinSelectorHTML
   var d=dataAt(viewTime);
   var ISF=getISF(viewTime);
   var sug=Math.max(0,Math.round(((d.bg-getTarget(viewTime))/ISF)*2)/2);
@@ -11228,6 +11255,7 @@ function openCorrectionLog(){
   s+='<input id="corr-units" type="number" step="0.5" min="0" max="20" inputmode="decimal" value="'+sug.toFixed(1)+'" oninput="_corrValidate()" style="flex:1;padding:10px;border-radius:8px;border:1px solid rgba(80,130,255,0.3);background:rgba(10,20,60,0.4);font-family:\'DM Mono\',monospace;font-size:18px;color:rgba(160,200,255,0.9);text-align:center;outline:none;transition:border-color .15s">';
   s+='<span style="font-family:\'DM Mono\',monospace;font-size:13px;color:rgba(100,150,255,0.75)">U</span></div>';
   s+='<div id="corr-err" style="font-family:\'DM Mono\',monospace;font-size:10px;color:rgba(255,100,80,0.9);min-height:18px;margin-bottom:12px;text-align:center;letter-spacing:.3px"></div>';
+  s+=_insulinSelectorHTML('rgba(100,150,255,OPACITY)');
   s+='<button id="corr-log-btn" onclick="logCorrection()" style="width:100%;padding:14px;border-radius:10px;border:1px solid rgba(80,130,255,0.3);background:rgba(20,40,120,0.3);font-family:\'Fraunces\',serif;font-style:italic;font-weight:200;font-size:17px;color:rgba(140,190,255,0.9);cursor:pointer;margin-bottom:12px;transition:opacity .15s">log correction</button>';
   s+='<div style="text-align:center"><button onclick="closeCorrectionLog()" style="background:none;border:none;cursor:pointer;font-family:\'DM Mono\',monospace;font-size:9px;letter-spacing:1px;text-transform:uppercase;color:rgba(100,150,255,0.4);padding:4px">cancel</button></div></div>';
   el.innerHTML=s; document.body.appendChild(el);
@@ -11261,8 +11289,9 @@ function logCorrection(){
   if(u>20){showToast('⚠️ '+u.toFixed(1)+'U is very high — max 20U per correction');return;}
   if(u>10){showToast('⚠️ '+u.toFixed(1)+'U logged — double-check this dose');}
   var now=_safeEventT(getTimeVal('corr-time'));
+  var insType=_currentSelectedInsulin();
   SESSION.push({t:now,c:0,u:u});
-  LOGGED_EVENTS.push({t:now,c:0,u:u,note:'correction',logged_by:_thisPersonId||'unknown',local:true});
+  LOGGED_EVENTS.push({t:now,c:0,u:u,note:'correction',insulin_type:insType,logged_by:_thisPersonId||'unknown',local:true});
   try{localStorage.setItem('river_session',JSON.stringify(SESSION));}catch(e){}
   try{localStorage.setItem('river_logged',JSON.stringify(LOGGED_EVENTS));}catch(e){}
   // Snapshot prediction at log time — stored globally for drawForecastTrace
@@ -15749,11 +15778,120 @@ function openCGMSettings() {
 // ── TREATMENT SETTINGS — stored in Supabase settings table ──────────
 var _TREATMENT = null; // cached in memory, loaded on open
 
+// ── INSULIN PROFILES ───────────────────────────────────────────────────
+// Pharmacokinetic shape per insulin type — drives the IOB curve (peak
+// timing + duration of action). `_TREATMENT.insulins` holds the rotation
+// of insulins currently in use; these are the known-shape defaults that
+// get applied when an insulin is added/switched to.
+const INSULIN_PROFILES = {
+  Novorapid: { label: 'NovoRapid', peakMins: 75, diaMins: 240, info: 'peak ~75 min · 4 hr tail' },
+  Fiasp:     { label: 'Fiasp',     peakMins: 55, diaMins: 210, info: 'peak ~55 min · 3.5 hr tail' },
+  Humalog:   { label: 'Humalog',   peakMins: 75, diaMins: 240, info: 'peak ~75 min · 4 hr tail' },
+  Apidra:    { label: 'Apidra',    peakMins: 70, diaMins: 240, info: 'peak ~70 min · 4 hr tail' },
+  Lyumjev:   { label: 'Lyumjev',   peakMins: 50, diaMins: 210, info: 'peak ~50 min · 3.5 hr tail' },
+};
+
+// Returns {name, peakMins, diaMins, label} — merges any user override stored
+// on _TREATMENT.insulins with the known INSULIN_PROFILES shape, falling back
+// to Novorapid's shape for anything unrecognised.
+function _getInsulinProfile(name) {
+  var base   = INSULIN_PROFILES[name] || INSULIN_PROFILES.Novorapid;
+  var list   = (_TREATMENT && _TREATMENT.insulins) || [];
+  var custom = list.find(function(i){ return i.name === name; });
+  return {
+    name:     name || 'Novorapid',
+    peakMins: (custom && custom.peakMins) || base.peakMins,
+    diaMins:  (custom && custom.diaMins)  || base.diaMins,
+    label:    base.label || name || 'Novorapid',
+  };
+}
+
+// All insulins currently "in rotation" (active=true). Always returns at
+// least one entry, even before _TREATMENT has loaded.
+function _activeInsulins() {
+  var list = (_TREATMENT && _TREATMENT.insulins) || _TREATMENT_DEFAULTS.insulins;
+  var active = list.filter(function(i){ return i.active; });
+  return active.length ? active : list.slice(0, 1);
+}
+
+// The default/primary insulin — pre-selected at correction/meal time and
+// used as the fallback for events with no explicit insulin_type.
+function _defaultInsulin() {
+  var list = (_TREATMENT && _TREATMENT.insulins) || _TREATMENT_DEFAULTS.insulins;
+  return list.find(function(i){ return i.isDefault; }) || list[0] || { name: 'Novorapid' };
+}
+
+// Which insulin was used for a given logged event — explicit per-event
+// insulin_type wins, otherwise the current default.
+function _insulinForEvent(ev) {
+  return (ev && ev.insulin_type) || _defaultInsulin().name;
+}
+
+// Which insulin is selected in the currently-open logging sheet/overlay —
+// set by the insulin-selector chips (only shown when >1 insulin is active).
+// Falls back to the default/primary insulin when nothing has been picked.
+function _currentSelectedInsulin() {
+  return window._selectedInsulinType || _defaultInsulin().name;
+}
+
+// Renders a row of insulin-selector chips when more than one insulin is
+// "active" (in rotation). Returns '' (nothing rendered) when there's only
+// one — keeps single-insulin households free of extra UI.
+// onSelect: name of a global function to call on tap, e.g. '_pickLogInsulin'
+function _insulinSelectorHTML(accentRGBA) {
+  var active = _activeInsulins();
+  if (active.length <= 1) {
+    window._selectedInsulinType = active[0] ? active[0].name : _defaultInsulin().name;
+    return '';
+  }
+  if (!window._selectedInsulinType || !active.some(function(i){ return i.name === window._selectedInsulinType; })) {
+    window._selectedInsulinType = _defaultInsulin().name;
+  }
+  var chips = active.map(function(i) {
+    var sel = i.name === window._selectedInsulinType;
+    return '<button onclick="_pickLogInsulin(\'' + i.name + '\',this)" style="' +
+      'padding:5px 12px;border-radius:6px;border:1px solid ' +
+      (sel ? accentRGBA.replace('OPACITY','0.5') : 'var(--rv-panel-border)') + ';' +
+      'background:' + (sel ? accentRGBA.replace('OPACITY','0.12') : 'transparent') + ';' +
+      'font-family:\'DM Mono\',monospace;font-size:11px;' +
+      'color:' + (sel ? accentRGBA.replace('OPACITY','0.9') : 'rgba(200,220,240,0.4)') + ';cursor:pointer">' +
+      i.name + '</button>';
+  }).join('');
+  return '<div style="display:flex;align-items:center;gap:6px;margin-bottom:10px">' +
+    '<span style="font-family:\'DM Mono\',monospace;font-size:9px;letter-spacing:1px;' +
+    'text-transform:uppercase;color:rgba(140,160,180,0.4);margin-right:4px">insulin</span>' +
+    chips + '</div>';
+}
+
+// Tap handler for the insulin-selector chips above.
+function _pickLogInsulin(name, btnEl) {
+  window._selectedInsulinType = name;
+  if (!btnEl || !btnEl.parentElement) return;
+  Array.prototype.forEach.call(btnEl.parentElement.querySelectorAll('button'), function(b) {
+    var sel = b.textContent === name;
+    b.style.borderColor = sel ? 'rgba(100,200,160,0.5)' : 'var(--rv-panel-border)';
+    b.style.background  = sel ? 'rgba(100,200,160,0.12)' : 'transparent';
+    b.style.color       = sel ? 'rgba(100,200,160,0.9)'  : 'rgba(200,220,240,0.4)';
+  });
+}
+
+// Build a single-insulin `insulins` array from a legacy bolus_type string —
+// used when reading old therapy_history rows that predate multi-insulin support.
+function _deriveInsulinsFromBolusType(bolusType) {
+  var name = bolusType || 'Novorapid';
+  var p = INSULIN_PROFILES[name] || INSULIN_PROFILES.Novorapid;
+  return [{ name: name, peakMins: p.peakMins, diaMins: p.diaMins, active: true, isDefault: true }];
+}
+
 var _TREATMENT_DEFAULTS = {
   basalDose: 6,
   basalType: 'Degludec',
   basalTime: '17:00',
   bolusType: 'Novorapid',
+  insulins: [
+    { name: 'Novorapid', peakMins: 75, diaMins: 240, active: true,  isDefault: true },
+    { name: 'Fiasp',     peakMins: 55, diaMins: 210, active: false, isDefault: false },
+  ],
   hypoThreshold: 3.9,
   hypoCarbs: 15,
   ratios: [
@@ -15772,16 +15910,24 @@ async function _loadTreatmentSettings() {
   if (SUPABASE_READY) {
     try {
       var rows = await _sbFetch(
-        'therapy_history?order=t.desc&limit=1&select=ratios,basal_dose,basal_type,basal_time,bolus_type,hypo_threshold,hypo_carbs,dia,ketone_threshold,ketone_window_mins,hypo_recheck_mins,show_ketone_timer,show_hypo_timer,show_correction_timer',
+        'therapy_history?order=t.desc&limit=1&select=ratios,basal_dose,basal_type,basal_time,bolus_type,insulins,hypo_threshold,hypo_carbs,dia,ketone_threshold,ketone_window_mins,hypo_recheck_mins,show_ketone_timer,show_hypo_timer,show_correction_timer',
         {}
       );
       if (rows && rows.length > 0) {
         var r = rows[0];
+        // insulins: new multi-insulin rotation. Older rows predate this column
+        // (or the column doesn't exist yet) — derive a single-insulin rotation
+        // from the legacy bolus_type so existing setups keep working.
+        var insulinsList = (Array.isArray(r.insulins) && r.insulins.length)
+          ? r.insulins
+          : _deriveInsulinsFromBolusType(r.bolus_type);
+        var defaultIns = insulinsList.find(function(i){ return i.isDefault; }) || insulinsList[0];
         _TREATMENT = Object.assign({}, _TREATMENT_DEFAULTS, {
           basalDose:     r.basal_dose,
           basalType:     r.basal_type     || _TREATMENT_DEFAULTS.basalType,
           basalTime:     r.basal_time     || _TREATMENT_DEFAULTS.basalTime,
-          bolusType:     r.bolus_type     || _TREATMENT_DEFAULTS.bolusType,
+          bolusType:     r.bolus_type     || (defaultIns && defaultIns.name) || _TREATMENT_DEFAULTS.bolusType,
+          insulins:      insulinsList,
           hypoThreshold: r.hypo_threshold || _TREATMENT_DEFAULTS.hypoThreshold,
           hypoCarbs:     r.hypo_carbs     || _TREATMENT_DEFAULTS.hypoCarbs,
           ratios:        r.ratios         || _TREATMENT_DEFAULTS.ratios,
@@ -15806,22 +15952,28 @@ async function _loadTreatmentSettings() {
   _TREATMENT = JSON.parse(JSON.stringify(_TREATMENT_DEFAULTS));
 }
 
-async function _saveTreatmentSettings(data) {
+async function _saveTreatmentSettings(data, effectiveT) {
   _TREATMENT = data;
   try { localStorage.setItem('river_treatment', JSON.stringify(data)); } catch(e) {}
   if (!SUPABASE_READY) return;
   // therapy_history is the sole Supabase target — append-only audit log.
   // (settings table removed — _loadTreatmentSettings reads therapy_history instead)
+  // effectiveT lets a therapy change be backdated to when it was actually
+  // implemented (e.g. "we switched to Fiasp at dinner two days ago") —
+  // defaults to now for a normal settings save.
+  var insulinsList = data.insulins || _TREATMENT_DEFAULTS.insulins;
+  var defaultIns   = insulinsList.find(function(i){ return i.isDefault; }) || insulinsList[0];
   try {
     await _sbFetch('therapy_history', {
       method: 'POST',
       prefer: 'return=minimal',
       body: [{
-        t:              Date.now(),
+        t:              effectiveT || Date.now(),
         basal_dose:     data.basalDose,
         basal_type:     data.basalType,
         basal_time:     data.basalTime,
-        bolus_type:     data.bolusType,
+        bolus_type:     (defaultIns && defaultIns.name) || data.bolusType,
+        insulins:       insulinsList,
         hypo_threshold: data.hypoThreshold,
         hypo_carbs:     data.hypoCarbs,
         ratios:         data.ratios,
@@ -15830,6 +15982,35 @@ async function _saveTreatmentSettings(data) {
       }],
     });
   } catch(e) { console.warn('[treatment] therapy_history save failed:', e.message); }
+  // Invalidate the therapy_history lookup cache so backdated/new rows are picked up
+  _therapyHistoryCache = null;
+}
+
+// ── RETROACTIVE INSULIN CORRECTION ────────────────────────────────────
+// When a treatment change is backdated (effectiveT in the past), every
+// bolus/correction/meal event logged from that point onward was actually
+// given with the NEW insulin — even though it was recorded before this
+// settings save happened. This stamps insulin_type on those events so the
+// IOB curve renders with the correct pharmacokinetic shape retroactively.
+async function _correctEventsInsulin(fromT, insulinName) {
+  if (!fromT || !insulinName) return;
+  // Local state — in-memory + cached events, so the canvas updates immediately
+  [SESSION, LOGGED_EVENTS, BOLUS_EVENTS].forEach(function(arr) {
+    (arr || []).forEach(function(ev) {
+      if (ev && ev.t >= fromT && (ev.u || 0) > 0) ev.insulin_type = insulinName;
+    });
+  });
+  try { localStorage.setItem('river_logged', JSON.stringify(LOGGED_EVENTS)); } catch(e) {}
+  try { localStorage.setItem('river_session', JSON.stringify(SESSION)); } catch(e) {}
+
+  if (!SUPABASE_READY) return;
+  try {
+    await _sbFetch('events?t=gte.' + Math.round(fromT) + '&u=gt.0', {
+      method: 'PATCH',
+      prefer: 'return=minimal',
+      body: { insulin_type: insulinName },
+    });
+  } catch(e) { console.warn('[treatment] insulin correction PATCH failed:', e.message); }
 }
 
 function openTreatmentPanel() {
@@ -15885,20 +16066,14 @@ function _renderTreatmentForm(el) {
     return '<span style="font-size:9px;color:' + c + ';min-width:34px;text-align:right">' + tx + '</span>';
   };
 
-  // ── bolus type selector ──────────────────────────────────────────────────
-  var bolusOptions = ['Novorapid','Fiasp'].map(function(b) {
-    var sel = (t.bolusType || 'Novorapid') === b;
-    return '<button onclick="_setBolusType(\''+b+'\')" id="tr-bolus-'+b+'" style="' +
-      'padding:5px 12px;border-radius:6px;border:1px solid ' +
-      (sel ? 'rgba(100,200,160,0.5)' : 'var(--rv-panel-border)') + ';' +
-      'background:' + (sel ? 'rgba(100,200,160,0.1)' : 'transparent') + ';' +
-      'font-family:\'DM Mono\',monospace;font-size:11px;' +
-      'color:' + (sel ? 'rgba(100,200,160,0.9)' : 'rgba(200,220,240,0.4)') + ';cursor:pointer">' +
-      b + '</button>';
-  }).join('');
+  // ── bolus insulin — multi-insulin rotation ───────────────────────────────
+  // Snapshot the default insulin at render time so saveTreatmentForm can
+  // detect a switch and offer the retroactive correction.
+  if (!t.insulins || !t.insulins.length) t.insulins = JSON.parse(JSON.stringify(_TREATMENT_DEFAULTS.insulins));
+  window._treatmentDefaultInsulinAtOpen = (t.insulins.find(function(i){return i.isDefault;}) || t.insulins[0]).name;
 
-  var bolusInfo = { Novorapid: 'peak ~75 min · 4 hr tail', Fiasp: 'peak ~55 min · 4 hr tail' };
-  var currentBolus = t.bolusType || 'Novorapid';
+  var insulinRows = _insulinRowsHTML();
+  var effectiveTimeHTML = timePickerHTML('tr-effective-time', new Date(), false);
 
   // ── IC/ISF ratio rows — time-based ──────────────────────────────────────
   var ratioHeader = '<div style="display:flex;align-items:center;justify-content:flex-end;gap:4px;' +
@@ -15954,12 +16129,21 @@ function _renderTreatmentForm(el) {
     '</div>' +
 
     // ── bolus insulin ────────────────────────────────────────────────────────
-    '<div style="' + ls + 'color:rgba(100,180,140,0.5)">bolus insulin</div>' +
-    '<div style="' + rs + 'flex-direction:column;align-items:flex-start;gap:10px">' +
-      '<div style="display:flex;gap:8px">' + bolusOptions + '</div>' +
-      '<div id="tr-bolus-info" style="font-size:10px;color:rgba(160,200,180,0.6)">' +
-        bolusInfo[currentBolus] +
-      '</div>' +
+    '<div style="' + ls + 'color:rgba(100,180,140,0.5)">bolus insulin · rotation</div>' +
+    '<div id="tr-insulins-section">' + insulinRows + '</div>' +
+    '<div style="font-family:\'DM Mono\',monospace;font-size:8px;color:rgba(120,140,160,0.4);' +
+      'line-height:1.6;margin:6px 0 4px;padding:0 2px">' +
+      'tap <b>default</b> to set the primary insulin used for new doses · ' +
+      'toggle <b>active</b> to keep an insulin available in the at-dose selector ' +
+      'without making it the default' +
+    '</div>' +
+    '<div style="' + ls + 'color:rgba(140,180,220,0.5)">treatment change applies from</div>' +
+    effectiveTimeHTML +
+    '<div style="font-family:\'DM Mono\',monospace;font-size:8px;color:rgba(120,140,160,0.4);' +
+      'line-height:1.6;margin:-4px 0 4px;padding:0 2px">' +
+      'if you switched insulin a few days ago, set this to when the switch actually ' +
+      'happened — any bolus/correction logged from that time onward will be ' +
+      'corrected to the new default insulin' +
     '</div>' +
 
     // ── hypo ─────────────────────────────────────────────────────────────────
@@ -15998,20 +16182,106 @@ function _renderTreatmentForm(el) {
     '</div>';
 }
 
-function _setBolusType(type) {
+// ── INSULIN ROTATION MANAGEMENT (treatment panel) ───────────────────────
+// Renders the per-insulin rows: name + PK info, "default" + "active"
+// toggles, plus an "add" row for any known insulin not yet in rotation.
+function _insulinRowsHTML() {
   if (!_TREATMENT) _TREATMENT = JSON.parse(JSON.stringify(_TREATMENT_DEFAULTS));
-  _TREATMENT.bolusType = type;
-  var bolusInfo = { Novorapid: 'peak ~75 min · 4 hr tail', Fiasp: 'peak ~55 min · 4 hr tail' };
-  ['Novorapid','Fiasp'].forEach(function(b) {
-    var btn = document.getElementById('tr-bolus-' + b);
-    if (!btn) return;
-    var sel = b === type;
-    btn.style.borderColor = sel ? 'rgba(100,200,160,0.5)' : 'var(--rv-panel-border)';
-    btn.style.background  = sel ? 'rgba(100,200,160,0.1)' : 'transparent';
-    btn.style.color       = sel ? 'rgba(100,200,160,0.9)' : 'rgba(200,220,240,0.4)';
+  var insulins = _TREATMENT.insulins || _TREATMENT_DEFAULTS.insulins;
+
+  var rowStyle = 'display:flex;align-items:center;justify-content:space-between;' +
+    'padding:9px 12px;border-radius:9px;background:var(--rv-input-bg);' +
+    'border:1px solid var(--rv-panel-border);margin-bottom:6px;';
+
+  var btn = function(label, on, onColor) {
+    return 'style="padding:5px 10px;border-radius:6px;border:1px solid ' +
+      (on ? onColor.replace('OPACITY', '0.5') : 'var(--rv-panel-border)') + ';' +
+      'background:' + (on ? onColor.replace('OPACITY', '0.1') : 'transparent') + ';' +
+      'font-family:\'DM Mono\',monospace;font-size:9px;letter-spacing:0.5px;text-transform:uppercase;' +
+      'color:' + (on ? onColor.replace('OPACITY', '0.9') : 'rgba(200,220,240,0.4)') + ';cursor:pointer">' + label + '</button>';
+  };
+
+  var rows = insulins.map(function(ins) {
+    var info = (INSULIN_PROFILES[ins.name] || {}).info ||
+      ('peak ~' + ins.peakMins + ' min · ' + Math.round(ins.diaMins/60*10)/10 + ' hr tail');
+    return '<div style="' + rowStyle + '">' +
+      '<div>' +
+        '<div style="font-size:11px;color:rgba(200,220,240,0.85)">' + ins.name +
+          (ins.isDefault ? ' <span style="font-size:8px;color:rgba(100,200,160,0.7);letter-spacing:0.5px;text-transform:uppercase">· default</span>' : '') +
+        '</div>' +
+        '<div style="font-size:9px;color:rgba(160,200,180,0.5);margin-top:2px">' + info + '</div>' +
+      '</div>' +
+      '<div style="display:flex;gap:6px;flex-shrink:0">' +
+        '<button onclick="_setDefaultInsulinUI(\'' + ins.name + '\')" ' +
+          btn('default', !!ins.isDefault, 'rgba(100,200,160,OPACITY)') +
+        '<button onclick="_toggleInsulinActive(\'' + ins.name + '\')" ' +
+          btn(ins.active ? 'active' : 'inactive', !!ins.active, 'rgba(80,140,220,OPACITY)') +
+      '</div>' +
+    '</div>';
+  }).join('');
+
+  // Offer any known insulin not yet in the rotation
+  var available = Object.keys(INSULIN_PROFILES).filter(function(name) {
+    return !insulins.some(function(i){ return i.name === name; });
   });
-  var info = document.getElementById('tr-bolus-info');
-  if (info) info.textContent = bolusInfo[type] || '';
+  var addRow = '';
+  if (available.length) {
+    addRow = '<div style="display:flex;gap:6px;margin-top:4px">' +
+      '<select id="tr-add-insulin" style="flex:1;padding:7px 8px;border-radius:7px;' +
+        'border:1px solid var(--rv-panel-border);background:var(--rv-input-bg);' +
+        'font-family:\'DM Mono\',monospace;font-size:10px;color:rgba(200,220,240,0.7)">' +
+        available.map(function(name) {
+          return '<option value="' + name + '">' + name + ' — ' + (INSULIN_PROFILES[name].info || '') + '</option>';
+        }).join('') +
+      '</select>' +
+      '<button onclick="_addInsulinToRotation(document.getElementById(\'tr-add-insulin\').value)" ' +
+        'style="padding:7px 12px;border-radius:7px;border:1px solid rgba(100,200,160,0.3);' +
+        'background:rgba(100,200,160,0.08);font-family:\'DM Mono\',monospace;font-size:10px;' +
+        'color:rgba(100,200,160,0.8);cursor:pointer">+ add</button>' +
+    '</div>';
+  }
+
+  return rows + addRow;
+}
+
+function _refreshInsulinSection() {
+  var section = document.getElementById('tr-insulins-section');
+  if (section) section.innerHTML = _insulinRowsHTML();
+}
+
+// Sets the primary/default insulin — used for new doses by default, and as
+// the fallback for any logged event with no explicit insulin_type. The
+// default insulin is always kept active.
+function _setDefaultInsulinUI(name) {
+  if (!_TREATMENT) return;
+  (_TREATMENT.insulins || []).forEach(function(i) {
+    i.isDefault = (i.name === name);
+    if (i.name === name) i.active = true;
+  });
+  _refreshInsulinSection();
+}
+
+// Toggles whether an insulin is "in rotation" (offered at correction/meal
+// time when more than one is active). The default insulin can't be
+// deactivated — switch the default first.
+function _toggleInsulinActive(name) {
+  if (!_TREATMENT) return;
+  var ins = (_TREATMENT.insulins || []).find(function(i){ return i.name === name; });
+  if (!ins) return;
+  if (ins.isDefault) { showToast('default insulin stays active — set a different default first'); return; }
+  ins.active = !ins.active;
+  _refreshInsulinSection();
+}
+
+// Adds a known insulin (Novorapid/Fiasp/Humalog/etc) to the rotation,
+// inactive by default — toggle it active once ready to use it.
+function _addInsulinToRotation(name) {
+  if (!_TREATMENT || !name) return;
+  if ((_TREATMENT.insulins || []).some(function(i){ return i.name === name; })) return;
+  var p = INSULIN_PROFILES[name] || INSULIN_PROFILES.Novorapid;
+  if (!_TREATMENT.insulins) _TREATMENT.insulins = [];
+  _TREATMENT.insulins.push({ name: name, peakMins: p.peakMins, diaMins: p.diaMins, active: false, isDefault: false });
+  _refreshInsulinSection();
 }
 
 async function openTherapyHistory() {
@@ -16222,11 +16492,14 @@ async function openTherapyHistory() {
 function saveTreatmentForm() {
   var getN = function(id) { var el = document.getElementById('tr-' + id); return el ? parseFloat(el.value) || 0 : 0; };
   var getS = function(id) { var el = document.getElementById('tr-' + id); return el ? el.value : ''; };
+  var insulinsList = (_TREATMENT && _TREATMENT.insulins) || _TREATMENT_DEFAULTS.insulins;
+  var newDefault   = (insulinsList.find(function(i){ return i.isDefault; }) || insulinsList[0]).name;
   var updated = {
     basalDose:     getN('basal'),
     basalType:     'Degludec',
     basalTime:     getS('basal-time') || '17:00',
-    bolusType:     (_TREATMENT && _TREATMENT.bolusType) || 'Novorapid',
+    bolusType:     newDefault,
+    insulins:      insulinsList,
     hypoThreshold: getN('hypo-thr'),
     hypoCarbs:     getN('hypo-carbs'),
     dia:           (_TREATMENT && _TREATMENT.dia) || 150,
@@ -16241,8 +16514,26 @@ function saveTreatmentForm() {
       };
     })
   };
-  _saveTreatmentSettings(updated).then(function() {
-    showToast('treatment settings saved ✓');
+
+  // "applies from" — lets a treatment change be backdated to when it was
+  // actually implemented (e.g. switching to Fiasp a couple of days ago).
+  var effectiveT = getTimeVal('tr-effective-time');
+  var prevDefault = window._treatmentDefaultInsulinAtOpen;
+
+  _saveTreatmentSettings(updated, effectiveT).then(function() {
+    // If the default insulin changed and was backdated, retroactively stamp
+    // every bolus/correction logged since then with the new insulin —
+    // corrects the IOB curve shape for events already on the canvas.
+    if (newDefault !== prevDefault && effectiveT < Date.now()) {
+      _correctEventsInsulin(effectiveT, newDefault).then(function() {
+        showToast('treatment saved ✓\n' + newDefault + ' applied from ' +
+          new Date(effectiveT).toLocaleString('en-GB',{day:'numeric',month:'short',hour:'2-digit',minute:'2-digit'}) +
+          ' — past entries corrected');
+        _ptCache = null;
+      });
+    } else {
+      showToast('treatment settings saved ✓');
+    }
     var el = document.getElementById('treatment-overlay');
     if (el) el.remove();
   });
