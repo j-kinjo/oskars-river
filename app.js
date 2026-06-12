@@ -429,6 +429,7 @@ async function syncNow(silent) {
     _derivePersonalRamp();   // refresh personalised absorption ramp from meal outcomes
     await _syncTimerEvents(); // cross-device timer state sync
     _backfillPredictedCurves(); // reconstruct prediction curves for historic meal records
+    await runOutcomeBackfill(); // unified meal/bolus outcome backfill (partial + complete)
 
     _lastSyncT  = Date.now();
     _syncState  = 'ok';
@@ -1843,6 +1844,32 @@ function _pushActivePredictedCurve(pts, loggedAt) {
   _activePredictedCurves.sort(function(a,b){ return b.loggedAt - a.loggedAt; });
   if (_activePredictedCurves.length > 20) _activePredictedCurves.length = 20;
   try { localStorage.setItem('river_predicted_curves_v' + _PRED_FORMULA_VERSION, JSON.stringify(_activePredictedCurves)); } catch(e) {}
+}
+
+// Remove any _activePredictedCurves entry (and matching MEAL_HISTORY._predictedCurve)
+// anchored at time `t` — called whenever the underlying event/meal is deleted or
+// repositioned, so a stale "ghost prediction" line can't keep rendering for an
+// event that no longer exists at that time. Same ~60s anchor tolerance as the
+// dedupe check in _pushActivePredictedCurve.
+function _removeActivePredictedCurve(t) {
+  if (!t) return;
+  var before = _activePredictedCurves.length;
+  for (var i = _activePredictedCurves.length - 1; i >= 0; i--) {
+    var s = _activePredictedCurves[i];
+    if (s.pts && s.pts[0] && Math.abs(s.pts[0].t - t) < 60000) {
+      _activePredictedCurves.splice(i, 1);
+    }
+  }
+  if (_activePredictedCurves.length !== before) {
+    try { localStorage.setItem('river_predicted_curves_v' + _PRED_FORMULA_VERSION, JSON.stringify(_activePredictedCurves)); } catch(e) {}
+  }
+  if (MEAL_HISTORY) {
+    MEAL_HISTORY.forEach(function(meal) {
+      if (meal._predictedCurve && meal._predictedCurve[0] && Math.abs(meal._predictedCurve[0].t - t) < 60000) {
+        delete meal._predictedCurve;
+      }
+    });
+  }
 }
 
 function _snapshotPrediction() {
@@ -5411,206 +5438,295 @@ function saveMealHistory() {
 //  OUTCOME TRACKING — predicted vs actual, insulin curves, ghost meals
 //
 //  Three subsystems:
-//  1. Meal outcomes  — snapshot forecast at log time, check at +2h
-//  2. Bolus outcomes — snapshot IOB curve at bolus, check at +4h
+//  1+2. Meal & bolus outcomes — unified idempotent backfill (see below)
 //  3. Unannounced meal detection — watch for ghost COB signatures
 //
 //  All store to Supabase. Daily rollup into model_accuracy table.
 //  "It takes N weeks to see results" comes from model_accuracy.
 // ═══════════════════════════════════════════════════════════════════════
 
-var _outcomeTimers = {}; // t → timer handle, so we don't double-schedule
+// ── 1+2. MEAL & BOLUS OUTCOME TRACKING — unified backfill ───────────────
+// Replaces the old +2h/+4h setTimeout-based collection
+// (_collectMealOutcome/_collectBolusOutcome via scheduleMealOutcome/
+// scheduleBolusOutcome), which only produced a result if the app stayed
+// open continuously for the whole window — observed survival rates ~70%
+// (meal curve), ~5% (meal scoring), 0% (bolus curve).
+//
+// Instead:
+//   - meal_history rows are written with is_partial:true at log time
+//     (syncMealToSupabase), already carrying predicted_curve.
+//   - bolus_outcomes rows are written with is_partial:true at bolus time
+//     (_createBolusOutcomeBaseline).
+//   - runOutcomeBackfill() — called from syncNow, i.e. on load and every
+//     5min — scans both tables for rows where actual_curve IS NULL OR
+//     is_partial = true, and:
+//       - t + window < now   → compute the COMPLETE record, is_partial=false
+//       - 0 < now-t < window → compute a PARTIAL record from whatever
+//         readings exist so far, is_partial stays true
+//     partial → complete is a one-way transition (matches the immutability
+//     principle already used for predicted_curve itself). This also turns
+//     "where is he now vs predicted" into a queryable historical fact for
+//     in-progress meals/boluses, not just a live-view-only one.
 
-// ── 1. MEAL OUTCOME TRACKING ──────────────────────────────────────────
+var MEAL_OUTCOME_WINDOW_MINS  = 120; // +2h
+var BOLUS_OUTCOME_WINDOW_MINS = 240; // +4h
+var _outcomeBackfillRunning   = false;
 
-function scheduleMealOutcome(meal, predictedCurve) {
-  // predictedCurve: [{mins, bg}] from buildSmartForecast at log time
-  // Check at +2h. If session has ended (app reopened), recover on next launch.
-  var checkAt = meal.t + 2 * 3600000; // +2h from meal time
-  var delay   = Math.max(0, checkAt - Date.now());
+// Shared curve/residual computation for a meal. maxMins caps how far into
+// the window to look — MEAL_OUTCOME_WINDOW_MINS for a complete record, or
+// however much time has actually elapsed (rounded down to a 5min step) for
+// a partial one.
+function _computeMealActualCurve(mealT, maxMins, predictedCurve, preBGFallback) {
+  var step = 5;
+  var actualCurve = [];
+  var residuals   = [];
 
-  if (_outcomeTimers['meal_' + meal.t]) return; // already scheduled
-
-  _outcomeTimers['meal_' + meal.t] = setTimeout(async function() {
-    await _collectMealOutcome(meal, predictedCurve);
-    delete _outcomeTimers['meal_' + meal.t];
-  }, delay);
-}
-
-async function _collectMealOutcome(meal, predictedCurve) {
-  if (!SUPABASE_READY) return;
-  try {
-    var mealT   = meal.t;
-    var window  = 120; // 2h in minutes
-    var step    = 5;
-    var actualCurve = [];
-    var errors  = [];
-
-    for (var mins = step; mins <= window; mins += step) {
-      var t = mealT + mins * 60000;
-      var d = dataAt(t);
-      if (!d || d.bg <= 0) continue;
-      actualCurve.push({ mins: mins, bg: +d.bg.toFixed(2) });
-
-      // Compare to predicted if we have it
-      if (predictedCurve) {
-        var pred = predictedCurve.find(function(p){ return p.mins === mins; });
-        if (pred) errors.push(Math.abs(pred.bg - d.bg));
-      }
+  for (var mins = step; mins <= maxMins; mins += step) {
+    var t = mealT + mins * 60000;
+    var d = dataAt(t);
+    if (!d || d.bg <= 0) continue;
+    actualCurve.push({ mins: mins, bg: +d.bg.toFixed(2) });
+    if (predictedCurve) {
+      var pred = predictedCurve.find(function(p){ return p.mins === mins; });
+      if (pred) residuals.push({ mins: mins, residual: +(d.bg - pred.bg).toFixed(2) });
     }
-
-    // Find actual peak
-    var preBG  = actualCurve[0] ? actualCurve[0].bg : meal.pre_bg;
-    var peak   = actualCurve.reduce(function(best, p){ return p.bg > best.bg ? p : best; }, actualCurve[0] || {bg:0, mins:0});
-    var peakBG = peak.bg;
-    var peakMins = peak.mins;
-
-    // Find return-to-baseline (within 0.8 of pre-meal BG)
-    var returnMins = null;
-    for (var i = 0; i < actualCurve.length; i++) {
-      if (actualCurve[i].mins > peakMins && Math.abs(actualCurve[i].bg - (preBG||peakBG)) < 0.8) {
-        returnMins = actualCurve[i].mins;
-        break;
-      }
-    }
-
-    // Accuracy metrics
-    var rmse = errors.length > 0
-      ? +Math.sqrt(errors.reduce(function(s,e){return s+e*e;},0) / errors.length).toFixed(3)
-      : null;
-    var mae = errors.length > 0
-      ? +(errors.reduce(function(s,e){return s+e;},0) / errors.length).toFixed(3)
-      : null;
-
-    // Predicted peak vs actual peak
-    var predPeak = predictedCurve
-      ? predictedCurve.reduce(function(best, p){ return p.bg > best.bg ? p : best; }, predictedCurve[0] || {bg:0, mins:0})
-      : null;
-    var peakError   = predPeak ? +(predPeak.bg - peakBG).toFixed(2) : null;
-    var timingError = predPeak ? (predPeak.mins - peakMins) : null;
-
-    // PATCH meal_history with outcomes
-    await _sbFetch('meal_history?t=eq.' + mealT, {
-      method: 'PATCH',
-      prefer: 'return=minimal',
-      body: {
-        actual_curve:      actualCurve,
-        peak_bg:           +peakBG.toFixed(2),
-        peak_t:            mealT + peakMins * 60000,
-        return_t:          returnMins ? mealT + returnMins * 60000 : null,
-        rmse:              rmse,
-        mae:               mae,
-        peak_error:        peakError,
-        timing_error_mins: timingError,
-      },
-    });
-
-    _maybeRollupModelAccuracy();
-  } catch(e) {
-    console.warn('[mealOutcome]', e.message);
   }
+  if (actualCurve.length === 0) return null;
+
+  var preBG = actualCurve[0] ? actualCurve[0].bg : preBGFallback;
+  var peak  = actualCurve.reduce(function(best, p){ return p.bg > best.bg ? p : best; }, actualCurve[0]);
+
+  // Return-to-baseline (within 0.8 of pre-meal BG)
+  var returnMins = null;
+  for (var i = 0; i < actualCurve.length; i++) {
+    if (actualCurve[i].mins > peak.mins && Math.abs(actualCurve[i].bg - (preBG || peak.bg)) < 0.8) {
+      returnMins = actualCurve[i].mins;
+      break;
+    }
+  }
+
+  var errors = residuals.map(function(r){ return Math.abs(r.residual); });
+  var rmse = errors.length > 0
+    ? +Math.sqrt(errors.reduce(function(s,e){return s+e*e;},0) / errors.length).toFixed(3)
+    : null;
+  var mae = errors.length > 0
+    ? +(errors.reduce(function(s,e){return s+e;},0) / errors.length).toFixed(3)
+    : null;
+
+  var predPeak = predictedCurve
+    ? predictedCurve.reduce(function(best, p){ return p.bg > best.bg ? p : best; }, predictedCurve[0] || {bg:0, mins:0})
+    : null;
+  var peakError   = predPeak ? +(predPeak.bg - peak.bg).toFixed(2) : null;
+  var timingError = predPeak ? (predPeak.mins - peak.mins) : null;
+
+  var result = {
+    actual_curve:      actualCurve,
+    peak_bg:           +peak.bg.toFixed(2),
+    peak_t:            mealT + peak.mins * 60000,
+    return_t:          returnMins ? mealT + returnMins * 60000 : null,
+    rmse:              rmse,
+    mae:               mae,
+    peak_error:        peakError,
+    timing_error_mins: timingError,
+  };
+
+  // mean_residual / max_residual / residual_direction — the working
+  // negative-space dataset (computed for the original 238 rows via SQL on
+  // 11 Jun; computed here going forward for any row with a predicted_curve).
+  if (residuals.length > 0) {
+    var meanResidual = +(residuals.reduce(function(s,r){return s+r.residual;},0) / residuals.length).toFixed(2);
+    var maxResidual  = residuals.reduce(function(m,r){ return Math.abs(r.residual) > Math.abs(m) ? r.residual : m; }, 0);
+    result.mean_residual = meanResidual;
+    result.max_residual  = +maxResidual.toFixed(2);
+    result.residual_direction = meanResidual > 0.3  ? 'higher_than_predicted'
+                               : meanResidual < -0.3 ? 'lower_than_predicted'
+                               : 'as_predicted';
+  }
+
+  return result;
 }
 
-// ── 2. BOLUS OUTCOME TRACKING ─────────────────────────────────────────
+// Shared curve computation for a bolus — same partial/complete split as
+// _computeMealActualCurve, applied to the +4h IOB tail.
+function _computeBolusActualCurve(bolusT, maxMins, predictedCurve, preBG, units) {
+  var actualCurve = [];
+  var errors      = [];
 
-function scheduleBolusOutcome(bolusEvent, predictedCurve) {
-  var checkAt = bolusEvent.t + 4 * 3600000; // +4h (full IOB tail)
-  var delay   = Math.max(0, checkAt - Date.now());
+  for (var mins = 5; mins <= maxMins; mins += 5) {
+    var t = bolusT + mins * 60000;
+    var d = dataAt(t);
+    if (!d || d.bg <= 0) continue;
+    actualCurve.push({ mins: mins, bg: +d.bg.toFixed(2) });
+    if (predictedCurve) {
+      var pred = predictedCurve.find(function(p){ return p.mins === mins; });
+      if (pred) errors.push(Math.abs(pred.bg - d.bg));
+    }
+  }
+  if (actualCurve.length < 2) return null; // not enough data even for a partial
 
-  if (_outcomeTimers['bolus_' + bolusEvent.t]) return;
+  // Nadir (lowest point so far)
+  var nadir     = actualCurve.reduce(function(lo, p){ return p.bg < lo.bg ? p : lo; }, actualCurve[0]);
+  var nadirBG   = nadir.bg;
+  var nadirMins = nadir.mins;
 
-  _outcomeTimers['bolus_' + bolusEvent.t] = setTimeout(async function() {
-    await _collectBolusOutcome(bolusEvent, predictedCurve);
-    delete _outcomeTimers['bolus_' + bolusEvent.t];
-  }, delay);
+  // Observed ISF: bg drop per unit, normalised to insulin-only effect
+  var bgDrop      = (preBG || 0) - nadirBG;
+  var observedISF = units > 0 ? +(bgDrop / units).toFixed(2) : null;
+  var expectedISF = _currentTherapySnapshot(bolusT);
+  var isfError    = (observedISF && expectedISF) ? +(expectedISF.isf - observedISF).toFixed(2) : null;
+
+  // Return-to-pre (within 1.0 of pre-bolus BG)
+  var returnMins = null;
+  for (var j = 0; j < actualCurve.length; j++) {
+    if (actualCurve[j].mins > nadirMins && Math.abs(actualCurve[j].bg - (preBG || 0)) < 1.0) {
+      returnMins = actualCurve[j].mins;
+      break;
+    }
+  }
+
+  var rmse = errors.length > 0
+    ? +Math.sqrt(errors.reduce(function(s,e){return s+e*e;},0)/errors.length).toFixed(3)
+    : null;
+
+  var result = {
+    actual_curve: actualCurve,
+    nadir_bg:     +nadirBG.toFixed(2),
+    nadir_t:      bolusT + nadirMins * 60000,
+    nadir_mins:   nadirMins,
+    return_mins:  returnMins,
+    rmse:         rmse,
+  };
+  // Observed ISF is only meaningful once a real nadir has formed — leave
+  // null on very early partials rather than writing a noisy estimate.
+  if (observedISF !== null) {
+    result.observed_isf = observedISF;
+    result.isf_error    = isfError;
+  }
+  return result;
 }
 
-async function _collectBolusOutcome(ev, predictedCurve) {
+// Write the bolus_outcomes baseline row immediately at bolus time — replaces
+// scheduleBolusOutcome's +4h-deferred POST (0/238 survival rate). The row
+// carries predicted_curve/formula_version/is_partial:true; actual_curve etc.
+// are filled in later by runOutcomeBackfill.
+async function _createBolusOutcomeBaseline(ev, predictedCurve) {
   if (!SUPABASE_READY || !ev || !ev.u) return;
   try {
-    var bolusT   = ev.t;
-    var preBG    = _preBG(bolusT) || 0;
-    var actualCurve = [];
-    var errors   = [];
-
-    for (var mins = 5; mins <= 240; mins += 5) {
-      var t = bolusT + mins * 60000;
-      var d = dataAt(t);
-      if (!d || d.bg <= 0) continue;
-      actualCurve.push({ mins: mins, bg: +d.bg.toFixed(2) });
-      if (predictedCurve) {
-        var pred = predictedCurve.find(function(p){ return p.mins === mins; });
-        if (pred) errors.push(Math.abs(pred.bg - d.bg));
-      }
-    }
-
-    if (actualCurve.length < 6) return; // not enough data
-
-    // Nadir (lowest point)
-    var nadir = actualCurve.reduce(function(lo, p){ return p.bg < lo.bg ? p : lo; }, actualCurve[0]);
-    var nadirBG   = nadir.bg;
-    var nadirMins = nadir.mins;
-
-    // Observed ISF: bg drop per unit, normalised to insulin-only effect
-    // Use the nadir vs pre-bolus, but discount any COB that was active
-    var bgDrop = preBG - nadirBG;
-    var observedISF = ev.u > 0 ? +(bgDrop / ev.u).toFixed(2) : null;
-    var expectedISF = _currentTherapySnapshot(bolusT);
-    var isfError    = (observedISF && expectedISF)
-      ? +(expectedISF.isf - observedISF).toFixed(2)
-      : null;
-
-    // Return-to-pre (within 1.0 of pre-bolus BG)
-    var returnMins = null;
-    for (var j = 0; j < actualCurve.length; j++) {
-      if (actualCurve[j].mins > nadirMins && Math.abs(actualCurve[j].bg - preBG) < 1.0) {
-        returnMins = actualCurve[j].mins;
-        break;
-      }
-    }
-
-    var rmse = errors.length > 0
-      ? +Math.sqrt(errors.reduce(function(s,e){return s+e*e;},0)/errors.length).toFixed(3)
-      : null;
-
-    var hour = new Date(bolusT).getHours();
+    var bolusT = ev.t;
+    var preBG  = _preBG(bolusT) || 0;
+    var d0     = dataAt(bolusT);
+    var hour   = new Date(bolusT).getHours();
     var period = hour >= 6 && hour < 10 ? 'Breakfast'
                : hour >= 10 && hour < 14 ? 'Lunch'
                : hour >= 14 && hour < 18 ? 'Afternoon'
                : hour >= 18 && hour < 22 ? 'Evening' : 'Overnight';
 
-    var d0 = dataAt(bolusT);
     var row = {
-      t:               bolusT,
-      units:           ev.u,
-      pre_bg:          +preBG.toFixed(2),
-      iob_at_bolus:    d0 ? +d0.iob.toFixed(2) : null,
-      cob_at_bolus:    d0 ? +d0.cob.toFixed(2) : null,
+      t:                bolusT,
+      units:            ev.u,
+      pre_bg:           +preBG.toFixed(2),
+      iob_at_bolus:     d0 ? +d0.iob.toFixed(2) : null,
+      cob_at_bolus:     d0 ? +d0.cob.toFixed(2) : null,
       therapy_snapshot: _currentTherapySnapshot(bolusT),
-      predicted_curve: predictedCurve || null,
-      formula_version: predictedCurve ? _PRED_FORMULA_VERSION : null,
-      actual_curve:    actualCurve,
-      observed_isf:    observedISF,
-      isf_error:       isfError,
-      nadir_bg:        +nadirBG.toFixed(2),
-      nadir_t:         bolusT + nadirMins * 60000,
-      nadir_mins:      nadirMins,
-      return_mins:     returnMins,
-      rmse:            rmse,
-      period:          period,
-      logged_by:       ev.logged_by || null,
-      device_id:       _deviceId,
+      predicted_curve:  predictedCurve || null,
+      formula_version:  predictedCurve ? _PRED_FORMULA_VERSION : null,
+      is_partial:       true,
+      period:           period,
+      logged_by:        ev.logged_by || null,
+      device_id:        _deviceId,
     };
 
     await _sbFetch('bolus_outcomes?on_conflict=t', {
       method: 'POST',
       prefer: 'resolution=merge-duplicates,return=minimal',
-      body: [row],
+      body:   [row],
     });
+  } catch(e) {
+    console.warn('[bolusOutcomeBaseline]', e.message);
+  }
+}
 
+// Unified idempotent backfill — called from syncNow (on load + every 5min).
+// Covers both meal_history and bolus_outcomes, tiered partial/complete.
+async function runOutcomeBackfill() {
+  if (!SUPABASE_READY || _outcomeBackfillRunning) return;
+  _outcomeBackfillRunning = true;
+  try {
+    await _backfillMealOutcomes();
+    await _backfillBolusOutcomes();
     _maybeRollupModelAccuracy();
   } catch(e) {
-    console.warn('[bolusOutcome]', e.message);
+    console.warn('[outcomeBackfill]', e.message);
+  } finally {
+    _outcomeBackfillRunning = false;
+  }
+}
+
+async function _backfillMealOutcomes() {
+  var now   = Date.now();
+  var since = now - 24 * 3600000; // bound the query — older rows have long since completed
+  var rows;
+  try {
+    rows = await _sbFetch(
+      'meal_history?t=gte.' + since + '&t=lt.' + now +
+      '&or=(actual_curve.is.null,is_partial.eq.true)' +
+      '&select=t,predicted_curve,pre_bg', {});
+  } catch(e) { console.warn('[mealBackfill] fetch failed:', e.message); return; }
+  if (!Array.isArray(rows)) return;
+
+  for (var i = 0; i < rows.length; i++) {
+    var row = rows[i];
+    var elapsedMins = (now - row.t) / 60000;
+    if (elapsedMins < 5) continue; // not even one data point yet
+
+    var isComplete = elapsedMins >= MEAL_OUTCOME_WINDOW_MINS;
+    var maxMins     = isComplete ? MEAL_OUTCOME_WINDOW_MINS : Math.floor(elapsedMins / 5) * 5;
+    if (maxMins < 5) continue;
+
+    var predCurve = row.predicted_curve;
+    if (typeof predCurve === 'string') { try { predCurve = JSON.parse(predCurve); } catch(e) { predCurve = null; } }
+
+    var result = _computeMealActualCurve(row.t, maxMins, predCurve, row.pre_bg);
+    if (!result || result.actual_curve.length === 0) continue;
+    result.is_partial = !isComplete;
+
+    try {
+      await _sbFetch('meal_history?t=eq.' + row.t, { method: 'PATCH', prefer: 'return=minimal', body: result });
+    } catch(e) { console.warn('[mealBackfill] patch failed:', e.message); }
+  }
+}
+
+async function _backfillBolusOutcomes() {
+  var now   = Date.now();
+  var since = now - 24 * 3600000;
+  var rows;
+  try {
+    rows = await _sbFetch(
+      'bolus_outcomes?t=gte.' + since + '&t=lt.' + now +
+      '&or=(actual_curve.is.null,is_partial.eq.true)' +
+      '&select=t,units,pre_bg,predicted_curve', {});
+  } catch(e) { console.warn('[bolusBackfill] fetch failed:', e.message); return; }
+  if (!Array.isArray(rows)) return;
+
+  for (var i = 0; i < rows.length; i++) {
+    var row = rows[i];
+    var elapsedMins = (now - row.t) / 60000;
+    if (elapsedMins < 5) continue;
+
+    var isComplete = elapsedMins >= BOLUS_OUTCOME_WINDOW_MINS;
+    var maxMins     = isComplete ? BOLUS_OUTCOME_WINDOW_MINS : Math.floor(elapsedMins / 5) * 5;
+    if (maxMins < 5) continue;
+
+    var predCurve = row.predicted_curve;
+    if (typeof predCurve === 'string') { try { predCurve = JSON.parse(predCurve); } catch(e) { predCurve = null; } }
+
+    var result = _computeBolusActualCurve(row.t, maxMins, predCurve, row.pre_bg, row.units);
+    if (!result) continue;
+    result.is_partial = !isComplete;
+
+    try {
+      await _sbFetch('bolus_outcomes?t=eq.' + row.t, { method: 'PATCH', prefer: 'return=minimal', body: result });
+    } catch(e) { console.warn('[bolusBackfill] patch failed:', e.message); }
   }
 }
 
@@ -6504,6 +6620,7 @@ async function syncMealToSupabase(meal) {
       device_id:        _deviceId,
       predicted_curve:  meal._predictedCurve || null,
       formula_version:  meal._predictedCurve ? _PRED_FORMULA_VERSION : null,
+      is_partial:       true,
     };
 
     await _sbFetch('meal_history?on_conflict=t', {
@@ -7146,7 +7263,7 @@ function bolusNow() {
       var predBG = d0 ? Math.max(1.8, d0.bg - u * (1 - _iobFn(m)) * isf) : 0;
       iobCurve.push({mins: m, bg: +predBG.toFixed(2)});
     }
-    scheduleBolusOutcome(bolusEv, iobCurve);
+    _createBolusOutcomeBaseline(bolusEv, iobCurve);
   })();
   syncAfterLog();
   _ptCache = null;
@@ -7200,7 +7317,6 @@ function logPlate() {
       if (MEAL_HISTORY[0]) MEAL_HISTORY[0]._predictedCurve = _snap;
       _pushActivePredictedCurve(_snap, Date.now());
       syncMealToSupabase(MEAL_HISTORY[0]);
-      scheduleMealOutcome(MEAL_HISTORY[0], _snap);
     })();
 
   try{localStorage.setItem('river_session',JSON.stringify(SESSION));}catch(e){}
@@ -9676,7 +9792,6 @@ function logMealEntry(carbsOnly) {
       if (MEAL_HISTORY[0]) MEAL_HISTORY[0]._predictedCurve = _snap;
       _pushActivePredictedCurve(_snap, Date.now());
       syncMealToSupabase(MEAL_HISTORY[0]);
-      scheduleMealOutcome(MEAL_HISTORY[0], _snap);
     })();
   }
 
@@ -9724,7 +9839,6 @@ function confirmBolus(units) {
       if (MEAL_HISTORY[0]) MEAL_HISTORY[0]._predictedCurve = _snap;
       _pushActivePredictedCurve(_snap, Date.now());
       syncMealToSupabase(MEAL_HISTORY[0]);
-      scheduleMealOutcome(MEAL_HISTORY[0], _snap);
     })();
   }
 
@@ -14313,6 +14427,13 @@ function saveEventEdit(idx) {
   if (newT && newT !== oldT) LOGGED_EVENTS[idx].t = newT;
   var updatedT = LOGGED_EVENTS[idx].t;
 
+  // If the event moved in time, any prediction curve anchored to its old
+  // timestamp no longer corresponds to a real event there — clear it
+  // (same ghost-prediction fix as deleteEvent).
+  if (newT && newT !== oldT) {
+    _removeActivePredictedCurve(oldT);
+  }
+
   // --- If this is a bolus event (u > 0) and wait changed, reposition linked carb chip ---
   // The carb event sits at bolusT + waitMins*60000. Find it and move it.
   if (u > 0) {
@@ -14436,7 +14557,13 @@ async function loadSensorOutages() {
           start_t:        r.start_t,
           end_t:          r.end_t || null,
           cause_category: r.cause_category || 'unknown',
-          cause_note:     r.cause_note || ''
+          cause_note:     r.cause_note || '',
+          bg_before:      r.bg_before != null ? r.bg_before : null,
+          trend_before:   r.trend_before || null,
+          expected_t:     r.expected_t || null,
+          bg_on_return:   r.bg_on_return != null ? r.bg_on_return : null,
+          trend_on_return: r.trend_on_return || null,
+          was_backfilled: r.was_backfilled != null ? r.was_backfilled : null,
         });
       });
     }
@@ -14475,10 +14602,21 @@ async function _openOutage(startT) {
   if (_activeOutageId) return; // already open
   if (!SUPABASE_READY) return;
   try {
+    // Capture last-known reading before the gap, and the time we'd have
+    // expected the next one — both first-class facts about what was known
+    // at the moment the outage was detected (sensor_outages enrichment).
+    var last       = HISTORY_RAW.length > 0 ? HISTORY_RAW[HISTORY_RAW.length - 1] : null;
+    var bgBefore   = (last && last.bg > 0) ? +last.bg.toFixed(2) : null;
+    var trendBefore = last ? (last.trend || null) : null;
+    var expectedT  = startT + 5 * 60000; // ~5min, Libre's nominal cadence
+
     var result = await _sbFetch('sensor_outages', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'Prefer': 'return=representation' },
-      body: [{ start_t: startT, cause_category: 'unknown', device_id: _thisPersonId || 'unknown' }]
+      body: [{
+        start_t: startT, cause_category: 'unknown', device_id: _thisPersonId || 'unknown',
+        bg_before: bgBefore, trend_before: trendBefore, expected_t: expectedT,
+      }]
     });
     if (Array.isArray(result) && result[0] && result[0].id) {
       _activeOutageId = result[0].id;
@@ -14487,7 +14625,10 @@ async function _openOutage(startT) {
         start_t:        startT,
         end_t:          null,
         cause_category: 'unknown',
-        cause_note:     ''
+        cause_note:     '',
+        bg_before:      bgBefore,
+        trend_before:   trendBefore,
+        expected_t:     expectedT,
       });
       // Prompt user to log cause — non-blocking nudge
       // _showOutageNudge(startT); // [STUBBED] outage nudge hidden pending UX review
@@ -14500,13 +14641,31 @@ async function _closeOutage(endT) {
   var id = _activeOutageId;
   _activeOutageId = null;
   try {
+    var patch = { end_t: endT };
+
+    // Capture the returning reading's bg/trend, and whether it arrived
+    // "live" or was backfilled by Libre after the fact (was_backfilled is
+    // true if the reading's own t is >10min before its readings.inserted_at).
+    var last = HISTORY_RAW.length > 0 ? HISTORY_RAW[HISTORY_RAW.length - 1] : null;
+    if (last && last.bg > 0) {
+      patch.bg_on_return    = +last.bg.toFixed(2);
+      patch.trend_on_return = last.trend || null;
+      try {
+        var rows = await _sbFetch('readings?t=eq.' + last.t + '&select=t,inserted_at', {});
+        if (Array.isArray(rows) && rows[0] && rows[0].inserted_at) {
+          var insertedAt = new Date(rows[0].inserted_at).getTime();
+          patch.was_backfilled = (insertedAt - last.t) > 10 * 60000;
+        }
+      } catch(e2) { console.warn('[outage] inserted_at lookup failed:', e2.message); }
+    }
+
     await _sbFetch('sensor_outages?id=eq.' + id, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json', 'Prefer': 'return=minimal' },
-      body: { end_t: endT }
+      body: patch
     });
     var idx = SENSOR_OUTAGES.findIndex(function(o){ return o.id === id; });
-    if (idx >= 0) SENSOR_OUTAGES[idx].end_t = endT;
+    if (idx >= 0) Object.assign(SENSOR_OUTAGES[idx], patch);
     // Remove the nudge if still showing
     var nudge = document.getElementById('outage-nudge');
     if (nudge) nudge.remove();
@@ -15241,6 +15400,9 @@ function deleteEvent(idx) {
     // Add to blocklist so it isn't re-pulled from Supabase
     _deletedEventTs.add(t);
     _saveDeletedTs();
+
+    // Clear any stale prediction curve anchored to this event (ghost prediction fix)
+    _removeActivePredictedCurve(t);
 
     // Flush bubble cache so frog-spawn orbs clear immediately
     _ptCache = null;
@@ -18093,7 +18255,6 @@ function commitPadImport() {
       if (MEAL_HISTORY[0]) MEAL_HISTORY[0]._predictedCurve = _snap;
       _pushActivePredictedCurve(_snap, Date.now());
       syncMealToSupabase(MEAL_HISTORY[0]);
-      scheduleMealOutcome(MEAL_HISTORY[0], _snap);
     })();
   }
 
