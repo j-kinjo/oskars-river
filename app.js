@@ -2331,12 +2331,11 @@ function drawUnknownForce(pal) {
     if (!dup) snaps2.push({ loggedAt: aT, pts: meal._predictedCurve });
   });
   snaps2.sort(function(a,b){ return b.loggedAt - a.loggedAt; });
-  var refT2 = CGM_END || Date.now();
-  var segs2 = snaps2.map(function(snap, i) {
+  var segs2 = snaps2.map(function(snap) {
     return {
       pts: snap.pts,
       startT: snap.pts[0].t,
-      endT:   i === 0 ? refT2 + 3 * 3600000 : snaps2[i-1].pts[0].t
+      endT:   snap.pts[snap.pts.length - 1].t
     };
   });
 
@@ -2421,10 +2420,12 @@ function drawUnknownForce(pal) {
 // ── FORECAST TRACE — event-anchored prediction, always visible ───────────
 // Anchored to earliest active event time. Renders identically whether
 // scrubbing back or at now. Blood=warm amber, CGM=bold white, mist tunnel.
-// ── FORECAST TRACE — chained prediction segments ────────────────────────
-// Each snapshot is valid from its anchor until the next event's anchor.
-// They chain together: lunch 12:15→14:37, correction 14:37→onwards.
-// Mist fills gap between each segment and actual CGM for that window.
+// ── FORECAST TRACE — overlapping prediction curves ──────────────────────
+// Each snapshot is drawn at its own full length (anchor → anchor+3h).
+// Curves are drawn oldest-first so a newer prediction visually overlays
+// an older one where their windows overlap — no hard chaining cliffs,
+// and short gaps between closely-spaced events (e.g. a snack 13min
+// before lunch) no longer get clipped down to a sliver.
 function drawForecastTrace(pal) {
   var R = pal.bgLine[0], G = pal.bgLine[1], B = pal.bgLine[2];
   var phi = (_mistFrame || 0) * 0.015;
@@ -2448,13 +2449,11 @@ function drawForecastTrace(pal) {
   }
   if (snaps.length === 0) return;
 
-  // Build chained segments: each snapshot valid until the next one's start
-  // snaps[0] = newest, snaps[1] = previous, etc.
-  // Segment i is valid from snaps[i].pts[0].t until snaps[i-1].pts[0].t (or now+3h)
+  // Each curve is drawn over its own full span — no chaining/clipping.
   var refT = CGM_END || Date.now();
-  var segments = snaps.map(function(snap, i) {
+  var segments = snaps.map(function(snap) {
     var startT = snap.pts[0].t;
-    var endT   = i === 0 ? refT + 3 * 3600000 : snaps[i-1].pts[0].t;
+    var endT   = snap.pts[snap.pts.length - 1].t;
     return { pts: snap.pts, startT: startT, endT: endT };
   }).filter(function(seg) {
     // Only show segments within 24h of current view
@@ -2462,6 +2461,9 @@ function drawForecastTrace(pal) {
   });
 
   if (segments.length === 0) return;
+
+  // Draw oldest-first so newer predictions overlay older ones on overlap.
+  segments.sort(function(a,b){ return a.startT - b.startT; });
 
   CX.save();
 
