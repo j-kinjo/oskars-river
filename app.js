@@ -7172,7 +7172,7 @@ function logPlate() {
     ? _plateItems.reduce(function(s,i){return s+(i.gi||55)*(i.carbs||0);},0)/Math.max(total,1) : 55;
   var t = _plateBolusTm || Date.now();
   var eatWait  = _eatWaitOverride!==null?_eatWaitOverride:suggestEatWait(dataAt(viewTime).bg,avgGI);
-  var carbT    = t + eatWait*60000;
+  var carbT    = _safeEventT(t + eatWait*60000);
   var foodItems= _plateItems.map(function(i){return {name:i.name,carbs:i.carbs,gi:i.gi||55,g:i.grams};});
 
   if (total>0) {
@@ -9617,14 +9617,19 @@ function logMealEntry(carbsOnly) {
   var eatWaitNow = (u > 0)
     ? (_eatWaitOverride !== null ? _eatWaitOverride : suggestEatWait(dataAt(t).bg || 7, avgGI))
     : 0; // no insulin → no wait, log carbs at bolus time immediately
-  var carbT = _safeEventT(t + eatWaitNow * 60000); // when carbs enter the system
 
-  // Log insulin at bolus time
+  // Log insulin at bolus time — computed/pushed BEFORE carbT so that, when
+  // eatWaitNow===0, _safeEventT(carbT) sees this event already in
+  // LOGGED_EVENTS and bumps carbT by 1ms. Without this, a bolus+carbs logged
+  // with zero wait both resolve to the same t, and the on_conflict=t upsert
+  // silently merges/overwrites one event's events row with the other's.
   if (u > 0) {
     var bolusT = _safeEventT(t);
     SESSION.push({t: bolusT, c: 0, u: u});
     LOGGED_EVENTS.push({t: bolusT, c: 0, u: u, note: 'bolus', local: true});
   }
+
+  var carbT = _safeEventT(t + eatWaitNow * 60000); // when carbs enter the system
 
   // Log carbs at eat time — include per-food breakdown for GI-aware rendering
   var foodItems = _mealItems.map(function(i){
@@ -18029,7 +18034,6 @@ function commitPadImport() {
   var u        = parseFloat(uInp && uInp.value) || 0;
   var waitMins = parseFloat(waitInp && waitInp.value) || 0;
   var totalCarbs = items.reduce(function(s,i){ return s+(parseFloat(i.carbs)||0); }, 0);
-  var carbT    = t + waitMins * 60000;
 
   var foodItems = items.map(function(i){
     var gi = i._gi_override || i.gi || 55;
@@ -18039,13 +18043,18 @@ function commitPadImport() {
     ? foodItems.reduce(function(s,i){ return s + (i.gi||55) * (i.carbs||0); }, 0) / totalCarbs
     : 55;
 
+  // Reserve the bolus t BEFORE computing carbT — when waitMins===0, carbT
+  // would otherwise collide with t and the on_conflict=t upsert would
+  // silently merge/overwrite one event's row with the other's.
   if (u > 0) {
+    t = _safeEventT(t);
     // Store waitMins on the bolus event so the event editor can correctly
     // find and reposition the linked carb event when wait time is edited.
     SESSION.push({t:t, c:0, u:u, waitMins:waitMins, source:'pad'});
     LOGGED_EVENTS.push({t:t, c:0, u:u, waitMins:waitMins, note:'bolus', source:'pad', logged_by:_thisPersonId||'unknown', local:true});
     topUpIOB(u);
   }
+  var carbT = _safeEventT(t + waitMins * 60000);
   if (totalCarbs > 0) {
     SESSION.push({t:carbT, c:totalCarbs, u:0, gi:avgGI, items:foodItems, source:'pad'});
     LOGGED_EVENTS.push({t:carbT, c:totalCarbs, u:0, gi:avgGI, items:foodItems, note:'carbs', source:'pad',
