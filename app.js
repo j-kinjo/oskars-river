@@ -1830,24 +1830,19 @@ function _snapshotPrediction() {
   // Also store on most recent MEAL_HISTORY entry if present
   if (MEAL_HISTORY && MEAL_HISTORY[0]) MEAL_HISTORY[0]._predictedCurve = pts;
 }
-function buildSmartForecast(forceAnchorT) {
-  var meals   = _getActiveMealEvents();
-  var boluses = _getActiveBolusEvents();
-  if (meals.length === 0 && boluses.length === 0) return [];
-
-  var anchorT;
-  if (forceAnchorT) {
-    anchorT = forceAnchorT;
-  } else {
-    var allTs = [];
-    meals.forEach(function(m)   { allTs.push(m.t); });
-    boluses.forEach(function(b) { allTs.push(b.t); });
-    anchorT = Math.min.apply(null, allTs);
-  }
-
-  var d0  = dataAt(anchorT);
-  var bg  = (d0 && d0.bg > 0) ? d0.bg : (dataAt(CGM_END || Date.now()).bg || 7.0);
-  var ISF = getISF(anchorT);
+// Shared net-imbalance forecast generator — SINGLE SOURCE OF TRUTH for the
+// prediction formula. Both the live forecast (buildSmartForecast) and the
+// historical reconstruction (_backfillPredictedCurves) call this, so the two
+// paths can never silently diverge on a future formula change.
+//
+// meals:   [{ t, items:[{carbs, gi}, ...] }, ...]
+// boluses: [{ t, u }, ...]
+// historicalRatios: optional ratios array ([{start,end,isf,ic,target}]) used
+//   to reconstruct ISF/IC as they were at a past point in time (backfill).
+//   When omitted, getISF/getIC fall back to live _TREATMENT + observed-ISF
+//   adaptation, exactly as the original buildSmartForecast did.
+function _computeForecastCurve(anchorT, bg, meals, boluses, historicalRatios) {
+  var ISF = getISF(anchorT, historicalRatios);
   var lagMins = 10;
   var pts = [];
 
@@ -1878,8 +1873,8 @@ function buildSmartForecast(forceAnchorT) {
 
     meals.forEach(function(meal) {
       if (!meal.items) return;
-      var IC   = getIC(meal.t)  || 10;
-      var ISFm = getISF(meal.t) || ISF;
+      var IC   = getIC(meal.t, historicalRatios)  || 10;
+      var ISFm = getISF(meal.t, historicalRatios) || ISF;
       var totalCarbs = 0;
       meal.items.forEach(function(f) { totalCarbs += (f.carbs || 0); });
       if (totalCarbs <= 0) return;
@@ -1909,7 +1904,7 @@ function buildSmartForecast(forceAnchorT) {
       });
       if (covered) return;
       var bm   = (anchorT - bolus.t) / 60000;
-      var bISF = getISF(bolus.t) || ISF;
+      var bISF = getISF(bolus.t, historicalRatios) || ISF;
       net -= bolus.u * (_iobFn(Math.max(0, bm)) - _iobFn(Math.max(0, bm) + mins)) * bISF;
     });
 
@@ -1931,6 +1926,27 @@ function buildSmartForecast(forceAnchorT) {
     });
   }
   return pts;
+}
+
+function buildSmartForecast(forceAnchorT) {
+  var meals   = _getActiveMealEvents();
+  var boluses = _getActiveBolusEvents();
+  if (meals.length === 0 && boluses.length === 0) return [];
+
+  var anchorT;
+  if (forceAnchorT) {
+    anchorT = forceAnchorT;
+  } else {
+    var allTs = [];
+    meals.forEach(function(m)   { allTs.push(m.t); });
+    boluses.forEach(function(b) { allTs.push(b.t); });
+    anchorT = Math.min.apply(null, allTs);
+  }
+
+  var d0  = dataAt(anchorT);
+  var bg  = (d0 && d0.bg > 0) ? d0.bg : (dataAt(CGM_END || Date.now()).bg || 7.0);
+
+  return _computeForecastCurve(anchorT, bg, meals, boluses, null);
 }
 // ── PARTICLES ────────────────────────────────────────────────────────
 
@@ -5547,6 +5563,7 @@ async function _collectBolusOutcome(ev, predictedCurve) {
       cob_at_bolus:    d0 ? +d0.cob.toFixed(2) : null,
       therapy_snapshot: _currentTherapySnapshot(bolusT),
       predicted_curve: predictedCurve || null,
+      formula_version: predictedCurve ? _PRED_FORMULA_VERSION : null,
       actual_curve:    actualCurve,
       observed_isf:    observedISF,
       isf_error:       isfError,
@@ -6460,6 +6477,8 @@ async function syncMealToSupabase(meal) {
       source:           meal.source || 'manual',
       logged_by:        meal.logged_by || _thisPersonId || null,
       device_id:        _deviceId,
+      predicted_curve:  meal._predictedCurve || null,
+      formula_version:  meal._predictedCurve ? _PRED_FORMULA_VERSION : null,
     };
 
     await _sbFetch('meal_history?on_conflict=t', {
@@ -6569,22 +6588,29 @@ function _backfillPredictedCurves() {
     var anchorT  = meal.t;
     var baseBG   = meal.pre_bg || 7.0;
     var snap     = meal.therapy_snapshot || {};
-    var ISF      = (snap.ratios && snap.ratios[0] && snap.ratios[0].isf) || getISF(anchorT) || 7;
-    var IC_snap  = (snap.ratios && snap.ratios[0] && snap.ratios[0].ic)  || getIC(anchorT)  || 10;
-    var lagMins  = 10;
-    var pts      = [];
 
-    // Total carbs
-    var totalCarbs = 0;
-    if (meal.items) meal.items.forEach(function(f) { totalCarbs += (f.carbs || 0); });
+    // Reconstruct a single-segment ratios array from the stored snapshot so
+    // getISF/getIC (via _computeForecastCurve) return what was actually in
+    // force at log time, not whatever the live treatment plan says now.
+    var historicalRatios = (snap.isf || snap.ic)
+      ? [{ start: '00:00', end: '24:00', isf: snap.isf, ic: snap.ic, target: snap.target }]
+      : null;
 
-    // Average GI
-    var avgGI = 55;
-    if (meal.items && totalCarbs > 0) {
-      var giSum = 0;
-      meal.items.forEach(function(f) { if (f.carbs > 0) giSum += (f.gi || 55) * f.carbs; });
-      avgGI = giSum / totalCarbs;
+    // Total carbs + average GI from the meal's own items
+    var totalCarbs = 0, avgGI = 55;
+    if (meal.items) {
+      meal.items.forEach(function(f) { totalCarbs += (f.carbs || 0); });
+      if (totalCarbs > 0) {
+        var giSum = 0;
+        meal.items.forEach(function(f) { if (f.carbs > 0) giSum += (f.gi || 55) * f.carbs; });
+        avgGI = giSum / totalCarbs;
+      }
     }
+
+    var mealsForCurve = [{
+      t: anchorT,
+      items: (meal.items && meal.items.length) ? meal.items : [{ name: 'meal', carbs: totalCarbs, gi: avgGI }]
+    }];
 
     // Covering units — boluses within 90min before this meal
     var activeBoluses = [];
@@ -6596,36 +6622,9 @@ function _backfillPredictedCurves() {
     if (activeBoluses.length === 0 && meal.u && meal.u > 0) {
       activeBoluses.push({ t: meal.bolus_t || anchorT, u: meal.u });
     }
-    var coverU = 0;
-    activeBoluses.forEach(function(b) { coverU += b.u; });
 
-    for (var i = 0; i <= 36; i++) {
-      var mins = i * 5;
-      var ft   = anchorT + mins * 60000;
-
-      // Net imbalance formula — matches buildSmartForecast
-      // mAnchor = mins between anchor and meal (negative = meal after anchor)
-      var mAnchor = (anchorT - anchorT) / 60000; // = 0, anchor IS meal time for backfill
-      var absAtAnchor = totalCarbs * Math.max(0, 1 - _cobFgi(0,    avgGI));
-      var absAtFuture = totalCarbs * Math.max(0, 1 - _cobFgi(mins, avgGI));
-      var carbsWindow = Math.max(0, absAtFuture - absAtAnchor);
-      var insFrac     = totalCarbs > 0 ? carbsWindow / totalCarbs : 0;
-      var netCarbs    = carbsWindow - coverU * IC_snap * insFrac;
-      var netEffect   = netCarbs / IC_snap * ISF;
-
-      // Add uncovered correction IOB (boluses not matched to this meal)
-      // For backfill simplicity: no additional corrections assumed — covered by coverU
-      var predBlood = Math.max(2.0, Math.min(22, baseBG + netEffect));
-
-      var cgmM        = Math.max(0, mins - lagMins);
-      var absAtCGM    = totalCarbs * Math.max(0, 1 - _cobFgi(cgmM, avgGI));
-      var carbsCGM    = Math.max(0, absAtCGM - absAtAnchor);
-      var insFracCGM  = totalCarbs > 0 ? carbsCGM / totalCarbs : 0;
-      var netCGM      = (carbsCGM - coverU * IC_snap * insFracCGM) / IC_snap * ISF;
-      var predCGM     = Math.max(2.0, Math.min(22, baseBG + netCGM));
-
-      pts.push({ t: ft, mins: mins, bgBlood: predBlood, bgCGM: predCGM, bg: predCGM, predicted_bg: predCGM });
-    }
+    // Same shared formula as the live forecast — no independent reimplementation.
+    var pts = _computeForecastCurve(anchorT, baseBG, mealsForCurve, activeBoluses, historicalRatios);
 
     meal._predictedCurve = pts;
 
@@ -7171,10 +7170,10 @@ function logPlate() {
     logged_by:_thisPersonId||'unknown',
   });
   saveMealHistory();
-    syncMealToSupabase(MEAL_HISTORY[0]);
     (function(){
       var _snap = buildSmartForecast();
       if (MEAL_HISTORY[0]) MEAL_HISTORY[0]._predictedCurve = _snap;
+      syncMealToSupabase(MEAL_HISTORY[0]);
       scheduleMealOutcome(MEAL_HISTORY[0], _snap);
     })();
 
@@ -9612,6 +9611,12 @@ function logMealEntry(carbsOnly) {
       pre_bg: _preBG(carbT)});
   }
 
+  // Bolus-with-carbs: classify any rounding/override vs the suggested dose
+  if (u > 0 && totalCarbs > 0) {
+    var _suggested = calcBolus(totalCarbs, dataAt(bolusT).bg, bolusT).total;
+    _storeBolusOverride(bolusT, _suggested, u);
+  }
+
   try{localStorage.setItem('river_logged',JSON.stringify(LOGGED_EVENTS));}catch(err){}
 
   try { localStorage.setItem('river_session',JSON.stringify(SESSION)); } catch(e) {}
@@ -9635,10 +9640,10 @@ function logMealEntry(carbsOnly) {
       u:          u,
     });
     saveMealHistory();
-    syncMealToSupabase(MEAL_HISTORY[0]);
     (function(){
       var _snap = buildSmartForecast();
       if (MEAL_HISTORY[0]) MEAL_HISTORY[0]._predictedCurve = _snap;
+      syncMealToSupabase(MEAL_HISTORY[0]);
       scheduleMealOutcome(MEAL_HISTORY[0], _snap);
     })();
   }
@@ -9682,10 +9687,10 @@ function confirmBolus(units) {
       t:          t,
     });
     saveMealHistory();
-    syncMealToSupabase(MEAL_HISTORY[0]);
     (function(){
       var _snap = buildSmartForecast();
       if (MEAL_HISTORY[0]) MEAL_HISTORY[0]._predictedCurve = _snap;
+      syncMealToSupabase(MEAL_HISTORY[0]);
       scheduleMealOutcome(MEAL_HISTORY[0], _snap);
     })();
   }
@@ -15071,12 +15076,12 @@ function logBloodPrick() {
   BLOOD_PRICKS.sort(function(a,b){ return a.t - b.t; });
   _savePricks();
 
-  // Push to Supabase via events table (note:'prick', gi=bg value)
+  // Push to Supabase via events table (note:'prick', gi=bg back-compat, value=bg canonical)
   if (SUPABASE_READY) {
     _sbFetch('events?on_conflict=t', {
       method: 'POST',
       prefer: 'resolution=merge-duplicates,return=minimal',
-      body: [{ t: t, c: 0, u: 0, gi: bg, note: 'prick',
+      body: [{ t: t, c: 0, u: 0, gi: bg, value: bg, note: 'prick',
                device_id: _deviceId, updated_at: new Date().toISOString() }],
     }).catch(function(e){ console.warn('[prick push]', e.message); });
   }
@@ -15150,11 +15155,11 @@ function savePrickEdit(oldT) {
     _sbFetch('events?t=eq.' + oldT + '&note=eq.prick', { method:'DELETE', prefer:'return=minimal' }).catch(function(){});
     _sbFetch('events?on_conflict=t', {
       method:'POST', prefer:'resolution=merge-duplicates,return=minimal',
-      body:[{ t:newT, c:0, u:0, gi:bg, note:'prick', device_id:_deviceId, updated_at:new Date().toISOString() }]
+      body:[{ t:newT, c:0, u:0, gi:bg, value:bg, note:'prick', device_id:_deviceId, updated_at:new Date().toISOString() }]
     }).catch(function(e){ console.warn('[prick edit]', e.message); });
   } else if (SUPABASE_READY) {
     _sbFetch('events?t=eq.' + oldT + '&note=eq.prick', {
-      method:'PATCH', prefer:'return=minimal', body:{ gi:bg, updated_at:new Date().toISOString() }
+      method:'PATCH', prefer:'return=minimal', body:{ gi:bg, value:bg, updated_at:new Date().toISOString() }
     }).catch(function(e){ console.warn('[prick patch]', e.message); });
   }
 
@@ -18020,6 +18025,12 @@ function commitPadImport() {
     topUpCOB(totalCarbs);
   }
 
+  // Bolus-with-carbs: classify any rounding/override vs the suggested dose
+  if (u > 0 && totalCarbs > 0) {
+    var _suggested = calcBolus(totalCarbs, dataAt(t).bg, t).total;
+    _storeBolusOverride(t, _suggested, u);
+  }
+
   try { localStorage.setItem('river_session',JSON.stringify(SESSION)); } catch(e) {}
   try { localStorage.setItem('river_logged',JSON.stringify(LOGGED_EVENTS)); } catch(e) {}
   syncAfterLog();
@@ -18040,10 +18051,10 @@ function commitPadImport() {
       source: 'pad'
     });
     saveMealHistory();
-    syncMealToSupabase(MEAL_HISTORY[0]);
     (function(){
       var _snap = buildSmartForecast();
       if (MEAL_HISTORY[0]) MEAL_HISTORY[0]._predictedCurve = _snap;
+      syncMealToSupabase(MEAL_HISTORY[0]);
       scheduleMealOutcome(MEAL_HISTORY[0], _snap);
     })();
   }
