@@ -4819,12 +4819,70 @@ function showDayStrip() {
   strip.appendChild(inner);
   document.body.appendChild(strip);
 
+  // ── RECENT ENTRIES — fallback edit list ──────────────────────────
+  // Chips on the canvas can become unclickable (e.g. a meal/bolus logged
+  // at a time when the CGM was offline can render with a degenerate hit
+  // box). This list gives a guaranteed tap target straight into
+  // openContextCard for today's logged events, bypassing canvas hit-testing.
+  var todayStart = today.getTime();
+  var todayEnd   = todayStart + 86400000;
+  var todaysEntries = [];
+  for (var _ei = 0; _ei < LOGGED_EVENTS.length; _ei++) {
+    var _e = LOGGED_EVENTS[_ei];
+    if (_e.t >= todayStart && _e.t < todayEnd && (_e.c > 0 || _e.u > 0)) {
+      todaysEntries.push({ idx: _ei, ev: _e });
+    }
+  }
+  todaysEntries.sort(function(a,b){ return b.ev.t - a.ev.t; }); // most recent first
+
+  if (todaysEntries.length > 0) {
+    var recentWrap = document.createElement('div');
+    recentWrap.style.cssText = 'display:flex;justify-content:center;pointer-events:none;' +
+      'padding:6px 8px 0';
+
+    var recentInner = document.createElement('div');
+    recentInner.style.cssText = 'display:flex;gap:5px;overflow-x:auto;padding:6px 10px;' +
+      'background:rgba(6,10,24,0.94);backdrop-filter:blur(12px);border-radius:14px;' +
+      'border:1px solid rgba(255,255,255,0.07);pointer-events:auto;' +
+      '-webkit-overflow-scrolling:touch;scrollbar-width:none;max-width:100%';
+    recentInner.addEventListener('touchstart', function(e){ e.stopPropagation(); }, {passive:true});
+
+    todaysEntries.slice(0, 12).forEach(function(item) {
+      var ev = item.ev;
+      var dt = new Date(ev.t);
+      var timeStr = dt.toLocaleTimeString('en-GB', {hour:'2-digit', minute:'2-digit'});
+      var parts = [];
+      if (ev.c > 0) parts.push(ev.c + 'g');
+      if (ev.u > 0) parts.push(ev.u.toFixed(1) + 'U');
+
+      var btn = document.createElement('button');
+      btn.style.cssText = 'flex:0 0 auto;display:flex;flex-direction:column;align-items:center;' +
+        'gap:2px;padding:5px 9px;border-radius:9px;border:1px solid rgba(255,255,255,0.08);' +
+        'background:rgba(255,255,255,0.03);cursor:pointer;touch-action:manipulation;min-width:48px';
+      btn.innerHTML =
+        '<span style="font-family:DM Mono,monospace;font-size:8px;color:rgba(180,200,220,0.6);white-space:nowrap">' + timeStr + '</span>' +
+        '<span style="font-family:DM Mono,monospace;font-size:9px;color:rgba(220,230,240,0.9);white-space:nowrap">' + parts.join(' · ') + '</span>';
+
+      (function(eventIdx, evData) {
+        btn.addEventListener('click', function() {
+          hideDayStrip();
+          openContextCard(eventIdx, evData);
+        });
+      })(item.idx, ev);
+
+      recentInner.appendChild(btn);
+    });
+
+    recentWrap.appendChild(recentInner);
+    strip.appendChild(recentWrap);
+  }
+
   // Scroll to end (today)
   requestAnimationFrame(function(){ inner.scrollLeft = inner.scrollWidth; });
 
-  // Auto-hide after 6s
+  // Auto-hide after 8s (extended to give time to use recent entries list)
   if (_dayStripHideTimer) clearTimeout(_dayStripHideTimer);
-  _dayStripHideTimer = setTimeout(hideDayStrip, 6000);
+  _dayStripHideTimer = setTimeout(hideDayStrip, 8000);
 }
 
 function hideDayStrip() {
