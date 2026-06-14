@@ -827,6 +827,21 @@ function histAt(t) {
   return { bg:a.bg+f*(b.bg-a.bg), iob:a.iob+f*(b.iob-a.iob),
            cob:a.cob+f*(b.cob-a.cob), pen:a.pen };
 }
+// Nearest known BG to time t — used to place chips sensibly inside CGM
+// gaps/outages, where histAt() returns bg:null (gap sentinel). Without
+// this, chips inside a gap collapse to bgToY(null) = vertical centre,
+// which can land them off their expected position and, when several
+// gap-zone chips collapse to the same coordinates, makes individual
+// chips unreliable to tap.
+function nearestKnownBG(t) {
+  if (!HISTORY_RAW || HISTORY_RAW.length === 0) return 7.0;
+  var best = HISTORY_RAW[0], bestDiff = Math.abs(HISTORY_RAW[0].t - t);
+  for (var i = 1; i < HISTORY_RAW.length; i++) {
+    var diff = Math.abs(HISTORY_RAW[i].t - t);
+    if (diff < bestDiff && HISTORY_RAW[i].bg > 0) { best = HISTORY_RAW[i]; bestDiff = diff; }
+  }
+  return (best && best.bg > 0) ? best.bg : 7.0;
+}
 function dataAt(t) {
   const h = histAt(t);
   let si=0, sc=0;
@@ -2891,7 +2906,7 @@ function drawBolusMarkers(pal) {
     const x   = tX(b.t);
     if (x < -80 || x > W + 80) continue;
     const d   = dataAt(b.t);
-    const bgY = bgToY(d.bg);
+    const bgY = bgToY(d.bg != null ? d.bg : nearestKnownBG(b.t));
 
     if (b.c > 1) {
       var _isHypo = b.note && typeof b.note === 'string' && b.note.indexOf('hypo') === 0;
@@ -13772,7 +13787,15 @@ function openContextCard(eventIdx, chipData) {
   // chipData.t is stable, so use it to find the current correct index.
   if (chipData && chipData.t != null) {
     var _freshIdx = LOGGED_EVENTS.findIndex(function(e){ return e.t === chipData.t; });
-    if (_freshIdx >= 0) eventIdx = _freshIdx;
+    if (_freshIdx < 0) {
+      // The event this chip pointed to no longer exists (e.g. removed by
+      // sync as a duplicate/stale row). Don't fall back to the original
+      // eventIdx — it may now point at an unrelated event. Tell the user
+      // instead of failing silently.
+      showToast('that entry was just updated\\nrefreshing…');
+      return;
+    }
+    eventIdx = _freshIdx;
   }
   var ev = LOGGED_EVENTS[eventIdx];
   if (!ev) return;
