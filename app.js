@@ -4721,7 +4721,7 @@ CV.addEventListener('touchend',()=>{
 let md={on:false,dragging:false,x0:0,t0:0};
 CV.addEventListener('mousedown',e=>{if(!e.target.closest('#sheet,#flow-dock,.dock-btn,#whisper-overlay,#food-mgr-overlay,#hypo-overlay,#corr-overlay,#food-add-overlay,[id$=-overlay],button,input,textarea,select'))md={on:true,dragging:false,x0:e.clientX,t0:viewTime}});
 CV.addEventListener('mousemove',e=>{if(md.on){var dx=e.clientX-md.x0;if(!md.dragging&&Math.abs(dx)<5)return;md.dragging=true;_isAtNow=false;viewTime=Math.max(CGM_START, Math.min(Date.now(), md.t0-dx*(viewSpan/W)));_maybeLoadOlderHistory();}});
-CV.addEventListener('mouseup',()=>{md.on=false;});
+CV.addEventListener('mouseup',()=>{md.on=false;md.dragging=false;});
 
 // ── QUICK JUMP DAY STRIP ──────────────────────────────────────────────────
 // Floating bottom strip: last 14 days as tappable date pills.
@@ -13764,6 +13764,16 @@ async function deployToGitHub() {
 // ═══════════════════════════════════════════════════════════════════════
 
 function openContextCard(eventIdx, chipData) {
+  // ── Re-resolve eventIdx by timestamp ────────────────────────────────
+  // LOGGED_EVENTS is mutated in place (splice on sync/delete, push on new
+  // local entries). An idx captured when a chip was drawn — or when the
+  // recent-entries list was built — can go stale by the time the user taps
+  // it, pointing at the wrong event or past the end of the array.
+  // chipData.t is stable, so use it to find the current correct index.
+  if (chipData && chipData.t != null) {
+    var _freshIdx = LOGGED_EVENTS.findIndex(function(e){ return e.t === chipData.t; });
+    if (_freshIdx >= 0) eventIdx = _freshIdx;
+  }
   var ev = LOGGED_EVENTS[eventIdx];
   if (!ev) return;
 
@@ -14407,7 +14417,16 @@ function openContextCard(eventIdx, chipData) {
   el.style.cssText = 'position:fixed;inset:0;z-index:80;background:rgba(3,5,20,0.88);' +
     'backdrop-filter:blur(18px);display:flex;flex-direction:column;align-items:center;' +
     'justify-content:flex-end;padding:0;pointer-events:auto;touch-action:pan-y';
-  el.addEventListener('click', function(e){ if (e.target === el) el.remove(); });
+  // Suppress close-on-background-click for the same window mobile browsers use
+  // to fire a synthetic 'click' after touchend (~300ms). Without this, the
+  // synthetic click that follows the touchend which opened this overlay can
+  // land on `el` itself (inset:0 covers the whole screen) and immediately
+  // remove it — the card flashes open and closes before it can be seen.
+  var _ctxOpenedAt = Date.now();
+  el.addEventListener('click', function(e){
+    if (Date.now() - _ctxOpenedAt < 500) return;
+    if (e.target === el) el.remove();
+  });
   el.addEventListener('touchstart', function(e){ e.stopPropagation(); }, {passive:true});
 
   var inner = document.createElement('div');
