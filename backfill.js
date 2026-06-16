@@ -533,7 +533,7 @@ function bfCardHTML(ev, idx) {
         '<div style="display:flex;align-items:center;gap:8px;margin-top:10px">',
           '<span style="font-size:11px;color:#555;min-width:70px;text-transform:uppercase;letter-spacing:0.05em">bolus wait</span>',
           '<input type="number" min="0" max="60" step="5" id="bfw-' + idx + '" value="' + (ev.wait_mins!=null?ev.wait_mins:'') + '" placeholder="mins" onchange="bfUpdateWait(' + idx + ',this.value)" style="font-family:inherit;font-size:12px;width:60px;border:1px solid #26262f;border-radius:4px;padding:3px 6px;background:#0c0c0f;color:#e8e4dc;text-align:center">',
-          '<span style="font-size:11px;color:#555">' + waitHint + '</span>',
+          '<span id="bfwh-' + idx + '" style="font-size:11px;color:#555">' + waitHint + '</span>',
         '</div>',
       ].join('') : '',
 
@@ -1319,6 +1319,14 @@ window.bfDelItem = bfDelItem;
 function bfUpdateWait(cardIdx, val) {
   if (!_bfQueue[cardIdx]) return;
   _bfQueue[cardIdx].wait_mins = val==='' ? null : parseInt(val);
+  // Typing into this field is a deliberate human entry — distinguish it from
+  // the _bfAutoWait BG-rule default that pre-fills the field untouched.
+  // Without this, every manually-entered real wait time was being written to
+  // meal_history as wait_reason:'bg_rule' (a guess) instead of 'logged' (a
+  // fact you actually know) — confirmed wrong on the 28 Mar morning snack row.
+  _bfQueue[cardIdx].wait_src = val === '' ? null : 'written';
+  var hint = document.getElementById('bfwh-' + cardIdx);
+  if (hint) hint.textContent = val === '' ? '' : '✓ written';
 }
 window.bfUpdateWait = bfUpdateWait;
 
@@ -1506,11 +1514,29 @@ async function bfApprove(idx) {
         }
       }
 
-      var hour = new Date(ev.t).getHours();
-      var period = hour >= 6 && hour < 10 ? 'Breakfast'
-                 : hour >= 10 && hour < 14 ? 'Lunch'
-                 : hour >= 14 && hour < 18 ? 'Afternoon'
-                 : hour >= 18 && hour < 22 ? 'Evening' : 'Overnight';
+      // bolus_outcomes.period is a fixed five-value schema
+      // (Breakfast|Lunch|Afternoon|Evening|Overnight). The queue's own
+      // classification (ev.period) uses a richer nine-value set including
+      // snack sub-types, so map down to the five-value bucket rather than
+      // re-deriving purely from hour-of-day and silently overriding a
+      // classification you'd already set (e.g. "Morning snack" at 10:49
+      // falling into the 10-14 hour bucket and getting mislabelled "Lunch").
+      var PERIOD_MAP = {
+        'Breakfast': 'Breakfast', 'Morning snack': 'Breakfast',
+        'Lunch': 'Lunch', 'Afternoon snack': 'Afternoon',
+        'Dinner': 'Evening', 'Evening snack': 'Evening', 'Bedtime snack': 'Evening',
+        'Overnight': 'Overnight',
+      };
+      var period;
+      if (ev.period && PERIOD_MAP[ev.period]) {
+        period = PERIOD_MAP[ev.period];
+      } else {
+        var hour = new Date(ev.t).getHours();
+        period = hour >= 6 && hour < 10 ? 'Breakfast'
+               : hour >= 10 && hour < 14 ? 'Lunch'
+               : hour >= 14 && hour < 18 ? 'Afternoon'
+               : hour >= 18 && hour < 22 ? 'Evening' : 'Overnight';
+      }
 
       boRow = {
         t:                ev.t,
