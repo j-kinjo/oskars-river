@@ -10099,6 +10099,27 @@ function logMealEntry(carbsOnly) {
     var bolusT = _safeEventT(t);
     SESSION.push({t: bolusT, c: 0, u: u});
     LOGGED_EVENTS.push({t: bolusT, c: 0, u: u, note: 'bolus', insulin_type: _currentSelectedInsulin(), local: true});
+    // Snapshot IOB prediction curve for outcome tracking — this path never
+    // wrote a bolus_outcomes baseline at all (same gap as logCorrection;
+    // distinct from the fire-and-forget race already fixed in bolusNow()).
+    (function() {
+      try {
+        var mealBolusInsType = _currentSelectedInsulin();
+        var mealBolusEv = {t: bolusT, u: u, insulin_type: mealBolusInsType, logged_by: _thisPersonId||'unknown'};
+        var iobCurve = [];
+        var d0 = dataAt(bolusT);
+        var ISF = _currentTherapySnapshot(bolusT);
+        var isf = ISF ? ISF.isf : 6.5;
+        var insProfile = _getInsulinProfile(mealBolusInsType);
+        for (var m = 5; m <= 240; m += 5) {
+          var predBG = d0 ? Math.max(1.8, d0.bg - u * (1 - _iobFn(m, insProfile.diaMins, insProfile.peakMins)) * isf) : 0;
+          iobCurve.push({mins: m, bg: +predBG.toFixed(2)});
+        }
+        _createBolusOutcomeBaselineWithRetry(mealBolusEv, iobCurve);
+      } catch (diagErr) {
+        console.warn('[bolusOutcomeBaseline] logMealEntry IIFE setup threw:', diagErr);
+      }
+    })();
   }
 
   var carbT = _safeEventT(t + eatWaitNow * 60000); // when carbs enter the system
@@ -10229,8 +10250,29 @@ function commitManualBolus() {
   if (u > 20) { showToast('⚠️ ' + u.toFixed(1) + 'U is very high — max 20U per entry'); return; }
   if (u > 15) { showToast('⚠️ ' + u.toFixed(1) + 'U logged — double-check this dose'); }
   var t = typeof getEntryTime === 'function' ? getEntryTime() : Date.now();
-  SESSION.push({t: t, c: 0, u: u, insulin_type: _currentSelectedInsulin()});
+  var manualInsType = _currentSelectedInsulin();
+  SESSION.push({t: t, c: 0, u: u, insulin_type: manualInsType});
   try { localStorage.setItem('river_session',JSON.stringify(SESSION)); } catch(e) {}
+  // Snapshot IOB prediction curve for outcome tracking — this path never
+  // wrote a bolus_outcomes baseline at all (same gap as logCorrection and
+  // logMealEntry; distinct from the fire-and-forget race fixed in bolusNow()).
+  (function() {
+    try {
+      var manualEv = {t: t, u: u, insulin_type: manualInsType, logged_by: _thisPersonId||'unknown'};
+      var iobCurve = [];
+      var d0 = dataAt(t);
+      var ISF = _currentTherapySnapshot(t);
+      var isf = ISF ? ISF.isf : 6.5;
+      var insProfile = _getInsulinProfile(manualInsType);
+      for (var m = 5; m <= 240; m += 5) {
+        var predBG = d0 ? Math.max(1.8, d0.bg - u * (1 - _iobFn(m, insProfile.diaMins, insProfile.peakMins)) * isf) : 0;
+        iobCurve.push({mins: m, bg: +predBG.toFixed(2)});
+      }
+      _createBolusOutcomeBaselineWithRetry(manualEv, iobCurve);
+    } catch (diagErr) {
+      console.warn('[bolusOutcomeBaseline] commitManualBolus IIFE setup threw:', diagErr);
+    }
+  })();
   _snapshotPrediction();
   showToast('💧 ' + u.toFixed(1) + 'U logged');
   closeSheet();
@@ -11624,6 +11666,27 @@ function logCorrection(){
   LOGGED_EVENTS.push({t:now,c:0,u:u,note:'correction',insulin_type:insType,logged_by:_thisPersonId||'unknown',local:true});
   try{localStorage.setItem('river_session',JSON.stringify(SESSION));}catch(e){}
   try{localStorage.setItem('river_logged',JSON.stringify(LOGGED_EVENTS));}catch(e){}
+  // Snapshot IOB prediction curve for outcome tracking — corrections never
+  // wrote a bolus_outcomes baseline at all (separate gap from the meal-bolus
+  // fire-and-forget bug; this path had no call here whatsoever before now).
+  (function() {
+    try {
+      var corrEv = {t:now, u:u, insulin_type:insType, logged_by:_thisPersonId||'unknown'};
+      var iobCurve = [];
+      var d0 = dataAt(now);
+      var ISF = _currentTherapySnapshot(now);
+      var isf = ISF ? ISF.isf : 6.5;
+      var insProfile = _getInsulinProfile(insType);
+      for (var m = 5; m <= 240; m += 5) {
+        var predBG = d0 ? Math.max(1.8, d0.bg - u * (1 - _iobFn(m, insProfile.diaMins, insProfile.peakMins)) * isf) : 0;
+        iobCurve.push({mins: m, bg: +predBG.toFixed(2)});
+      }
+      // Fire-and-forget deliberately: UI must not block on the ~1.5s retry.
+      _createBolusOutcomeBaselineWithRetry(corrEv, iobCurve);
+    } catch (diagErr) {
+      console.warn('[bolusOutcomeBaseline] correction IIFE setup threw:', diagErr);
+    }
+  })();
   // Snapshot prediction at log time — stored globally for drawForecastTrace
   _snapshotPrediction();
   ALERTS.snooze('corr_nudge',90*60000); ALERTS.snooze('corr_high',90*60000);
@@ -19033,6 +19096,28 @@ function commitPadImport() {
     SESSION.push({t:t, c:0, u:u, waitMins:waitMins, source:'pad'});
     LOGGED_EVENTS.push({t:t, c:0, u:u, waitMins:waitMins, note:'bolus', source:'pad', logged_by:_thisPersonId||'unknown', local:true});
     topUpIOB(u);
+    // Snapshot IOB prediction curve for outcome tracking — this path never
+    // wrote a bolus_outcomes baseline at all (same gap as logCorrection,
+    // logMealEntry, commitManualBolus). insulin_type isn't carried on pad
+    // events, so fall back to the currently-selected insulin type.
+    (function() {
+      try {
+        var padInsType = _currentSelectedInsulin();
+        var padEv = {t: t, u: u, insulin_type: padInsType, logged_by: _thisPersonId||'unknown'};
+        var iobCurve = [];
+        var d0 = dataAt(t);
+        var ISF = _currentTherapySnapshot(t);
+        var isf = ISF ? ISF.isf : 6.5;
+        var insProfile = _getInsulinProfile(padInsType);
+        for (var m = 5; m <= 240; m += 5) {
+          var predBG = d0 ? Math.max(1.8, d0.bg - u * (1 - _iobFn(m, insProfile.diaMins, insProfile.peakMins)) * isf) : 0;
+          iobCurve.push({mins: m, bg: +predBG.toFixed(2)});
+        }
+        _createBolusOutcomeBaselineWithRetry(padEv, iobCurve);
+      } catch (diagErr) {
+        console.warn('[bolusOutcomeBaseline] commitPadImport IIFE setup threw:', diagErr);
+      }
+    })();
   }
   var carbT = _safeEventT(t + waitMins * 60000);
   if (totalCarbs > 0) {
