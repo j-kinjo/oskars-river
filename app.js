@@ -5828,6 +5828,166 @@ async function _backfillBolusOutcomes() {
   }
 }
 
+// ── BACKFILL REVIEW: confidence-scored suggestion + immediate complete outcome ──
+// Distinct from the live logging flow and from runOutcomeBackfill's 24h-bounded
+// sweep. For a historical row (CGM/insulin seed data already present, items
+// not yet confirmed), this:
+//   1. Pulls the raw BG trace already sitting in `readings` for the window
+//      after `t` (it already happened — no waiting needed).
+//   2. Scores it against previously-CONFIRMED meal_history rows using the same
+//      shape/timing/time-of-day matching _matchGhostToMealHistory uses for
+//      ghosts, so candidates mature as you work through the queue in order —
+//      each confirmed row becomes a comparison point for the next.
+//   3. On confirm, reconstructs IC/ISF/target as they were live at `t` via
+//      getTherapyAt (NOT today's settings, NOT the live-adaptive blend —
+//      getISF/getIC already skip the observed-ISF layer when historicalRatios
+//      is passed, which is correct: a March prediction must not be computed
+//      using insulin sensitivity learned in May).
+//   4. Writes meal_history + bolus_outcomes rows already COMPLETE
+//      (actual_curve/observed_isf/rmse filled in the same call), bypassing
+//      the 24h sweep entirely — the outcome window already elapsed in real
+//      time, the readings exist, there is nothing to wait for.
+//
+// KNOWN LIMITATION: dataAt(t).iob/.cob only reflect SESSION/BOLUS_EVENTS from
+// the last 6h (_cgmFloor), so historical IOB-at-meal-time cannot be read back
+// out of dataAt() for old rows. predicted_curve generation here is therefore
+// withheld rather than guessed (see mealRow.predicted_curve below) — a wrong
+// single-bolus curve written as if it were the live model's real prediction
+// would be worse than no curve. observed_isf/actual_curve are NOT affected —
+// they only need preBG/nadirBG from the CGM trace itself, which dataAt(t).bg
+// resolves correctly for any historical t via readings.
+
+async function suggestBackfillCandidates(t, estCarbs, windowMins) {
+  windowMins = windowMins || 120;
+  var curve = [];
+  for (var mins = 0; mins <= windowMins; mins += 5) {
+    var d = dataAt(t + mins * 60000);
+    if (d && d.bg > 0) curve.push({ mins: mins, bg: +d.bg.toFixed(2) });
+  }
+  if (curve.length < 4) return { curve: curve, candidates: [] };
+
+  var preBG = curve[0].bg;
+  var peakPt = curve.reduce(function(best,p){ return p.bg > best.bg ? p : best; }, curve[0]);
+
+  var candidates = await _matchGhostToMealHistory(curve, peakPt.mins, estCarbs || 0, t, 0);
+  return { curve: curve, preBG: preBG, peak: peakPt, candidates: candidates };
+}
+
+// Confirm a backfill row: items + bolus units as transcribed from the
+// notepad/source data, t = the ORIGINAL historical timestamp (so it sits
+// correctly on the canvas), everything else computed as-of t.
+async function confirmBackfillEntry(t, items, bolusUnits, opts) {
+  opts = opts || {};
+  if (!SUPABASE_READY) return { ok:false, error:'supabase not ready' };
+
+  var totalCarbs = (items||[]).reduce(function(s,i){ return s + (i.carbs||0); }, 0);
+  var avgGI = items && items.length
+    ? items.reduce(function(s,i){ return s + (i.gi||55)*(i.carbs||0); }, 0) / Math.max(totalCarbs,1)
+    : 55;
+
+  // Historical therapy context — NOT live/adaptive (getTherapyAt → historicalRatios
+  // path in getISF/getIC deliberately skips the observed-ISF blend layer).
+  var therapyRow = await getTherapyAt(t);
+  var ratios = therapyRow ? therapyRow.ratios : null;
+  var ic  = getIC(t, ratios);
+  var isf = getISF(t, ratios);
+  var tgt = getTarget(t, ratios);
+
+  var preBG = _preBG(t) || (dataAt(t).bg || null);
+
+  var carbDose = totalCarbs > 0 ? totalCarbs / ic : 0;
+  var rawCorr  = (preBG && preBG > tgt) ? Math.max(0, (preBG - tgt) / isf) : 0;
+  var suggestedUnits = +((carbDose + rawCorr).toFixed(2));
+  var u = (typeof bolusUnits === 'number') ? bolusUnits : suggestedUnits;
+
+  var hour = new Date(t).getHours();
+  var period = hour >= 6 && hour < 10 ? 'Breakfast'
+             : hour >= 10 && hour < 14 ? 'Lunch'
+             : hour >= 14 && hour < 18 ? 'Afternoon'
+             : hour >= 18 && hour < 22 ? 'Evening' : 'Overnight';
+
+  var therapySnap = {
+    period: period, isf: isf, ic: ic, target: tgt,
+    basal: therapyRow && therapyRow.basal_dose,
+    basalType: therapyRow && therapyRow.basal_type,
+    insulinType: therapyRow && therapyRow.bolus_type,
+  };
+
+  // Outcome window already elapsed in real time — compute complete, not partial.
+  var mealResult  = _computeMealActualCurve(t, 120, null, preBG) || {};
+  var bolusResult = u > 0 ? _computeBolusActualCurve(t, 240, null, preBG, u) : null;
+
+  var mealRow = {
+    t: t,
+    name: period + ' · ' + new Date(t).toLocaleDateString('en-GB',{weekday:'short',day:'numeric',month:'short'}) +
+          (items && items[0] ? ' (' + items[0].name + (items.length>1?' +'+(items.length-1):'') + ')' : ''),
+    total_carbs: +totalCarbs.toFixed(1),
+    items: items || [],
+    bolus_u: u || null,
+    bolus_t: t,
+    wait_mins: opts.waitMins != null ? opts.waitMins : null, // null = genuinely unknown, NOT assumed
+    pre_bg: preBG,
+    therapy_snapshot: therapySnap,
+    predicted_curve: null, // intentionally withheld — see KNOWN LIMITATION above
+    is_partial: false,
+    source: 'backfill_reviewed',
+    logged_by: opts.loggedBy || null,
+  };
+  Object.assign(mealRow, mealResult);
+
+  try {
+    await _sbFetch('meal_history?on_conflict=t', {
+      method: 'POST',
+      prefer: 'resolution=merge-duplicates,return=minimal',
+      body: [mealRow],
+    });
+  } catch(e) {
+    console.warn('[confirmBackfillEntry] meal_history write failed:', e.message);
+    return { ok:false, error:e.message };
+  }
+
+  if (u > 0) {
+    var bolusRow = {
+      t: t,
+      units: u,
+      pre_bg: preBG,
+      iob_at_bolus: null, // see KNOWN LIMITATION — cannot reconstruct historical stacked IOB
+      therapy_snapshot: therapySnap,
+      predicted_curve: null,
+      formula_version: null,
+      is_partial: false,
+      period: period,
+      device_id: _deviceId,
+    };
+    if (bolusResult) Object.assign(bolusRow, bolusResult);
+
+    try {
+      await _sbFetch('bolus_outcomes?on_conflict=t', {
+        method: 'POST',
+        prefer: 'resolution=merge-duplicates,return=minimal',
+        body: [bolusRow],
+      });
+    } catch(e) {
+      console.warn('[confirmBackfillEntry] bolus_outcomes write failed:', e.message);
+    }
+  }
+
+  // Mirror into events so the canvas chip renders, matching the live logging shape.
+  try {
+    var rows = [{ t: t, c: totalCarbs, u: 0, gi: +avgGI.toFixed(1), note: 'carbs', items: items || [], pre_bg: preBG }];
+    if (u > 0) rows.push({ t: t, c: 0, u: u, note: 'bolus', suggested_units: suggestedUnits });
+    await _sbFetch('events?on_conflict=t', {
+      method: 'POST',
+      prefer: 'resolution=merge-duplicates,return=minimal',
+      body: rows,
+    });
+  } catch(e) {
+    console.warn('[confirmBackfillEntry] events write failed:', e.message);
+  }
+
+  return { ok:true, meal_t:t, total_carbs:totalCarbs, suggested_units:suggestedUnits, delivered_units:u, observed_isf: bolusResult && bolusResult.observed_isf };
+}
+
 // ── 3. UNANNOUNCED MEAL DETECTION ─────────────────────────────────────
 // Runs every 15min. Looks for a sustained positive residual (BG rising
 // faster than IOB/COB model predicts) with a bell-curve shape matching
@@ -16222,8 +16382,17 @@ async function _correctTherapyForBackdate(fromT, updated) {
     });
   } catch(e) { console.warn('[treatment] insulin_type correction PATCH failed:', e.message); }
 
-  // ── Supabase: therapy_snapshot — varies per row (time-of-day ratio
-  // segment), so correct row-by-row, bounded by THERAPY_CORRECTION_CAP.
+  // ── Supabase: therapy_snapshot + epoch_t — both vary per row (time-of-day
+  // ratio segment / which therapy_history row is now "active as of t"), so
+  // correct row-by-row, bounded by THERAPY_CORRECTION_CAP.
+  //
+  // epoch_t exists so outcome rows can be grouped by "which treatment version
+  // produced this result" (e.g. comparing observed-ISF before/after a basal
+  // change). A backdated treatment save — logging today that basal actually
+  // went up three days ago — must walk every outcome row written in the
+  // interim and re-point epoch_t at the (now-earlier) correct version, or
+  // those rows stay silently misattributed to the wrong regimen, the same
+  // failure mode as a stale predicted_curve.
   ['events', 'meal_history', 'bolus_outcomes'].forEach(function(table) {
     (async function() {
       try {
@@ -16234,18 +16403,32 @@ async function _correctTherapyForBackdate(fromT, updated) {
         );
         for (var i = 0; i < (rows || []).length; i++) {
           var snap = _snapshotFromTherapy(updated, rows[i].t);
+          var patchBody = { therapy_snapshot: snap };
+          // epoch_t only applies to meal_history/bolus_outcomes (events has no such column).
+          // Re-derive per-row via getTherapyAt rather than hardcoding fromT — if there have
+          // been multiple therapy changes since fromT (e.g. basal backdated to the 13th, then
+          // ISF changed live on the 15th), rows after the 15th must point at the 15th's
+          // therapy_history.t, not the 13th's. getTherapyAt already does the correct
+          // "last row where row.t <= rows[i].t" lookup, same logic _snapshotFromTherapy's
+          // ratio segment relies on, so this stays consistent with the snapshot itself.
+          if (table === 'meal_history' || table === 'bolus_outcomes') {
+            try {
+              var epochRow = await getTherapyAt(rows[i].t);
+              patchBody.epoch_t = epochRow ? epochRow.t : fromT;
+            } catch(e) { patchBody.epoch_t = fromT; }
+          }
           try {
             await _sbFetch(table + '?t=eq.' + rows[i].t, {
               method: 'PATCH', prefer: 'return=minimal',
-              body: { therapy_snapshot: snap },
+              body: patchBody,
             });
           } catch(e) { /* best-effort — skip this row */ }
         }
         if (rows && rows.length === THERAPY_CORRECTION_CAP) {
-          console.warn('[treatment] ' + table + ' therapy_snapshot correction hit the ' +
+          console.warn('[treatment] ' + table + ' therapy_snapshot/epoch_t correction hit the ' +
             THERAPY_CORRECTION_CAP + '-row cap — older rows need a SQL backfill session');
         }
-      } catch(e) { console.warn('[treatment] ' + table + ' therapy_snapshot correction failed:', e.message); }
+      } catch(e) { console.warn('[treatment] ' + table + ' therapy_snapshot/epoch_t correction failed:', e.message); }
     })();
   });
 }
