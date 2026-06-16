@@ -479,7 +479,8 @@ function bfCardHTML(ev, idx) {
   if (ev.wait_mins == null && evType === 'bolus' && ev.pre_bg != null) {
     ev.wait_mins = _bfAutoWait(ev.pre_bg);
   }
-  var waitHint   = ev.wait_src === 'written' ? '✓ written'
+  var waitHint   = ev.wait_src === 'confirmed' ? '✓ confirmed'
+    : ev.wait_src === 'written' ? '✓ written'
     : ev.wait_mins != null ? '≈ ' + ev.wait_mins + 'm · BG rule' : '';
   var statusCol  = ev.status==='approved'?'#1d9e72':ev.status==='flagged'?'#c0392b':'#555';
   var borderLeft = ev.status==='approved'?'border-left:3px solid #1d9e72'
@@ -528,11 +529,24 @@ function bfCardHTML(ev, idx) {
       '</div>',
       '<button onclick="bfAddItem(' + idx + ')" style="font-family:inherit;font-size:11px;color:#555;border:1px dashed #26262f;border-radius:4px;padding:3px 8px;cursor:pointer;background:none;margin-top:4px;width:100%;text-align:left">+ add item</button>',
 
-      // Wait time — only meaningful for bolus events
+      // Wait time — only meaningful for bolus events. Three states:
+      //  - untouched, ev.wait_src unset: this is just the _bfAutoWait BG-rule
+      //    guess pre-filled into the box — looks like a real number but isn't
+      //  - typed a DIFFERENT number: wait_src='written' (handled by
+      //    bfUpdateWait's onchange, which fires when the value changes)
+      //  - checked the box to confirm the showing number IS correct (e.g. the
+      //    auto-fill happened to match the notepad exactly, so typing the same
+      //    digits wouldn't even fire onchange): wait_src='confirmed'
+      // Both 'written' and 'confirmed' are genuinely known facts → wait_reason
+      // 'logged' on approval; neither set → 'bg_rule', an honest guess.
       evType === 'bolus' ? [
-        '<div style="display:flex;align-items:center;gap:8px;margin-top:10px">',
+        '<div style="display:flex;align-items:center;gap:8px;margin-top:10px;flex-wrap:wrap">',
           '<span style="font-size:11px;color:#555;min-width:70px;text-transform:uppercase;letter-spacing:0.05em">bolus wait</span>',
-          '<input type="number" min="0" max="60" step="5" id="bfw-' + idx + '" value="' + (ev.wait_mins!=null?ev.wait_mins:'') + '" placeholder="mins" onchange="bfUpdateWait(' + idx + ',this.value)" style="font-family:inherit;font-size:12px;width:60px;border:1px solid #26262f;border-radius:4px;padding:3px 6px;background:#0c0c0f;color:#e8e4dc;text-align:center">',
+          '<input type="number" min="0" max="60" step="5" id="bfw-' + idx + '" value="' + (ev.wait_mins!=null?ev.wait_mins:'') + '" placeholder="mins" onchange="bfUpdateWait(' + idx + ',this.value)" style="font-family:inherit;font-size:12px;width:60px;border:1px solid #26262f;border-radius:4px;padding:3px 6px;background:#0c0c0f;color:' + (ev.wait_src ? '#e8e4dc' : '#888') + (ev.wait_src ? '' : ';font-style:italic') + ';text-align:center">',
+          '<label style="display:flex;align-items:center;gap:4px;font-size:10px;color:#555;cursor:pointer;user-select:none">',
+            '<input type="checkbox" id="bfwc-' + idx + '" ' + (ev.wait_src === 'confirmed' ? 'checked' : '') + ' onchange="bfConfirmWait(' + idx + ',this.checked)" style="cursor:pointer">',
+            'confirmed from notepad',
+          '</label>',
           '<span id="bfwh-' + idx + '" style="font-size:11px;color:#555">' + waitHint + '</span>',
         '</div>',
       ].join('') : '',
@@ -1319,16 +1333,45 @@ window.bfDelItem = bfDelItem;
 function bfUpdateWait(cardIdx, val) {
   if (!_bfQueue[cardIdx]) return;
   _bfQueue[cardIdx].wait_mins = val==='' ? null : parseInt(val);
-  // Typing into this field is a deliberate human entry — distinguish it from
-  // the _bfAutoWait BG-rule default that pre-fills the field untouched.
-  // Without this, every manually-entered real wait time was being written to
-  // meal_history as wait_reason:'bg_rule' (a guess) instead of 'logged' (a
-  // fact you actually know) — confirmed wrong on the 28 Mar morning snack row.
+  // Typing a new value is itself a deliberate entry — but if the checkbox
+  // was previously checked and the typed value differs, the confirmation no
+  // longer applies to whatever number is now showing, so don't leave it
+  // silently marked 'confirmed' for a value that was never actually checked.
   _bfQueue[cardIdx].wait_src = val === '' ? null : 'written';
   var hint = document.getElementById('bfwh-' + cardIdx);
   if (hint) hint.textContent = val === '' ? '' : '✓ written';
+  var cb = document.getElementById('bfwc-' + cardIdx);
+  if (cb) cb.checked = false;
 }
 window.bfUpdateWait = bfUpdateWait;
+
+// Confirm checkbox — for when the auto-filled BG-rule guess happens to match
+// what's actually written in the notepad. Typing the same digits into the
+// input wouldn't reliably fire onchange (no value change), so this is the
+// only way to mark "I checked, this number is a real fact" without forcing
+// a no-op edit. Unchecking reverts to whatever the field's plain value
+// implies (guess, if nothing else was typed).
+function bfConfirmWait(cardIdx, checked) {
+  if (!_bfQueue[cardIdx]) return;
+  var inp = document.getElementById('bfw-' + cardIdx);
+  var val = inp ? inp.value : '';
+  if (checked) {
+    if (val === '') { // can't confirm an empty wait — nothing to confirm
+      var cb = document.getElementById('bfwc-' + cardIdx);
+      if (cb) cb.checked = false;
+      return;
+    }
+    _bfQueue[cardIdx].wait_mins = parseInt(val);
+    _bfQueue[cardIdx].wait_src = 'confirmed';
+  } else {
+    _bfQueue[cardIdx].wait_src = null;
+  }
+  var hint = document.getElementById('bfwh-' + cardIdx);
+  if (hint) hint.textContent = checked ? '✓ confirmed' : (val !== '' ? '≈ ' + val + 'm · BG rule' : '');
+  if (inp) inp.style.color = checked ? '#e8e4dc' : '#888';
+  if (inp) inp.style.fontStyle = checked ? 'normal' : 'italic';
+}
+window.bfConfirmWait = bfConfirmWait;
 
 function bfUpdateNotes(cardIdx, val) {
   if (!_bfQueue[cardIdx]) return;
@@ -1472,7 +1515,7 @@ async function bfApprove(idx) {
       items:        items,
       bolus_u:      ev.units,
       wait_mins:    ev.wait_mins,
-      wait_reason:  ev.wait_src === 'written' ? 'logged' : (ev.wait_mins != null ? 'bg_rule' : null),
+      wait_reason:  (ev.wait_src === 'written' || ev.wait_src === 'confirmed') ? 'logged' : (ev.wait_mins != null ? 'bg_rule' : null),
       pre_bg:       ev.pre_bg,
       peak_bg:      peakPt ? peakPt.bg : null,
       peak_t:       peakPt ? ev.t + peakPt.m*60000 : null,
