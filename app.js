@@ -5744,6 +5744,64 @@ async function _createBolusOutcomeBaseline(ev, predictedCurve) {
   }
 }
 
+// Wraps _createBolusOutcomeBaseline with a read-after-write verify and one
+// retry. On second failure, flags events.needs_outcome_baseline=true so the
+// row gets a sweep pass later instead of silently never existing (was
+// dropping ~1 in 10 bolus_outcomes rows — fire-and-forget swallowed errors).
+async function _createBolusOutcomeBaselineWithRetry(ev, predictedCurve, attempt) {
+  attempt = attempt || 1;
+  try {
+    await _createBolusOutcomeBaseline(ev, predictedCurve);
+    var check = await _sbFetch('bolus_outcomes?t=eq.' + ev.t + '&select=t', {});
+    if (Array.isArray(check) && check.length > 0) return true;
+    throw new Error('baseline row not found after write');
+  } catch (e) {
+    if (attempt < 2) {
+      await new Promise(function(r){ setTimeout(r, 1500); });
+      return _createBolusOutcomeBaselineWithRetry(ev, predictedCurve, attempt + 1);
+    }
+    console.warn('[bolusOutcomeBaseline] failed after retry, flagging for sweep:', e.message);
+    try {
+      await _sbFetch('events?t=eq.' + ev.t, {
+        method: 'PATCH', prefer: 'return=minimal',
+        body: { needs_outcome_baseline: true },
+      });
+    } catch (e2) { /* best-effort flag */ }
+    return false;
+  }
+}
+
+// Sweep for events flagged needs_outcome_baseline=true (set when the live
+// retry-and-verify in _createBolusOutcomeBaselineWithRetry exhausted its
+// retry). Deliberately unbounded by time — unlike _backfillBolusOutcomes'
+// 24h window — since a flagged row can sit unactioned indefinitely if this
+// sweep itself doesn't run for a while.
+async function _sweepNeedsOutcomeBaseline() {
+  var rows;
+  try {
+    rows = await _sbFetch('events?needs_outcome_baseline=eq.true&select=t,u,c,note,insulin_type,logged_by', {});
+  } catch(e) { console.warn('[outcomeBaselineSweep] fetch failed:', e.message); return; }
+  if (!Array.isArray(rows) || !rows.length) return;
+
+  for (var i = 0; i < rows.length; i++) {
+    var ev = rows[i];
+    if (!ev.u) continue; // only bolus/correction events carry units
+    try {
+      await _createBolusOutcomeBaseline(
+        {t: ev.t, u: ev.u, insulin_type: ev.insulin_type, logged_by: ev.logged_by},
+        null // predicted_curve not reconstructable after the fact; baseline still written
+      );
+      var check = await _sbFetch('bolus_outcomes?t=eq.' + ev.t + '&select=t', {});
+      if (Array.isArray(check) && check.length > 0) {
+        await _sbFetch('events?t=eq.' + ev.t, {
+          method: 'PATCH', prefer: 'return=minimal',
+          body: { needs_outcome_baseline: false },
+        });
+      }
+    } catch(e) { console.warn('[outcomeBaselineSweep] retry failed for t=' + ev.t, e.message); }
+  }
+}
+
 // Unified idempotent backfill — called from syncNow (on load + every 5min).
 // Covers both meal_history and bolus_outcomes, tiered partial/complete.
 async function runOutcomeBackfill() {
@@ -5752,6 +5810,7 @@ async function runOutcomeBackfill() {
   try {
     await _backfillMealOutcomes();
     await _backfillBolusOutcomes();
+    await _sweepNeedsOutcomeBaseline();
     _maybeRollupModelAccuracy();
   } catch(e) {
     console.warn('[outcomeBackfill]', e.message);
@@ -7545,7 +7604,10 @@ function bolusNow() {
       var predBG = d0 ? Math.max(1.8, d0.bg - u * (1 - _iobFn(m, insProfile.diaMins, insProfile.peakMins)) * isf) : 0;
       iobCurve.push({mins: m, bg: +predBG.toFixed(2)});
     }
-    _createBolusOutcomeBaseline(bolusEv, iobCurve);
+    // Fire-and-forget deliberately: UI must not block on the ~1.5s retry.
+    // Failures are caught internally and flagged via needs_outcome_baseline
+    // for the sweep, not surfaced here.
+    _createBolusOutcomeBaselineWithRetry(bolusEv, iobCurve);
   })();
   syncAfterLog();
   _ptCache = null;
