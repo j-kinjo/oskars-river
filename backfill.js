@@ -27,6 +27,19 @@ async function _bfFetch(path, opts) {
   return _sbFetch(path, opts || {});
 }
 
+// Normalise a cgm_curve array to {m: minsFromEvent, bg: mmol} regardless of
+// stored format. Live data is {t: unix_ms, v: mmol} (confirmed universal
+// across omnipod/mylife seed sources, June 2026) — minutes are relative to
+// evT, not absolute. An older {m, bg} shape is also accepted for safety,
+// matching the dual-format shim bfDrawCGM already used before this existed.
+function _bfNormaliseCurve(cgm, evT) {
+  return (cgm || []).map(function(p) {
+    var mins = p.m != null ? p.m : (evT ? Math.round((p.t - evT) / 60000) : 0);
+    var bg   = p.bg != null ? p.bg : p.v;
+    return { m: mins, bg: bg };
+  }).filter(function(p){ return p.bg != null; });
+}
+
 // ── Init ───────────────────────────────────────────────────────
 async function initBackfill() {
   try {
@@ -508,6 +521,7 @@ function bfCardHTML(ev, idx) {
       ? 'snack items · no insulin given' + (diffWarning ? ' ' + diffWarning : '')
       : 'food items · carbs per item'   + (diffWarning ? ' ' + diffWarning : '');
     leftPanel = [
+      '<div id="bfsugg-' + idx + '" style="margin-bottom:8px"></div>',
       '<div style="font-size:10px;color:#555;text-transform:uppercase;letter-spacing:0.08em;margin-bottom:6px">' + itemsLabel + '</div>',
       '<div id="bfi-' + idx + '">',
         items.map(function(item, ii){ return bfItemRow(idx, ii, item); }).join(''),
@@ -811,9 +825,98 @@ function bfToggle(idx) {
   if (!det) return;
   var open = det.style.display !== 'none';
   det.style.display = open ? 'none' : 'block';
-  if (!open) setTimeout(function(){ bfDrawCGM(idx, _bfQueue[idx] && _bfQueue[idx].cgm_curve); }, 30);
+  if (!open) {
+    setTimeout(function(){ bfDrawCGM(idx, _bfQueue[idx] && _bfQueue[idx].cgm_curve); }, 30);
+    bfSuggestCandidates(idx);
+  }
 }
 window.bfToggle = bfToggle;
+
+// ── Confidence-scored candidate suggestions ─────────────────────
+// Reuses _matchGhostToMealHistory (app.js) — the same shape/timing/
+// time-of-day scoring used for ghost/unannounced-meal detection — applied
+// to this row's already-known cgm_curve instead of a live residual. Matches
+// against ANY previously-approved meal_history row with actual_curve set,
+// backfill or live, so candidates genuinely mature as the queue is worked
+// through in order: row 50's suggestion benefits from rows 1-49 having
+// already been confirmed, exactly as requested.
+//
+// Only meaningful for bolus/snack/hypo cards with unconfirmed item names —
+// skipped for correction cards (no food to suggest) and for rows where every
+// item already has a name typed in (nothing left to suggest).
+async function bfSuggestCandidates(idx) {
+  var ev = _bfQueue[idx];
+  if (!ev || typeof _matchGhostToMealHistory !== 'function') return;
+
+  var evType = ev.notes && ['bolus','correction','free','hypo','snack'].indexOf(ev.notes) >= 0
+    ? ev.notes
+    : (ev.units > 0 && ev.carbs_device > 0 ? 'bolus' : ev.units > 0 ? 'correction' : 'snack');
+  if (evType === 'correction') return;
+
+  var hasUnnamed = (ev.items||[]).some(function(i){ return !i.name || !i.name.trim(); }) || !ev.items || !ev.items.length;
+  if (!hasUnnamed) return; // every item already identified — nothing to suggest
+
+  var box = document.getElementById('bfsugg-' + idx);
+  if (!box) return; // card not using the suggestion-box layout (shouldn't happen post-render, but be safe)
+  box.innerHTML = '<div style="font-size:10px;color:#555;padding:4px 0">checking past meals…</div>';
+
+  try {
+    var cgm = _bfNormaliseCurve(ev.cgm_curve, ev.t);
+    if (cgm.length < 4) { box.innerHTML = ''; return; }
+    var postCgm = cgm.filter(function(p){ return p.m > 0; });
+    var peakPt  = postCgm.length ? postCgm.reduce(function(a,b){ return b.bg>a.bg?b:a; }) : null;
+    var estCarbs = ev.carbs_device || 0;
+
+    var candidates = await _matchGhostToMealHistory(postCgm.length ? postCgm : cgm, peakPt ? peakPt.m : 60, estCarbs, ev.t, 0);
+    if (!candidates || !candidates.length) { box.innerHTML = ''; return; }
+
+    // Only surface candidates worth showing — same bar as the unannounced-
+    // meals UI elsewhere in the app, avoid suggesting noise when the queue
+    // hasn't matured enough yet to have a good match.
+    var shown = candidates.filter(function(c){ return c.confidence >= 0.35; }).slice(0,3);
+    if (!shown.length) { box.innerHTML = ''; return; }
+
+    box.innerHTML = '<div style="font-size:10px;color:#555;margin-bottom:4px">similar past meals — tap to fill items</div>' +
+      '<div style="display:flex;flex-direction:column;gap:4px">' +
+      shown.map(function(c) {
+        var pct = Math.round(c.confidence * 100);
+        var col = pct >= 65 ? '#1d9e72' : pct >= 45 ? '#b07820' : '#555';
+        return '<div onclick="bfApplyCandidate(' + idx + ',' + JSON.stringify(JSON.stringify(c.items||[])) + ')" ' +
+          'style="display:flex;align-items:center;gap:8px;padding:6px 8px;border:1px solid ' + col + '44;border-radius:5px;cursor:pointer;background:' + col + '11">' +
+          '<span style="font-size:9px;font-weight:700;color:' + col + ';min-width:32px">' + pct + '%</span>' +
+          '<span style="font-size:11px;color:#e8e4dc;flex:1">' + (c.name||'meal') + (c.total_carbs?' · '+c.total_carbs+'g':'') + '</span>' +
+          (c.gram_warning ? '<span style="font-size:9px;color:#b07820">⚠ qty differs</span>' : '') +
+          '</div>';
+      }).join('') +
+      '</div>';
+  } catch(e) {
+    box.innerHTML = '';
+    if (typeof __debugLog === 'function') __debugLog('backfill: suggestion match failed: ' + e.message);
+  }
+}
+window.bfSuggestCandidates = bfSuggestCandidates;
+
+// Apply a suggested candidate's items onto this card's item rows, then let
+// the user confirm/edit/add carbs precisely (food name is the part that
+// genuinely repeats across days; quantities still need a human check since
+// portion size is exactly what gram_warning flags as uncertain).
+function bfApplyCandidate(idx, itemsJSON) {
+  var ev = _bfQueue[idx];
+  if (!ev) return;
+  var items;
+  try { items = JSON.parse(itemsJSON); } catch(e) { return; }
+  if (!Array.isArray(items) || !items.length) return;
+
+  ev.items = items.map(function(i){
+    return { name: i.name || '', carbs: i.carbs != null ? i.carbs : null, gi: i.gi || null, grams: i.grams || i.g || null };
+  });
+
+  var container = document.getElementById('bfi-' + idx);
+  if (container) container.innerHTML = ev.items.map(function(it,ii){ return bfItemRow(idx, ii, it); }).join('');
+  var box = document.getElementById('bfsugg-' + idx);
+  if (box) box.innerHTML = '';
+}
+window.bfApplyCandidate = bfApplyCandidate;
 
 // ── Period constants ───────────────────────────────────────────
 var _BF_PERIODS_LIST = ['Breakfast','Morning snack','Lunch','Afternoon snack','Dinner','Evening snack','Bedtime snack','Overnight','Unknown'];
@@ -1325,6 +1428,15 @@ async function bfApprove(idx) {
     var histRatios = historicalTherapy && historicalTherapy.ratios || null;
     var evIC  = typeof getIC  === 'function' ? getIC(ev.t,  histRatios) : null;
     var evISF = typeof getISF === 'function' ? getISF(ev.t, histRatios) : null;
+    // epoch_t — which therapy_history version was active for this outcome.
+    // Used to segment "what does this regimen do for Oskar" from prior
+    // regimens, rather than blending all history into one running average.
+    // Safe under retroactive correction: _correctTherapyForBackdate already
+    // walks meal_history/bolus_outcomes and re-derives epoch_t per-row via
+    // getTherapyAt whenever a backdated treatment save happens, so a value
+    // written here today gets fixed up automatically if the regimen history
+    // changes later.
+    var epochT = historicalTherapy ? historicalTherapy.t : null;
 
     var evRow = {
       t:           ev.t,
@@ -1341,7 +1453,7 @@ async function bfApprove(idx) {
       split_bolus: ev.split_bolus || null,
     };
 
-    var cgm     = ev.cgm_curve || [];
+    var cgm     = _bfNormaliseCurve(ev.cgm_curve, ev.t);
     var postCgm = cgm.filter(function(p){ return p.m>0; });
     var peakPt  = postCgm.length ? postCgm.reduce(function(a,b){ return b.bg>a.bg?b:a; }) : null;
 
@@ -1352,13 +1464,74 @@ async function bfApprove(idx) {
       items:        items,
       bolus_u:      ev.units,
       wait_mins:    ev.wait_mins,
+      wait_reason:  ev.wait_src === 'written' ? 'logged' : (ev.wait_mins != null ? 'bg_rule' : null),
       pre_bg:       ev.pre_bg,
       peak_bg:      peakPt ? peakPt.bg : null,
       peak_t:       peakPt ? ev.t + peakPt.m*60000 : null,
       actual_curve: cgm.map(function(p){ return {mins:p.m, actual_bg:p.bg}; }),
       source:       'backfill',
       split_bolus:  ev.split_bolus || null,
+      epoch_t:      epochT,
+      is_partial:   false, // outcome window already elapsed in real time — nothing to wait for
     };
+
+    // ── bolus_outcomes: observed_isf/nadir/rmse from the already-fetched
+    // cgm_curve. This is the piece bfApprove was previously missing entirely
+    // — without it, MIN_OUTCOMES_FOR_ADAPTATION can never be reached from
+    // backfill-approved rows, no matter how many get approved. predicted_curve
+    // is deliberately left null (see KNOWN LIMITATION note above
+    // confirmBackfillEntry in app.js — historical IOB-at-bolus-time can't be
+    // reliably reconstructed, so a fabricated curve here would be worse than
+    // no curve).
+    var boRow = null;
+    if (ev.units > 0 && postCgm.length >= 2) {
+      var preBG  = ev.pre_bg || (cgm[0] && cgm[0].bg) || null;
+      // Nadir must come from POST-bolus points only — cgm_curve windows often
+      // include readings from well before the event (this row's window starts
+      // ~113min pre-snack at BG 5.7, which is not a "drop caused by this dose").
+      // Using the full array's minimum would attribute a pre-existing low BG
+      // to this bolus and produce a false, inflated observed_isf.
+      var nadir  = postCgm.reduce(function(lo, p){ return (lo===null || p.bg < lo.bg) ? p : lo; }, null);
+      var bgDrop      = (preBG != null && nadir) ? (preBG - nadir.bg) : null;
+      var observedISF = (bgDrop != null && ev.units > 0) ? +(bgDrop / ev.units).toFixed(2) : null;
+      var isfError    = (observedISF != null && evISF != null) ? +(evISF - observedISF).toFixed(2) : null;
+
+      var returnMins = null;
+      if (nadir) {
+        for (var ci = 0; ci < postCgm.length; ci++) {
+          if (postCgm[ci].m > nadir.m && preBG != null && Math.abs(postCgm[ci].bg - preBG) < 1.0) {
+            returnMins = postCgm[ci].m;
+            break;
+          }
+        }
+      }
+
+      var hour = new Date(ev.t).getHours();
+      var period = hour >= 6 && hour < 10 ? 'Breakfast'
+                 : hour >= 10 && hour < 14 ? 'Lunch'
+                 : hour >= 14 && hour < 18 ? 'Afternoon'
+                 : hour >= 18 && hour < 22 ? 'Evening' : 'Overnight';
+
+      boRow = {
+        t:                ev.t,
+        units:            ev.units,
+        pre_bg:           preBG,
+        therapy_snapshot: historicalTherapy ? {
+          period: period, isf: evISF, ic: evIC,
+          basal: historicalTherapy.basal_dose, basalType: historicalTherapy.basal_type,
+        } : null,
+        predicted_curve:  null,
+        actual_curve:     cgm.map(function(p){ return {mins:p.m, bg:p.bg}; }),
+        nadir_bg:         nadir ? +nadir.bg.toFixed(2) : null,
+        nadir_mins:       nadir ? nadir.m : null,
+        return_mins:      returnMins,
+        period:           period,
+        epoch_t:          epochT,
+        is_partial:       false,
+        device_id:        ev.src || 'backfill',
+      };
+      if (observedISF != null) { boRow.observed_isf = observedISF; boRow.isf_error = isfError; }
+    }
 
     // POST to worker
     var res = await fetch(BF_WORKER + '/backfill', {
@@ -1369,6 +1542,22 @@ async function bfApprove(idx) {
     if (!res.ok) throw new Error('Worker ' + res.status);
     var result = await res.json();
     if (result.errors && Object.keys(result.errors).length) throw new Error(JSON.stringify(result.errors));
+
+    // bolus_outcomes — written directly via _bfFetch (separate from the
+    // events/meal_history worker round-trip above; no worker route needed
+    // since this is an additive insert, not part of the events-table
+    // collision-avoidance logic the worker handles for /backfill).
+    if (boRow) {
+      try {
+        await _bfFetch('bolus_outcomes?on_conflict=t', {
+          method: 'POST',
+          prefer: 'resolution=merge-duplicates,return=minimal',
+          body: [boRow],
+        });
+      } catch(e) {
+        if (typeof __debugLog === 'function') __debugLog('backfill: bolus_outcomes write failed: ' + e.message);
+      }
+    }
 
     // Save any new food items to the library — this is how we rebuild the
     // library progressively through backfill. First "pita" → added to library.
