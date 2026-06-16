@@ -5750,6 +5750,7 @@ async function _createBolusOutcomeBaseline(ev, predictedCurve) {
 // dropping ~1 in 10 bolus_outcomes rows — fire-and-forget swallowed errors).
 async function _createBolusOutcomeBaselineWithRetry(ev, predictedCurve, attempt) {
   attempt = attempt || 1;
+  console.log('[bolusOutcomeBaseline] wrapper called, attempt', attempt, ev);
   try {
     await _createBolusOutcomeBaseline(ev, predictedCurve);
     var check = await _sbFetch('bolus_outcomes?t=eq.' + ev.t + '&select=t', {});
@@ -7594,20 +7595,26 @@ function bolusNow() {
   topUpIOB(u);
   // Snapshot IOB prediction curve for outcome tracking
   (function() {
-    var bolusEv = {t:t, u:u, insulin_type:insType, logged_by:_thisPersonId||'unknown'};
-    var iobCurve = [];
-    var d0 = dataAt(t);
-    var ISF = _currentTherapySnapshot(t);
-    var isf = ISF ? ISF.isf : 6.5;
-    var insProfile = _getInsulinProfile(insType);
-    for (var m = 5; m <= 240; m += 5) {
-      var predBG = d0 ? Math.max(1.8, d0.bg - u * (1 - _iobFn(m, insProfile.diaMins, insProfile.peakMins)) * isf) : 0;
-      iobCurve.push({mins: m, bg: +predBG.toFixed(2)});
+    console.log('[bolusOutcomeBaseline] IIFE entered', t, u, insType);
+    try {
+      var bolusEv = {t:t, u:u, insulin_type:insType, logged_by:_thisPersonId||'unknown'};
+      var iobCurve = [];
+      var d0 = dataAt(t);
+      var ISF = _currentTherapySnapshot(t);
+      var isf = ISF ? ISF.isf : 6.5;
+      var insProfile = _getInsulinProfile(insType);
+      for (var m = 5; m <= 240; m += 5) {
+        var predBG = d0 ? Math.max(1.8, d0.bg - u * (1 - _iobFn(m, insProfile.diaMins, insProfile.peakMins)) * isf) : 0;
+        iobCurve.push({mins: m, bg: +predBG.toFixed(2)});
+      }
+      console.log('[bolusOutcomeBaseline] about to call wrapper', bolusEv);
+      // Fire-and-forget deliberately: UI must not block on the ~1.5s retry.
+      // Failures are caught internally and flagged via needs_outcome_baseline
+      // for the sweep, not surfaced here.
+      _createBolusOutcomeBaselineWithRetry(bolusEv, iobCurve);
+    } catch (diagErr) {
+      console.warn('[bolusOutcomeBaseline] IIFE setup threw before reaching wrapper:', diagErr);
     }
-    // Fire-and-forget deliberately: UI must not block on the ~1.5s retry.
-    // Failures are caught internally and flagged via needs_outcome_baseline
-    // for the sweep, not surfaced here.
-    _createBolusOutcomeBaselineWithRetry(bolusEv, iobCurve);
   })();
   syncAfterLog();
   _ptCache = null;
