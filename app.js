@@ -14113,9 +14113,10 @@ function openContextCard(eventIdx, chipData) {
 
   // ── Classify event type ────────────────────────────────────────────
   var isHypo       = ev.note && ev.note.indexOf('hypo') === 0;
+  var isBasal      = ev.note === 'basal';
   var isMealBolus  = ev.c > 0 && ev.u > 0;
   var isCarbOnly   = ev.c > 0 && !ev.u;
-  var isBolus      = ev.u > 0 && !ev.c;
+  var isBolus      = ev.u > 0 && !ev.c && !isBasal;
   // Quick-look paired carb detection: if this is a pure bolus chip and there
   // is a carb chip within 30min after it, it's a meal bolus not a correction.
   var _hasPairedCarbAhead = isBolus && BOLUS_EVENTS.some(function(e) {
@@ -14134,6 +14135,7 @@ function openContextCard(eventIdx, chipData) {
 
   var typeLabel, typeIcon, typeColor;
   if (isHypo)                    { typeLabel='Hypo Treatment'; typeIcon='🍬'; typeColor='rgba(255,210,40,0.9)'; }
+  else if (isBasal)              { typeLabel='Basal · Degludec'; typeIcon='▬'; typeColor='rgba(80,140,220,0.9)'; }
   else if (isMealBolusOrPairedBolus) { typeLabel='Meal + Bolus'; typeIcon='🍽'; typeColor='rgba(255,140,50,0.9)'; }
   else if (isCarbOnly)           { typeLabel=_carbOnlyLabel; typeIcon='🍽'; typeColor='rgba(255,160,60,0.8)'; }
   else if (isCorrection)         { typeLabel='Correction'; typeIcon='💉'; typeColor='rgba(60,130,220,0.9)'; }
@@ -14160,7 +14162,7 @@ function openContextCard(eventIdx, chipData) {
     // Search BOLUS_EVENTS for a bolus within 30 min before this carb event
     // that has no carbs (pure bolus chip). Prefer the closest one.
     var candidates = BOLUS_EVENTS.filter(function(e) {
-      return e.u > 0 && !e.c && e.t < t && (t - e.t) <= 30 * 60000;
+      return e.u > 0 && !e.c && e.note !== 'basal' && e.t < t && (t - e.t) <= 30 * 60000;
     });
     if (candidates.length > 0) {
       pairedBolus = candidates.reduce(function(best, e) {
@@ -14170,7 +14172,7 @@ function openContextCard(eventIdx, chipData) {
   }
   // If this is a bolus chip (u>0, c=0), look ahead for its paired carb chip
   var pairedCarb = null;
-  if (ev.u > 0 && !ev.c) {
+  if (ev.u > 0 && !ev.c && !isBasal) {
     var carbCandidates = BOLUS_EVENTS.filter(function(e) {
       return e.c > 0 && !e.u && e.t > t && (e.t - t) <= 30 * 60000;
     });
@@ -16523,6 +16525,7 @@ async function _correctTherapyForBackdate(fromT, updated) {
   [SESSION, LOGGED_EVENTS, BOLUS_EVENTS].forEach(function(arr) {
     (arr || []).forEach(function(ev) {
       if (!ev || ev.t < fromT) return;
+      if (ev.note === 'basal') return; // basal uses settings.basalType, never the bolus insulin_type
       if ((ev.u || 0) > 0) ev.insulin_type = defaultIns.name;
       if (ev.therapy_snapshot) ev.therapy_snapshot = _snapshotFromTherapy(updated, ev.t);
     });
@@ -16538,7 +16541,7 @@ async function _correctTherapyForBackdate(fromT, updated) {
 
   // ── Supabase: insulin_type — single value for all matching rows, cheap bulk PATCH ──
   try {
-    await _sbFetch('events?t=gte.' + Math.round(fromT) + '&u=gt.0', {
+    await _sbFetch('events?t=gte.' + Math.round(fromT) + '&u=gt.0&note=neq.basal', {
       method: 'PATCH', prefer: 'return=minimal',
       body: { insulin_type: defaultIns.name },
     });
