@@ -17429,18 +17429,28 @@ async function getPODRecords(opts) {
   var pods = decisionEvents.map(function(ev){ return _buildPODRecord(ev, ctx); });
 
   // Attach outcomes — bolus_outcomes for anything with units, meal_history
-  // peak/nadir for carb-only entries. Fetched once, matched by nearest t.
+  // for carb-only entries. Fetched once, matched by exact t.
+  //
+  // SCHEMA NOTE (corrected after live verification — the original version
+  // of this function guessed a merged schema that doesn't exist on either
+  // table and was silently starving every downstream view of data):
+  //   bolus_outcomes has nadir_bg as a real column but NO peak_bg column.
+  //   meal_history   has peak_bg  as a real column but NO nadir_bg column.
+  // Both tables DO carry actual_curve (jsonb array of {bg, mins}), which is
+  // the real source of truth — whichever of peak/nadir isn't a native
+  // column on a given table is derived from actual_curve in
+  // _podClassifyOutcome below, not assumed to exist as a flat field.
   var outcomes = [], meals = [];
   try {
     var oRows = await _sbFetch(
-      'bolus_outcomes?t=gte.' + ctx.windowStart + '&select=t,nadir_bg,peak_bg,outcome,observed_isf,return_mins&limit=5000',
+      'bolus_outcomes?t=gte.' + ctx.windowStart + '&select=t,nadir_bg,actual_curve,observed_isf,return_mins&limit=5000',
       {}
     );
     if (Array.isArray(oRows)) outcomes = oRows;
   } catch(e) { console.warn('[POD] outcomes fetch:', e.message); }
   try {
     var mRows = await _sbFetch(
-      'meal_history?t=gte.' + ctx.windowStart + '&select=t,peak_bg,nadir_bg&limit=5000',
+      'meal_history?t=gte.' + ctx.windowStart + '&select=t,peak_bg,actual_curve&limit=5000',
       {}
     );
     if (Array.isArray(mRows)) meals = mRows;
@@ -17451,6 +17461,7 @@ async function getPODRecords(opts) {
 
   pods.forEach(function(p){
     p.outcome = outcomeByT[p.t] || mealByT[p.t] || null;
+    p.outcome_source = outcomeByT[p.t] ? 'bolus_outcomes' : (mealByT[p.t] ? 'meal_history' : null);
     p.outcome_class = _podClassifyOutcome(p);
   });
 
@@ -17458,13 +17469,33 @@ async function getPODRecords(opts) {
   return pods;
 }
 
+// Extracts peak/nadir from an actual_curve jsonb array ([{bg,mins},...]).
+// Returns {peak, nadir} or {peak:null, nadir:null} if curve is missing/empty.
+function _podCurveExtremes(curve) {
+  if (!Array.isArray(curve) || !curve.length) return { peak: null, nadir: null };
+  var peak = -Infinity, nadir = Infinity;
+  curve.forEach(function(pt){
+    if (pt.bg == null) return;
+    if (pt.bg > peak) peak = pt.bg;
+    if (pt.bg < nadir) nadir = pt.bg;
+  });
+  return {
+    peak: isFinite(peak) ? peak : null,
+    nadir: isFinite(nadir) ? nadir : null,
+  };
+}
+
 // Plain-English outcome bucket — used by every "good vs bad" view (the
 // lunch-with-yogurt comparisons, correction-without-food trend, etc.) so
 // they all agree on what "good" means rather than each view inventing its
-// own threshold.
+// own threshold. Prefers a table's native column (bolus_outcomes.nadir_bg,
+// meal_history.peak_bg) since those are the pipeline's own computed values;
+// falls back to deriving the missing half from actual_curve directly.
 function _podClassifyOutcome(p) {
-  var peak = p.outcome && (p.outcome.peak_bg != null ? p.outcome.peak_bg : null);
-  var nadir = p.outcome && (p.outcome.nadir_bg != null ? p.outcome.nadir_bg : null);
+  if (!p.outcome) return 'unknown';
+  var curveExtremes = _podCurveExtremes(p.outcome.actual_curve);
+  var nadir = (p.outcome.nadir_bg != null) ? p.outcome.nadir_bg : curveExtremes.nadir;
+  var peak  = (p.outcome.peak_bg  != null) ? p.outcome.peak_bg  : curveExtremes.peak;
   if (peak == null && nadir == null) return 'unknown';
   if (nadir != null && nadir < 3.9) return 'went_low';
   if (peak != null && peak > 10.0) return 'went_high';
