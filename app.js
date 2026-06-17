@@ -6033,9 +6033,17 @@ async function confirmBackfillEntry(t, items, bolusUnits, opts) {
   }
 
   // Mirror into events so the canvas chip renders, matching the live logging shape.
+  // insulin_type: same source as therapySnap.insulinType above (historical
+  // therapyRow.bolus_type, falling back to Novorapid) — previously omitted
+  // here entirely, leaving every backfilled/imported events row with a null
+  // insulin_type regardless of what was actually in use at the time. This is
+  // the events-table half of the same value already correctly captured in
+  // therapy_snapshot on meal_history/bolus_outcomes; it was just never
+  // mirrored onto the events row itself.
   try {
+    var bfInsulinType = (therapyRow && therapyRow.bolus_type) || 'Novorapid';
     var rows = [{ t: t, c: totalCarbs, u: 0, gi: +avgGI.toFixed(1), note: 'carbs', items: items || [], pre_bg: preBG }];
-    if (u > 0) rows.push({ t: t, c: 0, u: u, note: 'bolus', suggested_units: suggestedUnits });
+    if (u > 0) rows.push({ t: t, c: 0, u: u, note: 'bolus', insulin_type: bfInsulinType, suggested_units: suggestedUnits });
     await _sbFetch('events?on_conflict=t', {
       method: 'POST',
       prefer: 'resolution=merge-duplicates,return=minimal',
@@ -16272,6 +16280,7 @@ function _getInsulinProfile(name) {
 // All insulins currently "in rotation" (active=true). Always returns at
 // least one entry, even before _TREATMENT has loaded.
 function _activeInsulins() {
+  if (!_TREATMENT) _warnTreatmentNotLoaded();
   var list = (_TREATMENT && _TREATMENT.insulins) || _TREATMENT_DEFAULTS.insulins;
   var active = list.filter(function(i){ return i.active; });
   return active.length ? active : list.slice(0, 1);
@@ -16280,8 +16289,28 @@ function _activeInsulins() {
 // The default/primary insulin — pre-selected at correction/meal time and
 // used as the fallback for events with no explicit insulin_type.
 function _defaultInsulin() {
+  if (!_TREATMENT) _warnTreatmentNotLoaded();
   var list = (_TREATMENT && _TREATMENT.insulins) || _TREATMENT_DEFAULTS.insulins;
   return list.find(function(i){ return i.isDefault; }) || list[0] || { name: 'Novorapid' };
+}
+
+// One-time-per-session console warning: insulin lookups are falling back to
+// the fixed _TREATMENT_DEFAULTS baseline because the real _TREATMENT record
+// (loaded from therapy_history at startup — see the window 'load' handler)
+// hasn't resolved yet. This previously failed completely silently — a
+// correction logged in this window would carry whatever _TREATMENT_DEFAULTS
+// says, which may not match the most recently active insulin. Surfacing it
+// here doesn't fix the underlying race on its own, but means a recurrence
+// is visible in the console instead of only showing up later as an
+// unexplained insulin_type/predicted_curve mismatch.
+var _treatmentNotLoadedWarned = false;
+function _warnTreatmentNotLoaded() {
+  if (_treatmentNotLoadedWarned) return;
+  _treatmentNotLoadedWarned = true;
+  console.warn('[treatment] _TREATMENT not loaded yet — insulin lookup fell back to ' +
+    '_TREATMENT_DEFAULTS (' + _TREATMENT_DEFAULTS.bolusType + '). If this fires on a ' +
+    'logged event rather than at cold-start before _loadTreatmentSettings() resolves, ' +
+    'check the event\'s insulin_type after the fact.');
 }
 
 // Which insulin was used for a given logged event — explicit per-event
@@ -16289,6 +16318,7 @@ function _defaultInsulin() {
 function _insulinForEvent(ev) {
   return (ev && ev.insulin_type) || _defaultInsulin().name;
 }
+
 
 // Which insulin is selected in the currently-open logging sheet/overlay —
 // set by the insulin-selector chips (only shown when >1 insulin is active).
@@ -17153,6 +17183,14 @@ window.addEventListener('load',()=>{
 
   // Start Supabase sync
   startSyncPolling();
+  // Treatment settings — load proactively at startup rather than only when
+  // the treatment panel is opened. Previously _TREATMENT stayed null until
+  // openTreatmentPanel() ran, so any correction/bolus/meal logged before that
+  // (e.g. the very first action of a session) silently fell back to
+  // _TREATMENT_DEFAULTS — which, being a fixed historical baseline, may not
+  // reflect the most recently active insulin if it's changed since. See
+  // _currentSelectedInsulin/_defaultInsulin for the consuming fallback chain.
+  if (typeof _loadTreatmentSettings === 'function') _loadTreatmentSettings();
   // Backfill review module
     if (typeof initBackfill === 'function') initBackfill();
   
