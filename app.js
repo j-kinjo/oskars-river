@@ -2941,17 +2941,20 @@ function drawBolusMarkers(pal) {
     }
 
     if (b.u > 0.1) {
-      const r = pal.iobR[0], g = pal.iobR[1], bv = pal.iobR[2];
+      var _isBasal = b.note === 'basal';
+      const r = _isBasal ? 80  : pal.iobR[0],
+            g = _isBasal ? 140 : pal.iobR[1],
+            bv= _isBasal ? 220 : pal.iobR[2];
       const cardY = bgY + 30 + Math.min(b.u * 8, 36);
       CX.globalAlpha = 0.35;
       CX.strokeStyle = 'rgba(' + r + ',' + g + ',' + bv + ',0.7)';
-      CX.lineWidth   = 0.8; CX.setLineDash([2,5]);
+      CX.lineWidth   = 0.8; CX.setLineDash(_isBasal ? [1,2] : [2,5]);
       CX.beginPath(); CX.moveTo(x, bgY + 5); CX.lineTo(x, cardY - 2); CX.stroke();
       CX.setLineDash([]);
       CX.globalAlpha = 0.9; CX.fillStyle = 'rgba(' + r + ',' + g + ',' + bv + ',1)';
       CX.shadowColor = 'rgba(' + r + ',' + g + ',' + bv + ',0.8)'; CX.shadowBlur = 5;
       CX.beginPath(); CX.arc(x, bgY, 3.2, 0, Math.PI*2); CX.fill(); CX.shadowBlur = 0;
-      const lbl = b.u.toFixed(1) + 'U';
+      const lbl = _isBasal ? (b.u.toFixed(1) + 'U basal') : (b.u.toFixed(1) + 'U');
       CX.font = "500 11px 'DM Mono',monospace";
       const lw = CX.measureText(lbl).width + 16;
       CX.globalAlpha = 1.0;
@@ -2964,8 +2967,8 @@ function drawBolusMarkers(pal) {
       CX.fillStyle = 'rgba(255,255,255,1.0)';
       CX.textAlign   = 'center';
       CX.fillText(lbl, x, cardY + 11);
-      window._eventCards.push({x:x, y:cardY+7, w:lw+4, h:17, data:b, idx:_bIdx, type:'insulin'});
-      _chipPos[b.t] = Object.assign(_chipPos[b.t] || {}, { bx: x, bolusY: cardY + 7 });
+      window._eventCards.push({x:x, y:cardY+7, w:lw+4, h:17, data:b, idx:_bIdx, type: _isBasal ? 'basal' : 'insulin'});
+      if (!_isBasal) _chipPos[b.t] = Object.assign(_chipPos[b.t] || {}, { bx: x, bolusY: cardY + 7 });
     }
   }
 
@@ -2975,7 +2978,7 @@ function drawBolusMarkers(pal) {
   CX.save();
   for (var _ai = 0; _ai < allEvents.length; _ai++) {
     var _ab = allEvents[_ai];
-    if (!(_ab.u > 0 && !_ab.c)) continue; // only pure bolus events
+    if (!(_ab.u > 0 && !_ab.c) || _ab.note === 'basal') continue; // only pure bolus events, never basal
     var _abPos = _chipPos[_ab.t];
     if (!_abPos || _abPos.bolusY == null) continue;
     var _abx = _abPos.bx;
@@ -6427,7 +6430,7 @@ async function _maybeDetectGhostEvent() {
                 if (bgDrop <= predictedIobEffect * 1.4) return; // IOB explains it
                 // Check no logged correction nearby
                 var nearby = LOGGED_EVENTS.find(function(e){
-                  return e.u > 0 && Math.abs(e.t - startT2) < 30 * 60000;
+                  return e.u > 0 && e.note !== 'basal' && Math.abs(e.t - startT2) < 30 * 60000;
                 });
                 if (nearby) return;
                 var impliedUnits = +(bgDrop / isf).toFixed(2);
@@ -6474,7 +6477,7 @@ async function _maybeDetectGhostEvent() {
         if (flatCount < 3) return;
         // Check no correction/bolus nearby
         var nearbyCorr = LOGGED_EVENTS.find(function(e){
-          return (e.u > 0 || e.c > 0) && Math.abs(e.t - now) < 20 * 60000;
+          return ((e.u > 0 && e.note !== 'basal') || e.c > 0) && Math.abs(e.t - now) < 20 * 60000;
         });
         if (nearbyCorr) return;
         var d_now = dataAt(now);
@@ -13202,7 +13205,7 @@ function _computeDayCompleteness(dateStr) {
   var meal_coverage = dayMeals.length / Math.max(1, estMealOccasions);
 
   // Bolus events that day
-  var dayBoluses = LOGGED_EVENTS.filter(function(e){ return e.t >= dayStart && e.t < dayEnd && e.u > 0; });
+  var dayBoluses = LOGGED_EVENTS.filter(function(e){ return e.t >= dayStart && e.t < dayEnd && e.u > 0 && e.note !== 'basal'; });
   // Ghost corrections that day (for denominator)
   var dayGhosts = _ghostPebbles.filter(function(g){ return g.t >= dayStart && g.t < dayEnd; });
   var resolvedGhosts = dayGhosts.filter(function(g){ return g.confirmed !== null; });
@@ -14232,8 +14235,10 @@ function openContextCard(eventIdx, chipData) {
   if (iobNow > 1.0)                          { clFactors.push({label:'IOB stacking risk (>1U)', val:2, color:'rgba(60,130,220,0.8)'}); clScore+=2; }
   else if (iobNow > 0.3)                     { clFactors.push({label:'Correction IOB active', val:2, color:'rgba(60,130,220,0.6)'}); clScore+=2; }
   if (bgNow < 3.9)                           { clFactors.push({label:'Hypo active', val:2, color:'rgba(255,210,40,0.9)'}); clScore+=2; }
-  var recentCorr = precedingEvts.find(function(e){ return e.u>0 && !e.c && (t-e.t)<90*60000; });
+  var recentCorr = precedingEvts.find(function(e){ return e.u>0 && !e.c && e.note !== 'basal' && (t-e.t)<90*60000; });
   if (recentCorr)                            { clFactors.push({label:'Correction in last 90min', val:1, color:'rgba(60,130,220,0.6)'}); clScore+=1; }
+  var recentBasal = precedingEvts.find(function(e){ return e.note === 'basal' && (t-e.t)<90*60000; });
+  if (recentBasal)                           { clFactors.push({label:'Basal given in last 90min', val:1, color:'rgba(80,140,220,0.6)'}); clScore+=1; }
   if (nearbyGhosts.length > 0)              { clFactors.push({label:'Ghost event nearby', val:1, color:'rgba(180,160,240,0.7)'}); clScore+=1; }
   if (cobNow > 30)                           { clFactors.push({label:'High COB (>30g absorbing)', val:1, color:'rgba(255,140,50,0.7)'}); clScore+=1; }
   clScore = Math.min(10, clScore);
@@ -14306,8 +14311,10 @@ function openContextCard(eventIdx, chipData) {
     var diffMins = Math.round(Math.abs(e.t - t) / 60000);
     var diffLabel = relation === 'before' ? diffMins + 'min before' : diffMins + 'min after';
     var isEHypo   = e.note && e.note.indexOf('hypo') === 0;
-    var eType = (e.u > 0 && e.c > 0) ? 'meal+bolus' : e.u > 0 ? (e.note==='correction'?'correction':'bolus') : isEHypo ? 'hypo' : 'snack';
-    var eBadge = eType === 'correction' ? 'rgba(60,130,220,0.7)' :
+    var isEBasal  = e.note === 'basal';
+    var eType = isEBasal ? 'basal' : (e.u > 0 && e.c > 0) ? 'meal+bolus' : e.u > 0 ? (e.note==='correction'?'correction':'bolus') : isEHypo ? 'hypo' : 'snack';
+    var eBadge = eType === 'basal'      ? 'rgba(80,140,220,0.7)' :
+                 eType === 'correction' ? 'rgba(60,130,220,0.7)' :
                  eType === 'bolus'      ? 'rgba(60,130,220,0.7)' :
                  eType === 'hypo'       ? 'rgba(255,210,40,0.8)' :
                  'rgba(255,140,50,0.7)';
@@ -18277,7 +18284,7 @@ async function insightsExport() {
 
   // Events
   var mealEvents = sbEvents.filter(function(e){ return e.c > 0; });
-  var bolusEvents = sbEvents.filter(function(e){ return e.u > 0; });
+  var bolusEvents = sbEvents.filter(function(e){ return e.u > 0 && e.note !== 'basal'; });
   var totalCarbs  = mealEvents.reduce(function(s,e){return s+(e.c||0);},0);
   var totalBolus  = bolusEvents.reduce(function(s,e){return s+(e.u||0);},0);
 
@@ -18296,7 +18303,7 @@ async function insightsExport() {
     var bg = nearby.length ? nearby.reduce(function(best,r){ return Math.abs(r.t-m.t)<Math.abs(best.t-m.t)?r:best; }, nearby[0]).bg : (m.pre_bg||null);
     return { x: m.t, y: bg, type:'meal', carbs: m.total_carbs, bolus: m.bolus_u };
   });
-  var corrMarkers = sbEvents.filter(function(e){ return e.u > 0 && (!e.c || e.c === 0); }).map(function(e){
+  var corrMarkers = sbEvents.filter(function(e){ return e.u > 0 && e.note !== 'basal' && (!e.c || e.c === 0); }).map(function(e){
     var nearby = readings.filter(function(r){ return Math.abs(r.t-e.t)<600000; });
     var bg = nearby.length ? nearby.reduce(function(best,r){ return Math.abs(r.t-e.t)<Math.abs(best.t-e.t)?r:best; }, nearby[0]).bg : null;
     return { x: e.t, y: bg, type:'corr' };
@@ -18321,7 +18328,7 @@ async function insightsExport() {
     if (typeof items === 'string') { try { items = JSON.parse(items); } catch(e2) { items = null; } }
     dayMap[dk].meals.push({ time:time, carbs:m.total_carbs, bolus:m.bolus_u, bg:bg, items:items, name:m.name, iob:0, t:m.t });
   });
-  sbEvents.filter(function(e){ return e.u > 0 && (!e.c || e.c===0); }).forEach(function(e){
+  sbEvents.filter(function(e){ return e.u > 0 && e.note !== 'basal' && (!e.c || e.c===0); }).forEach(function(e){
     var dk = _dayKey(e.t);
     if (!dayMap[dk]) dayMap[dk] = { meals:[], corrections:[], ghosts:[], t_first: e.t };
     var time = new Date(e.t).toLocaleTimeString('en-GB',{hour:'2-digit',minute:'2-digit'});
