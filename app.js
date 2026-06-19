@@ -1112,9 +1112,19 @@ function drawBGTrail(pal) {
             if (!pts[gi].gap) { afterGap = pts[gi]; break; }
           }
           if (afterGap) {
+            const gsT = pts[i-1].t, geT = afterGap.t;
+            // Find matching SENSOR_OUTAGE for this gap
+            const gapOutage = SENSOR_OUTAGES.find(function(o) {
+              const oEnd = o.end_t || Date.now();
+              return o.start_t <= geT && oEnd >= gsT;
+            });
+            const isAnnotated = gapOutage &&
+              gapOutage.cause_category && gapOutage.cause_category !== 'unknown';
+
+            // ── Dashed bridge — constant low alpha, line is guide not CTA ──
             CX.save();
-            CX.globalAlpha = 0.25;
-            CX.strokeStyle = 'rgba(180,200,220,1)';
+            CX.globalAlpha = isAnnotated ? 0.14 : 0.22;
+            CX.strokeStyle = isAnnotated ? 'rgba(130,150,120,1)' : 'rgba(180,200,220,1)';
             CX.lineWidth = 1.5;
             CX.setLineDash([3, 8]);
             CX.beginPath();
@@ -1123,12 +1133,63 @@ function drawBGTrail(pal) {
             CX.stroke();
             CX.setLineDash([]);
             CX.restore();
-            // Register line-segment hitbox so tap-on-gap opens annotation
-            if (!window._outageHitboxes) window._outageHitboxes = [];
-            _outageHitboxes.push({
-              x0: pts[i-1].x, y0: pts[i-1].y,
-              x1: afterGap.x, y1: afterGap.y,
-              gapStart: pts[i-1].t, gapEnd: afterGap.t
+
+            // ── Gap chip — always present; pulse drives the annotation CTA ──
+            // Pin chip x to visible portion of the gap
+            const rawMidX = (pts[i-1].x + afterGap.x) / 2;
+            const chipX   = Math.max(18, Math.min(W - 18, rawMidX));
+            const xFrac   = afterGap.x !== pts[i-1].x
+              ? (chipX - pts[i-1].x) / (afterGap.x - pts[i-1].x) : 0.5;
+            const chipY   = pts[i-1].y + xFrac * (afterGap.y - pts[i-1].y);
+
+            const causeIcons = {
+              phone_range: '📱', calibration_error: '⚙️', sensor_fell_off: '🩹',
+              terminal_failure: '⚠️', scheduled_change: '🔄', other: '📝',
+              heat: '🌡️', water: '💧', adhesion: '🩹', compression: '🛏️',
+              bluetooth: '📶', sensor_error: '⚠️'
+            };
+            const durM  = Math.round((geT - gsT) / 60000);
+
+            let label, chipAlpha, bgCol, borderCol, textCol;
+            if (isAnnotated) {
+              const icon = causeIcons[gapOutage.cause_category] || '📡';
+              label      = icon + ' ' + durM + 'm';
+              chipAlpha  = 0.72;
+              bgCol      = 'rgba(20,30,22,0.88)';
+              borderCol  = 'rgba(130,155,120,0.35)';
+              textCol    = 'rgba(155,180,145,0.9)';
+            } else {
+              label      = '· ' + durM + 'm';
+              chipAlpha  = 0.45 + 0.42 * Math.sin(phi * 2.2); // pulse
+              bgCol      = 'rgba(22,26,18,0.9)';
+              borderCol  = 'rgba(180,195,140,0.28)';
+              textCol    = 'rgba(195,205,160,0.85)';
+            }
+
+            CX.save();
+            CX.font = "400 9px 'DM Mono',monospace";
+            const lw = CX.measureText(label).width;
+            const cw = lw + 12, ch = 15;
+            CX.globalAlpha = chipAlpha;
+            CX.fillStyle = bgCol;
+            CX.beginPath();
+            CX.roundRect(chipX - cw/2, chipY - ch/2, cw, ch, 4);
+            CX.fill();
+            CX.strokeStyle = borderCol;
+            CX.lineWidth = 0.5;
+            CX.stroke();
+            CX.fillStyle = textCol;
+            CX.textAlign = 'center';
+            CX.fillText(label, chipX, chipY + 3.5);
+            CX.restore();
+
+            // Chip is the sole tap target — no line-segment hitbox
+            if (!window._outageChips) window._outageChips = [];
+            _outageChips.push({
+              x: chipX, y: chipY, w: cw + 10, h: ch + 8,
+              annotated: isAnnotated,
+              outage:    gapOutage || null,
+              gapStart:  gsT, gapEnd: geT
             });
           }
         }
@@ -4573,6 +4634,7 @@ function frame(ts) {
   window._bgDots=[];
   window._eventCards=[];
   window._outageHitboxes=[];
+  window._outageChips=[];
   drawVoid(pal);
 
   // ── EQUILIBRIUM ZONE — soft target corridor ────────────────────
@@ -5260,26 +5322,23 @@ function _handleCanvasHit(mx, my, isLongPress) {
       }
     }
   }
-  // Outage gap dashed lines — tap within 18px of the bridge line opens annotation
-  if (window._outageHitboxes && _outageHitboxes.length > 0) {
-    for (var oi = 0; oi < _outageHitboxes.length; oi++) {
-      var oh = _outageHitboxes[oi];
-      var dx = oh.x1 - oh.x0, dy = oh.y1 - oh.y0;
-      var len2 = dx*dx + dy*dy;
-      var t2 = len2 > 0 ? Math.max(0, Math.min(1, ((mx-oh.x0)*dx + (my-oh.y0)*dy) / len2)) : 0;
-      var nx = oh.x0 + t2*dx, ny = oh.y0 + t2*dy;
-      if (Math.sqrt((mx-nx)*(mx-nx) + (my-ny)*(my-ny)) < 18) {
-        openOutageLog(null, oh.gapStart, oh.gapEnd);
-        return;
-      }
-    }
-  }
-  // Event chips — any tap/click opens unified context card (with inline edit)
+  // Event chips — FIRST: food/bolus/correction logged during a gap must still be tappable
   if (window._eventCards && _eventCards.length > 0) {
     for (var ci = 0; ci < _eventCards.length; ci++) {
       var c = _eventCards[ci];
       if (mx >= c.x - c.w/2 && mx <= c.x + c.w/2 && my >= c.y - 12 && my <= c.y + 12) {
         openContextCard(c.idx, c.data);
+        return;
+      }
+    }
+  }
+  // Gap chips — annotated (opens editor) or unannotated (opens node menu). After event chips.
+  if (window._outageChips && _outageChips.length > 0) {
+    for (var chi = 0; chi < _outageChips.length; chi++) {
+      var ch = _outageChips[chi];
+      if (Math.abs(mx - ch.x) <= ch.w/2 && Math.abs(my - ch.y) <= ch.h/2) {
+        if (ch.annotated) { openOutageLog(ch.outage); }
+        else              { openGapNodeMenu(mx, my, ch.gapStart, ch.gapEnd); }
         return;
       }
     }
@@ -15395,9 +15454,233 @@ async function saveOutageLog() {
 
 // Draw logged sensor outage zones on the river canvas
 // These persist even after CGM backfill — they represent lived experience
-// drawSensorOutageZones — gap tap-to-annotate is handled inline in drawBGTrail
-// (dashed bridge line carries the hitbox; SENSOR_OUTAGES overlay removed — was too heavy)
-function drawSensorOutageZones() { /* intentionally empty */ }
+// drawSensorOutageZones — only renders backfilled gaps (data restored post-gap).
+// Live/historical gaps are handled in drawBGTrail (chip + dashed bridge).
+// Backfilled gaps no longer appear in HISTORY_RAW but we still want the river
+// to say "yes — but it wasn't always so."
+function drawSensorOutageZones() {
+  if (!SENSOR_OUTAGES || SENSOR_OUTAGES.length === 0) return;
+  var viewLeft  = viewTime - viewSpan * NOW_X;
+  var viewRight = viewTime + viewSpan * (1 - NOW_X);
+
+  SENSOR_OUTAGES.forEach(function(o) {
+    if (!o.was_backfilled) return; // non-backfilled gaps drawn in drawBGTrail
+
+    var oStart = o.start_t, oEnd = o.end_t;
+    if (!oEnd) return; // open outage can't be backfilled
+    if (oEnd < viewLeft || oStart > viewRight) return;
+
+    var x0c = Math.max(0, tX(oStart));
+    var x1c = Math.min(W, tX(oEnd));
+    if (x1c <= x0c) return;
+
+    // Midpoint y from now-restored BG data
+    var midT = (oStart + oEnd) / 2;
+    var midD = dataAt ? dataAt(midT) : null;
+    var midY = (midD && midD.bg) ? bgToY(midD.bg) : H * 0.5;
+    var midX = Math.max(x0c + 14, Math.min(x1c - 14, (x0c + x1c) / 2));
+
+    CX.save();
+
+    // Faint dotted amber underline just below the (now real) BG line —
+    // visible only if you look for it; "the gap was here"
+    CX.globalAlpha = 0.10;
+    CX.strokeStyle = 'rgba(200,180,100,1)';
+    CX.lineWidth   = 1;
+    CX.setLineDash([2, 7]);
+    CX.beginPath();
+    CX.moveTo(x0c, midY + 8);
+    CX.lineTo(x1c, midY + 8);
+    CX.stroke();
+    CX.setLineDash([]);
+
+    // Tiny "↩ Xm" chip — confirms data was reconstructed, not live
+    if (x1c - x0c > 28) {
+      var durM  = Math.round((oEnd - oStart) / 60000);
+      var label = '↩ ' + durM + 'm';
+      CX.font   = "400 8px 'DM Mono',monospace";
+      var lw    = CX.measureText(label).width;
+      var cw    = lw + 8, ch = 12;
+      CX.globalAlpha = 0.22;
+      CX.fillStyle   = 'rgba(12,18,10,0.92)';
+      CX.beginPath();
+      CX.roundRect(midX - cw/2, midY + 5, cw, ch, 3);
+      CX.fill();
+      CX.strokeStyle = 'rgba(165,148,85,0.3)';
+      CX.lineWidth   = 0.5;
+      CX.stroke();
+      CX.fillStyle   = 'rgba(175,158,95,0.85)';
+      CX.textAlign   = 'center';
+      CX.fillText(label, midX, midY + 13);
+    }
+
+    CX.restore();
+  });
+}
+
+// ── GAP NODE MENU — quick 2-tap annotation directly on the dashed line ──────
+// Cause options: simplified vs the old full modal
+var _GAP_CAUSES = [
+  { key: 'phone_range',      icon: '📱', label: 'phone out of range' },
+  { key: 'scheduled_change', icon: '🔄', label: 'scheduled change'   },
+  { key: 'sensor_fell_off',  icon: '🩹', label: 'sensor fell off'     },
+  { key: 'calibration_error',icon: '⚙️', label: 'calibration error'  },
+  { key: 'terminal_failure', icon: '⚠️', label: 'terminal failure'    },
+  { key: 'other',            icon: '📝', label: 'other...'            },
+];
+
+function openGapNodeMenu(tapX, tapY, gapStart, gapEnd) {
+  var ex = document.getElementById('gap-node-menu');
+  if (ex) { ex.remove(); return; }
+
+  // Find matching SENSOR_OUTAGE
+  var outage = SENSOR_OUTAGES.find(function(o) {
+    var oEnd = o.end_t || Date.now();
+    return o.start_t <= gapEnd && oEnd >= gapStart;
+  }) || null;
+  var outageId = outage ? outage.id : '';
+
+  var durM   = Math.round((gapEnd - gapStart) / 60000);
+  var startS = new Date(gapStart).toLocaleTimeString('en-GB', {hour:'2-digit', minute:'2-digit'});
+
+  // Anchor menu near tap, clamped to screen
+  var menuW = 230;
+  var sx    = Math.max(8, Math.min(tapX - menuW/2, window.innerWidth - menuW - 8));
+  var sy    = tapY > window.innerHeight * 0.52
+    ? Math.max(8, tapY - 210)
+    : tapY + 12;
+
+  var causeButtons = _GAP_CAUSES.map(function(c) {
+    return '<button onclick="_selectGapCause(\'' + c.key + '\',\'' + outageId + '\',' +
+        gapStart + ',' + gapEnd + ')" ' +
+      'style="padding:8px 8px;border-radius:8px;border:1px solid rgba(140,165,130,0.12);' +
+      'background:transparent;font-family:\'DM Mono\',monospace;font-size:9.5px;' +
+      'color:rgba(155,180,145,0.75);cursor:pointer;text-align:left;' +
+      'touch-action:manipulation;display:flex;align-items:center;gap:6px;line-height:1.2">' +
+      '<span style="font-size:13px;flex-shrink:0">' + c.icon + '</span>' + c.label +
+      '</button>';
+  }).join('');
+
+  var el = document.createElement('div');
+  el.id = 'gap-node-menu';
+  el.style.cssText =
+    'position:fixed;left:' + sx + 'px;top:' + sy + 'px;width:' + menuW + 'px;' +
+    'z-index:70;background:rgba(6,11,22,0.97);border:1px solid rgba(140,165,130,0.18);' +
+    'border-radius:13px;padding:13px 12px;backdrop-filter:blur(20px);' +
+    'opacity:0;transition:opacity .15s;box-shadow:0 6px 28px rgba(0,0,0,0.55);' +
+    'pointer-events:auto';
+
+  el.innerHTML =
+    '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">' +
+      '<div style="font-family:\'DM Mono\',monospace;font-size:8.5px;letter-spacing:1px;' +
+        'text-transform:uppercase;color:rgba(140,165,130,0.6)">' +
+        '📡 gap · ' + startS + ' · ' + durM + 'm' +
+      '</div>' +
+      '<button onclick="document.getElementById(\'gap-node-menu\').remove()" ' +
+        'style="background:none;border:none;cursor:pointer;font-size:16px;' +
+        'color:rgba(140,160,130,0.35);padding:0 0 0 8px;line-height:1;touch-action:manipulation">×</button>' +
+    '</div>' +
+    '<div style="display:grid;grid-template-columns:1fr 1fr;gap:4px;margin-bottom:6px">' +
+      causeButtons +
+    '</div>' +
+    '<div id="gap-other-note" style="display:none;margin-top:6px">' +
+      '<textarea id="gap-note-text" rows="2" placeholder="what happened..." ' +
+        'style="width:100%;box-sizing:border-box;padding:8px 10px;border-radius:8px;' +
+        'border:1px solid rgba(140,165,130,0.18);background:rgba(12,22,14,0.5);' +
+        'font-family:\'DM Mono\',monospace;font-size:10px;color:rgba(155,185,145,0.9);' +
+        'resize:none;outline:none;margin-bottom:6px"></textarea>' +
+      '<button onclick="_saveGapNote(\'' + outageId + '\',' + gapStart + ',' + gapEnd + ')" ' +
+        'style="width:100%;padding:8px;border-radius:8px;' +
+        'border:1px solid rgba(140,165,130,0.25);background:rgba(20,40,22,0.45);' +
+        'font-family:\'DM Mono\',monospace;font-size:10px;' +
+        'color:rgba(155,190,145,0.9);cursor:pointer;touch-action:manipulation">save note</button>' +
+    '</div>';
+
+  // Dismiss on outside tap
+  var _dismissGap = function(e) {
+    var m = document.getElementById('gap-node-menu');
+    if (m && !m.contains(e.target)) { m.remove(); document.removeEventListener('pointerdown', _dismissGap); }
+  };
+  document.body.appendChild(el);
+  requestAnimationFrame(function(){
+    el.style.opacity = '1';
+    setTimeout(function(){ document.addEventListener('pointerdown', _dismissGap); }, 80);
+  });
+}
+
+async function _selectGapCause(causeKey, outageId, gapStart, gapEnd) {
+  if (causeKey === 'other') {
+    var noteDiv = document.getElementById('gap-other-note');
+    if (noteDiv) { noteDiv.style.display = 'block'; }
+    var ta = document.getElementById('gap-note-text');
+    if (ta) { ta.value = ''; ta.focus(); }
+    return;
+  }
+  // Non-other: save immediately, close menu
+  await _saveGapCause(outageId, gapStart, gapEnd, causeKey, '');
+  var m = document.getElementById('gap-node-menu');
+  if (m) { m.style.opacity = '0'; setTimeout(function(){ if (m.parentNode) m.remove(); }, 150); }
+}
+
+async function _saveGapNote(outageId, gapStart, gapEnd) {
+  var ta   = document.getElementById('gap-note-text');
+  var note = ta ? ta.value.trim() : '';
+  await _saveGapCause(outageId, gapStart, gapEnd, 'other', note);
+  var m = document.getElementById('gap-node-menu');
+  if (m) { m.style.opacity = '0'; setTimeout(function(){ if (m.parentNode) m.remove(); }, 150); }
+}
+
+async function _saveGapCause(outageId, gapStart, gapEnd, causeKey, note) {
+  if (!SUPABASE_READY) { showToast('offline — try again'); return; }
+  var now = Date.now();
+  var patch = {
+    cause_category: causeKey,
+    cause_note:     note || null,
+    annotated_at:   now,          // schema: bigint epoch ms — needs migration if not present
+  };
+
+  try {
+    if (outageId) {
+      await _sbFetch('sensor_outages?id=eq.' + outageId, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json', 'Prefer': 'return=minimal' },
+        body: patch
+      });
+      var o = SENSOR_OUTAGES.find(function(x){ return x.id === outageId; });
+      if (o) { o.cause_category = causeKey; o.cause_note = note || null; o.annotated_at = now; }
+    } else {
+      // No pre-existing outage record — create one for this gap
+      // (can happen for short gaps below auto-detection threshold)
+      var newRow = [{
+        start_t:        gapStart,
+        end_t:          gapEnd,
+        cause_category: causeKey,
+        cause_note:     note || null,
+        annotated_at:   now,
+        device_id:      _thisPersonId || 'unknown',
+      }];
+      var result = await _sbFetch('sensor_outages', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Prefer': 'return=representation' },
+        body: newRow
+      });
+      if (Array.isArray(result) && result[0]) {
+        SENSOR_OUTAGES.unshift({
+          id:             result[0].id,
+          start_t:        gapStart,
+          end_t:          gapEnd,
+          cause_category: causeKey,
+          cause_note:     note || null,
+          annotated_at:   now,
+        });
+      }
+    }
+    showToast('gap annotated');
+  } catch(e) {
+    console.warn('[gap] save failed:', e.message);
+    showToast('save failed — try again');
+  }
+}
 
 // Outage history screen
 function openOutageHistory() {
