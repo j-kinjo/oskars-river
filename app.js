@@ -15908,37 +15908,94 @@ function _saveDeletedTs() {
 // to anchor-time matching, or first load offline).
 _backfillPredictedCurves();
 
+// ── PAIRED-DELETE STATE ─────────────────────────────────────────────────
+// Holds a pending two-tap confirmation when deleting one chip of a pair.
+// Auto-clears after 4 s if the user doesn't confirm.
+var _pendingPairDelete = null; // { t, _timer }
+
+// Internal: remove one event by timestamp from local state + Supabase events table.
+// Does NOT flush localStorage or _saveDeletedTs — caller does that once after all
+// deletions are complete.
+function _deleteSingleTs(t) {
+  SESSION       = SESSION.filter(function(s){ return s.t !== t; });
+  LOGGED_EVENTS = LOGGED_EVENTS.filter(function(e){ return e.t !== t; });
+  _deletedEventTs.add(t);
+  _removeActivePredictedCurve(t);
+  if (SUPABASE_READY) {
+    _sbFetch('events?t=eq.' + t, { method: 'DELETE', prefer: 'return=minimal' })
+      .catch(function(e){ console.warn('[delete] event delete failed:', e.message); });
+  }
+}
+
 function deleteEvent(idx) {
   var ev = LOGGED_EVENTS[idx];
-  var t  = ev && ev.t;
-  LOGGED_EVENTS.splice(idx, 1);
-  if (t) {
-    SESSION       = SESSION.filter(function(s){ return s.t !== t; });
-    LOGGED_EVENTS = LOGGED_EVENTS.filter(function(s){ return s.t !== t; });
-    try { localStorage.setItem('river_session', JSON.stringify(SESSION)); } catch(_e) {}
-    try { localStorage.setItem('river_logged',  JSON.stringify(LOGGED_EVENTS)); } catch(_e) {}
+  if (!ev) return;
+  var t = ev.t;
 
-    // Add to blocklist so it isn't re-pulled from Supabase
-    _deletedEventTs.add(t);
-    _saveDeletedTs();
+  // ── Pair detection ────────────────────────────────────────────────────
+  // Heuristic: bolus + carb event within a 30-min window are treated as a pair.
+  // Once pair_id FK exists (Gap D2) this becomes an exact lookup.
+  var WIN     = 30 * 60 * 1000;
+  var isBolus = ev.u > 0 && ev.note !== 'basal';
+  var isCarb  = ev.c > 0;
+  var paired  = null;
+  var carbT   = null; // carb-event timestamp — used for meal_history cleanup
 
-    // Clear any stale prediction curve anchored to this event (ghost prediction fix)
-    _removeActivePredictedCurve(t);
-
-    // Flush bubble cache so frog-spawn orbs clear immediately
-    _ptCache = null;
-    _lastPTSet = '';
-    _curveBubbles.forEach(function(b){ b._dying = true; });
-
-    // Delete from Supabase (best-effort — blocklist protects if this fails)
-    if (SUPABASE_READY) {
-      _sbFetch('events?t=eq.' + t, { method: 'DELETE', prefer: 'return=minimal' })
-        .catch(function(e){ console.warn('[delete] Supabase delete failed:', e.message); });
-    }
+  if (isBolus) {
+    // Look for a carb event logged up to 30 min after this bolus
+    paired = LOGGED_EVENTS.find(function(e) {
+      return e !== ev && e.c > 0 && e.t > t && (e.t - t) <= WIN;
+    });
+    if (paired) carbT = paired.t;
+  } else if (isCarb) {
+    carbT = t; // this event is the carb side
+    // Look for a bolus event logged up to 30 min before this carb
+    paired = LOGGED_EVENTS.find(function(e) {
+      return e !== ev && e.u > 0 && e.note !== 'basal' && e.t < t && (t - e.t) <= WIN;
+    });
   }
+
+  // ── Two-tap confirmation when a pair is detected ──────────────────────
+  if (paired) {
+    var alreadyPending = _pendingPairDelete && _pendingPairDelete.t === t;
+    if (!alreadyPending) {
+      // First tap — warn and stand by; don't delete anything yet
+      if (_pendingPairDelete) clearTimeout(_pendingPairDelete._timer);
+      _pendingPairDelete = {
+        t: t,
+        _timer: setTimeout(function() { _pendingPairDelete = null; }, 4000)
+      };
+      showToast('Also removes linked ' + (isBolus ? 'carbs' : 'bolus') + '.\nTap again to confirm.');
+      return;
+    }
+    // Second tap within window — confirmed; clear state and delete the partner
+    clearTimeout(_pendingPairDelete._timer);
+    _pendingPairDelete = null;
+    _deleteSingleTs(paired.t);
+  }
+
+  // ── Delete the primary event ──────────────────────────────────────────
+  _deleteSingleTs(t);
+
+  // ── meal_history cleanup (best-effort) ───────────────────────────────
+  // meal_history rows are keyed on the carb-event timestamp. Delete whenever
+  // a carb event (paired or solo) is being removed — mirrors the events delete.
+  if (carbT && SUPABASE_READY) {
+    _sbFetch('meal_history?t=eq.' + carbT, { method: 'DELETE', prefer: 'return=minimal' })
+      .catch(function(e){ console.warn('[delete] meal_history delete failed:', e.message); });
+  }
+
+  // ── Flush local state ────────────────────────────────────────────────
+  _saveDeletedTs();
+  _ptCache   = null;
+  _lastPTSet = '';
+  _curveBubbles.forEach(function(b){ b._dying = true; });
+  try { localStorage.setItem('river_session', JSON.stringify(SESSION)); } catch(_e) {}
+  try { localStorage.setItem('river_logged',  JSON.stringify(LOGGED_EVENTS)); } catch(_e) {}
+
   var el = document.getElementById('ctx-card-overlay') || document.getElementById('event-edit-overlay');
   if (el) el.remove();
-  showToast('entry removed');
+  showToast(paired ? 'both events removed' : 'entry removed');
 }
 
 function openSettings() {
