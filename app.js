@@ -1113,9 +1113,9 @@ function drawBGTrail(pal) {
           }
           if (afterGap) {
             CX.save();
-            CX.globalAlpha = 0.15;
+            CX.globalAlpha = 0.25;
             CX.strokeStyle = 'rgba(180,200,220,1)';
-            CX.lineWidth = 1;
+            CX.lineWidth = 1.5;
             CX.setLineDash([3, 8]);
             CX.beginPath();
             CX.moveTo(pts[i-1].x, pts[i-1].y);
@@ -1123,6 +1123,13 @@ function drawBGTrail(pal) {
             CX.stroke();
             CX.setLineDash([]);
             CX.restore();
+            // Register line-segment hitbox so tap-on-gap opens annotation
+            if (!window._outageHitboxes) window._outageHitboxes = [];
+            _outageHitboxes.push({
+              x0: pts[i-1].x, y0: pts[i-1].y,
+              x1: afterGap.x, y1: afterGap.y,
+              gapStart: pts[i-1].t, gapEnd: afterGap.t
+            });
           }
         }
       }
@@ -5253,12 +5260,16 @@ function _handleCanvasHit(mx, my, isLongPress) {
       }
     }
   }
-  // Outage zones — tap anywhere inside an unannotated amber gap
+  // Outage gap dashed lines — tap within 18px of the bridge line opens annotation
   if (window._outageHitboxes && _outageHitboxes.length > 0) {
     for (var oi = 0; oi < _outageHitboxes.length; oi++) {
       var oh = _outageHitboxes[oi];
-      if (mx >= oh.x0 && mx <= oh.x1) {
-        openOutageLog(oh.outage);
+      var dx = oh.x1 - oh.x0, dy = oh.y1 - oh.y0;
+      var len2 = dx*dx + dy*dy;
+      var t2 = len2 > 0 ? Math.max(0, Math.min(1, ((mx-oh.x0)*dx + (my-oh.y0)*dy) / len2)) : 0;
+      var nx = oh.x0 + t2*dx, ny = oh.y0 + t2*dy;
+      if (Math.sqrt((mx-nx)*(mx-nx) + (my-ny)*(my-ny)) < 18) {
+        openOutageLog(null, oh.gapStart, oh.gapEnd);
         return;
       }
     }
@@ -12732,9 +12743,30 @@ function openOrbRadialMenu(pressX) {
   // Capture the canvas time at the press position so modal time-pickers pre-fill correctly
   _radialDefaultT = viewTime;
 
-  var d     = dataAt ? dataAt(viewTime) : null;
-  var orbX  = (pressX !== undefined) ? pressX : NOW_X * W;
-  var orbY  = d ? bgToY(d.bg) : window.innerHeight * 0.5;
+  var pressT = (pressX !== undefined) ? xT(pressX) : viewTime;
+  var dPress = dataAt ? dataAt(pressT) : null;
+  var orbX   = (pressX !== undefined) ? pressX : NOW_X * W;
+  var orbY;
+  if (dPress && dPress.bg !== null && dPress.bg !== undefined) {
+    orbY = bgToY(dPress.bg);
+  } else {
+    // In a gap: interpolate between last known reading before and first after press position
+    var lastBefore = null, firstAfter = null;
+    for (var _ri = HISTORY_RAW.length - 1; _ri >= 0; _ri--) {
+      if (HISTORY_RAW[_ri].t <= pressT && HISTORY_RAW[_ri].bg != null) { lastBefore = HISTORY_RAW[_ri]; break; }
+    }
+    for (var _rj = 0; _rj < HISTORY_RAW.length; _rj++) {
+      if (HISTORY_RAW[_rj].t > pressT && HISTORY_RAW[_rj].bg != null) { firstAfter = HISTORY_RAW[_rj]; break; }
+    }
+    if (lastBefore && firstAfter) {
+      var _frac = (pressT - lastBefore.t) / (firstAfter.t - lastBefore.t);
+      orbY = bgToY(lastBefore.bg + _frac * (firstAfter.bg - lastBefore.bg));
+    } else if (lastBefore) {
+      orbY = bgToY(lastBefore.bg);
+    } else {
+      orbY = window.innerHeight * 0.5;
+    }
+  }
 
   // Items: label, icon, action, colour
   var items = [
@@ -15204,17 +15236,30 @@ function _showOutageNudge(startT) {
 }
 
 // Full outage logging modal
-function openOutageLog(targetOutage) {
+function openOutageLog(targetOutage, gapStart, gapEnd) {
   var nudge = document.getElementById('outage-nudge');
   if (nudge) nudge.remove();
 
   var ex = document.getElementById('outage-overlay');
   if (ex) { ex.remove(); return; }
 
-  // Use passed outage (from canvas tap) or fall back to active/most-recent
-  var outage = targetOutage
-            || SENSOR_OUTAGES.find(function(o){ return o.end_t === null; })
-            || SENSOR_OUTAGES[0];
+  // Resolve which outage record to annotate:
+  // 1. Explicit object passed (legacy callers)
+  // 2. Gap timing passed from dashed-line tap → find overlapping SENSOR_OUTAGE
+  // 3. Fall back to active (open) outage or most recent
+  var outage;
+  if (targetOutage) {
+    outage = targetOutage;
+  } else if (gapStart !== undefined) {
+    outage = SENSOR_OUTAGES.find(function(o) {
+      var oEnd = o.end_t || Date.now();
+      return o.start_t <= (gapEnd || gapStart) && oEnd >= gapStart;
+    }) || SENSOR_OUTAGES.find(function(o){ return o.end_t === null; })
+      || SENSOR_OUTAGES[0];
+  } else {
+    outage = SENSOR_OUTAGES.find(function(o){ return o.end_t === null; })
+          || SENSOR_OUTAGES[0];
+  }
 
   var startStr = outage
     ? new Date(outage.start_t).toLocaleTimeString('en-GB', {hour:'2-digit', minute:'2-digit'})
@@ -15279,7 +15324,7 @@ function openOutageLog(targetOutage) {
         'style="width:100%;box-sizing:border-box;padding:9px 12px;border-radius:8px;' +
         'border:1px solid rgba(160,175,210,0.2);background:rgba(20,30,60,0.4);' +
         'font-family:\'DM Mono\',monospace;font-size:11px;color:rgba(170,185,225,0.85);' +
-        'resize:none;outline:none;margin-bottom:16px">' + (outage ? outage.cause_note || '' : '') + '</textarea>' +
+        'resize:none;outline:none;margin-bottom:16px"></textarea>' +
 
       '<button onclick="saveOutageLog()" ' +
         'style="width:100%;padding:13px;border-radius:10px;border:1px solid rgba(160,185,240,0.3);' +
@@ -15350,105 +15395,9 @@ async function saveOutageLog() {
 
 // Draw logged sensor outage zones on the river canvas
 // These persist even after CGM backfill — they represent lived experience
-function drawSensorOutageZones() {
-  if (!SENSOR_OUTAGES || SENSOR_OUTAGES.length === 0) return;
-
-  var now = Date.now();
-  var viewLeft  = viewTime - viewSpan * NOW_X;
-  var viewRight = viewTime + viewSpan * (1 - NOW_X);
-
-  SENSOR_OUTAGES.forEach(function(o) {
-    var oStart = o.start_t;
-    var oEnd   = o.end_t || now;
-
-    if (oEnd < viewLeft || oStart > viewRight) return;
-
-    var x0 = tX(oStart);
-    var x1 = tX(oEnd);
-    var x0c = Math.max(0, x0);
-    var x1c = Math.min(W, x1);
-    if (x1c <= x0c) return;
-
-    var pulse = 0.5 + 0.5 * Math.sin(phi * 1.2);
-    var zoneW = x1c - x0c;
-
-    CX.save();
-
-    // Amber haze fill — full height, feathered edges
-    var zoneGrad = CX.createLinearGradient(x0c, 0, x1c, 0);
-    zoneGrad.addColorStop(0,    'rgba(180,160,100,0.0)');
-    zoneGrad.addColorStop(0.12, 'rgba(170,150,90,0.08)');
-    zoneGrad.addColorStop(0.88, 'rgba(170,150,90,0.08)');
-    zoneGrad.addColorStop(1,    'rgba(180,160,100,0.0)');
-    CX.fillStyle = zoneGrad;
-    CX.fillRect(x0c, 0, zoneW, H);
-
-    // ── START BOUNDARY ── clear vertical line at outage start
-    if (x0 >= 0 && x0 <= W) {
-      CX.strokeStyle = 'rgba(200,175,100,0.6)';
-      CX.lineWidth = 1.5;
-      CX.setLineDash([]);
-      CX.beginPath();
-      CX.moveTo(x0, 0); CX.lineTo(x0, H);
-      CX.stroke();
-      // "gap start" label
-      CX.globalAlpha = 0.6;
-      CX.font = "400 9px 'DM Mono',monospace";
-      CX.fillStyle   = 'rgba(210,190,120,1)';
-      CX.textAlign   = 'left';
-      CX.fillText('◀ gap start', x0 + 4, 14);
-      CX.globalAlpha = 1;
-    }
-
-    // ── END BOUNDARY ── clear vertical line at outage end (only if it has ended)
-    if (o.end_t && x1 >= 0 && x1 <= W) {
-      CX.strokeStyle = 'rgba(200,175,100,0.6)';
-      CX.lineWidth = 1.5;
-      CX.setLineDash([]);
-      CX.beginPath();
-      CX.moveTo(x1, 0); CX.lineTo(x1, H);
-      CX.stroke();
-      CX.globalAlpha = 0.6;
-      CX.font = "400 9px 'DM Mono',monospace";
-      CX.fillStyle   = 'rgba(210,190,120,1)';
-      CX.textAlign   = 'right';
-      CX.fillText('gap end ▶', x1 - 4, 14);
-      CX.globalAlpha = 1;
-    }
-
-    // ── CENTRE LABEL — cause + duration, only when zone is wide enough ──
-    if (zoneW > 50) {
-      var durationMins = Math.round((oEnd - oStart) / 60000);
-      var causeLabel = {
-        heat: '🌡️ heat', water: '💧 water', adhesion: '🩹 adhesion',
-        compression: '🛏️ compression', bluetooth: '📶 bt', sensor_error: '⚠️ error', unknown: '📡 gap'
-      }[o.cause_category] || '📡 gap';
-
-      var labelX = Math.max(x0c + 4, Math.min(x1c - 4, (x0c + x1c) / 2));
-      CX.globalAlpha = 0.6 + pulse * 0.1;
-      CX.font = "400 11px 'DM Mono',monospace";
-      CX.fillStyle   = 'rgba(210,190,120,1)';
-      CX.textAlign   = 'center';
-      CX.fillText(causeLabel + '  ' + durationMins + 'm', labelX, 30);
-
-      // ── TAP TO ANNOTATE — shown only for unannotated gaps ──
-      if (!o.cause_category || o.cause_category === 'unknown') {
-        CX.globalAlpha = 0.35 + pulse * 0.2;
-        CX.font = "400 9px 'DM Mono',monospace";
-        CX.fillStyle = 'rgba(210,190,120,1)';
-        CX.textAlign = 'center';
-        CX.fillText('tap to annotate', labelX, 46);
-        CX.globalAlpha = 1;
-        // Register hitbox spanning the full zone for tap handling
-        if (!window._outageHitboxes) window._outageHitboxes = [];
-        _outageHitboxes.push({ x0: x0c, x1: x1c, outage: o });
-      }
-    }
-
-    CX.globalAlpha = 1;
-    CX.restore();
-  });
-}
+// drawSensorOutageZones — gap tap-to-annotate is handled inline in drawBGTrail
+// (dashed bridge line carries the hitbox; SENSOR_OUTAGES overlay removed — was too heavy)
+function drawSensorOutageZones() { /* intentionally empty */ }
 
 // Outage history screen
 function openOutageHistory() {
