@@ -4565,6 +4565,7 @@ function frame(ts) {
   // ── ANIMATION STATE ──────────────────────────────────────────
   window._bgDots=[];
   window._eventCards=[];
+  window._outageHitboxes=[];
   drawVoid(pal);
 
   // ── EQUILIBRIUM ZONE — soft target corridor ────────────────────
@@ -4588,7 +4589,7 @@ function frame(ts) {
   // ── EVENT MARKERS — ripples where forces entered ───────────────
   drawBolusMarkers(pal);
   drawBasalReservoir(pal);  // subtle always-present basal drip
-  // drawSensorOutageZones();   // [STUBBED] amber haze — hidden pending better UX
+  drawSensorOutageZones();    // amber haze + tap-to-annotate for unknown gaps
   drawBloodPricks();         // red diamond prick markers
 
   // ── CONTEXT ─────────────────────────────────────────────────────
@@ -5248,6 +5249,16 @@ function _handleCanvasHit(mx, my, isLongPress) {
       var pc = _prickCards[pi];
       if (Math.abs(mx - pc.x) < 14 && Math.abs(my - pc.y) < 14) {
         openPrickEditor(pc.prick);
+        return;
+      }
+    }
+  }
+  // Outage zones — tap anywhere inside an unannotated amber gap
+  if (window._outageHitboxes && _outageHitboxes.length > 0) {
+    for (var oi = 0; oi < _outageHitboxes.length; oi++) {
+      var oh = _outageHitboxes[oi];
+      if (mx >= oh.x0 && mx <= oh.x1) {
+        openOutageLog(oh.outage);
         return;
       }
     }
@@ -12732,7 +12743,6 @@ function openOrbRadialMenu(pressX) {
     { label: 'hypo',       icon: '⬡', fn: 'openHypoLog()',        col: 'rgba(255,210,40,0.9)'  },
     { label: 'prick',      icon: '◆', fn: 'openBloodPrickLog()',  col: 'rgba(220,60,80,0.9)'   },
     { label: 'basal',      icon: '▬', fn: 'openBasalLog()',       col: 'rgba(40,200,160,0.9)'  },
-    { label: 'outage',     icon: '📡', fn: 'openOutageLog()',      col: 'rgba(200,175,80,0.9)'  },
     { label: 'patterns',   icon: '◑', fn: 'openPatternExplorer()', col: 'rgba(160,120,240,0.9)' },
     { label: 'whisper',    icon: '◌', fn: 'openWhisper()',        col: 'rgba(140,200,180,0.9)' },
   ];
@@ -15194,15 +15204,16 @@ function _showOutageNudge(startT) {
 }
 
 // Full outage logging modal
-function openOutageLog() {
+function openOutageLog(targetOutage) {
   var nudge = document.getElementById('outage-nudge');
   if (nudge) nudge.remove();
 
   var ex = document.getElementById('outage-overlay');
   if (ex) { ex.remove(); return; }
 
-  // Find the active outage or most recent
-  var outage = SENSOR_OUTAGES.find(function(o){ return o.end_t === null; })
+  // Use passed outage (from canvas tap) or fall back to active/most-recent
+  var outage = targetOutage
+            || SENSOR_OUTAGES.find(function(o){ return o.end_t === null; })
             || SENSOR_OUTAGES[0];
 
   var startStr = outage
@@ -15419,6 +15430,19 @@ function drawSensorOutageZones() {
       CX.fillStyle   = 'rgba(210,190,120,1)';
       CX.textAlign   = 'center';
       CX.fillText(causeLabel + '  ' + durationMins + 'm', labelX, 30);
+
+      // ── TAP TO ANNOTATE — shown only for unannotated gaps ──
+      if (!o.cause_category || o.cause_category === 'unknown') {
+        CX.globalAlpha = 0.35 + pulse * 0.2;
+        CX.font = "400 9px 'DM Mono',monospace";
+        CX.fillStyle = 'rgba(210,190,120,1)';
+        CX.textAlign = 'center';
+        CX.fillText('tap to annotate', labelX, 46);
+        CX.globalAlpha = 1;
+        // Register hitbox spanning the full zone for tap handling
+        if (!window._outageHitboxes) window._outageHitboxes = [];
+        _outageHitboxes.push({ x0: x0c, x1: x1c, outage: o });
+      }
     }
 
     CX.globalAlpha = 1;
