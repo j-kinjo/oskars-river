@@ -2942,9 +2942,9 @@ function drawBolusMarkers(pal) {
 
     if (b.u > 0.1) {
       var _isBasal = b.note === 'basal';
-      const r = _isBasal ? 80  : pal.iobR[0],
-            g = _isBasal ? 140 : pal.iobR[1],
-            bv= _isBasal ? 220 : pal.iobR[2];
+      const r = _isBasal ? 40  : pal.iobR[0],
+            g = _isBasal ? 200 : pal.iobR[1],
+            bv= _isBasal ? 160 : pal.iobR[2];
       const cardY = bgY + 30 + Math.min(b.u * 8, 36);
       CX.globalAlpha = 0.35;
       CX.strokeStyle = 'rgba(' + r + ',' + g + ',' + bv + ',0.7)';
@@ -3488,7 +3488,9 @@ function checkHover(mx, my) {
     var c = cards[j];
     if (mx>c.x-c.w/2-10&&mx<c.x+c.w/2+10&&my>c.y-c.h-6&&my<c.y+c.h+6) {
       var ts2 = new Date(c.data.t).toLocaleTimeString('en-GB',{hour:'2-digit',minute:'2-digit'});
-      var lbl = c.type==='carb' ? c.data.c+'g carbs  '+ts2 : c.data.u.toFixed(1)+'U bolus  '+ts2;
+      var lbl = c.type==='carb'  ? c.data.c+'g carbs  '+ts2
+              : c.type==='basal' ? c.data.u.toFixed(1)+'U basal  '+ts2
+              :                    c.data.u.toFixed(1)+'U bolus  '+ts2;
       var col = c.type==='carb' ? 'rgba(220,155,60,0.9)' : 'rgba(100,140,225,0.9)';
       _hoverTooltip = {x:c.x, y:c.y-8, label:lbl, col:col};
       _lastTooltip  = _hoverTooltip; return;
@@ -5330,7 +5332,7 @@ function getEntryTime() {
   var el = document.getElementById('in-time');
   if (el && el.value) {
     _entryTimeVal = el.value; // cache it
-    return new Date(el.value).getTime();
+    return _parseDTLocal(el.value);
   }
   if (_entryTimeVal) return new Date(_entryTimeVal).getTime();
   return Date.now();
@@ -11427,6 +11429,14 @@ async function suggestGI(foodName, inputEl) {
 }
 
 // ── TIME INPUT HELPERS ────────────────────────────────────────────────
+// Parse a datetime-local string ("2026-06-18T11:55") as LOCAL time.
+// new Date("2026-06-18T11:55") is treated as UTC on some browsers (older
+// iOS Safari) which shifts events 1hr later in BST. Splitting manually
+// and passing parts to the Date constructor always uses local time.
+function _parseDTLocal(v) {
+  var p = v.split(/[-T:]/);
+  return new Date(+p[0], +p[1]-1, +p[2], +p[3]||0, +p[4]||0).getTime();
+}
 function toDatetimeLocal(d) {
   // Format Date to datetime-local input value (local time)
   var pad = function(n){ return String(n).padStart(2,'0'); };
@@ -11465,7 +11475,7 @@ function timePickerHTML(id, defaultDate, allowFuture) {
 
 function getTimeVal(id) {
   var el = document.getElementById(id);
-  if (el && el.value) return new Date(el.value).getTime();
+  if (el && el.value) return _parseDTLocal(el.value);
   return Date.now();
 }
 
@@ -11586,6 +11596,7 @@ function openBasalLog() {
     '<div style="display:flex;align-items:center;gap:12px;margin-bottom:24px">' +
     '<div style="font-family:\'DM Mono\',monospace;font-size:11px;color:rgba(120,160,180,0.5);flex:1">time</div>' +
     '<input id="basal-log-dt" type="datetime-local" value="' + dtISO + '" ' +
+    'max="' + toDatetimeLocal(new Date()) + '" ' +
     'style="padding:10px;border-radius:8px;border:1px solid rgba(40,200,160,0.15);background:rgba(40,200,160,0.04);font-family:\'DM Mono\',monospace;font-size:12px;color:rgba(120,160,180,0.7);outline:none">' +
     '</div>' +
 
@@ -11600,7 +11611,7 @@ function openBasalLog() {
 function commitBasalLog() {
   var dtEl   = document.getElementById('basal-log-dt');
   var doseEl = document.getElementById('basal-log-dose');
-  var t    = dtEl ? new Date(dtEl.value).getTime() : Date.now();
+  var t    = dtEl ? _parseDTLocal(dtEl.value) : Date.now();
   var dose = parseFloat(doseEl && doseEl.value) || (_TREATMENT || _TREATMENT_DEFAULTS).basalDose || 6;
 
   LOGGED_EVENTS.push({ t: t, c: 0, u: dose, note: 'basal', logged_by: _thisPersonId || 'unknown', local: true });
@@ -14879,7 +14890,7 @@ function saveEventEdit(idx) {
   var u        = parseFloat(document.getElementById('ee-units').value) || 0;
   var waitMins = parseInt(document.getElementById('ee-wait').value)    || 0;
   var timeEl   = document.getElementById('ee-time');
-  var newT     = timeEl && timeEl.value ? new Date(timeEl.value).getTime() : null;
+  var newT     = timeEl && timeEl.value ? _parseDTLocal(timeEl.value) : null;
 
   if (!LOGGED_EVENTS[idx]) { var el=document.getElementById('ctx-card-overlay') || document.getElementById('event-edit-overlay'); if(el) el.remove(); return; }
 
@@ -15676,6 +15687,7 @@ function openBloodPrickLog() {
     '<div style="margin-bottom:20px">' +
       '<div style="font-family:\'DM Mono\',monospace;font-size:8px;letter-spacing:1px;text-transform:uppercase;color:rgba(180,100,120,0.5);margin-bottom:6px">when</div>' +
       '<input id="prick-time" type="datetime-local" value="' + dtISO + '" ' +
+        'max="' + toDatetimeLocal(new Date()) + '" ' +
         'style="width:100%;padding:9px 12px;border-radius:8px;border:1px solid rgba(220,80,100,0.25);' +
         'background:rgba(30,6,12,0.5);font-family:\'DM Mono\',monospace;font-size:13px;' +
         'color:rgba(200,160,170,0.8);outline:none;box-sizing:border-box">' +
@@ -15727,7 +15739,7 @@ function logBloodPrick() {
   if (!inp) return;
   var bg = Math.round(parseFloat(inp.value) * 10) / 10;
   if (isNaN(bg) || bg < 1.0 || bg > 30.0) { _prickValidate(); return; }
-  var t  = _safeEventT(tEl && tEl.value ? new Date(tEl.value).getTime() : Date.now());
+  var t  = _safeEventT(tEl && tEl.value ? _parseDTLocal(tEl.value) : Date.now());
 
   var prick = { t: t, bg: bg, logged_by: _thisPersonId || 'unknown' };
   BLOOD_PRICKS.push(prick);
@@ -15796,7 +15808,7 @@ function savePrickEdit(oldT) {
   var bgEl = document.getElementById('pe-bg');
   var tEl  = document.getElementById('pe-time');
   var bg   = bgEl ? Math.round(parseFloat(bgEl.value) * 10) / 10 : null;
-  var newT = tEl && tEl.value ? new Date(tEl.value).getTime() : oldT;
+  var newT = tEl && tEl.value ? _parseDTLocal(tEl.value) : oldT;
   if (!bg || isNaN(bg) || bg < 1 || bg > 30) { showToast('invalid value'); return; }
 
   var idx = BLOOD_PRICKS.findIndex(function(p){ return p.t === oldT; });
@@ -19695,7 +19707,7 @@ function commitPadImport() {
   var uInp     = document.getElementById('pad-import-u');
   var waitInp  = document.getElementById('pad-import-wait');
 
-  var t        = dtInp ? new Date(dtInp.value).getTime() : Date.now();
+  var t        = dtInp ? _parseDTLocal(dtInp.value) : Date.now();
   var u        = parseFloat(uInp && uInp.value) || 0;
   var waitMins = parseFloat(waitInp && waitInp.value) || 0;
   var totalCarbs = items.reduce(function(s,i){ return s+(parseFloat(i.carbs)||0); }, 0);
