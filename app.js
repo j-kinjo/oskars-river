@@ -412,7 +412,7 @@ async function syncNow(silent) {
     // Push recent CGM readings — skip on very first startup sync (no real data yet)
     if (_lastSyncT > 0) {
       var recentReadings = HISTORY_RAW.filter(function(h){
-        return h.t > Date.now() - 3600000 && h.bg > 0;
+        return h.t > Date.now() - 36 * 3600000 && h.bg > 0; // 36h: covers overnight backfill from Gluroo fetchRecent
       });
       if (recentReadings.length > 0) await syncPushReadings(recentReadings);
     }
@@ -13735,7 +13735,8 @@ function openDebugPanel() {
     '<div id="backfill-bar-stats" style="font-size:8px;color:rgba(180,200,180,0.5);margin-top:4px"></div>' +
     '<button onclick="_jumpToNextGap()" style="margin-top:6px;padding:3px 8px;border-radius:5px;border:1px solid rgba(80,160,220,0.3);background:rgba(80,160,220,0.06);color:rgba(80,160,220,0.7);font-family:monospace;font-size:8px;cursor:pointer">jump to next gap ○</button>' +
     '<button onclick="showDayStrip();document.getElementById(\'debug-panel\').remove()" style="margin-top:4px;padding:3px 8px;border-radius:5px;border:1px solid rgba(62,180,120,0.3);background:rgba(62,180,120,0.06);color:rgba(62,180,120,0.7);font-family:monospace;font-size:8px;cursor:pointer">📅 day strip</button>' +
-    '<button onclick="openOutageHistory();document.getElementById(\'debug-panel\').remove()" style="margin-top:4px;margin-left:4px;padding:3px 8px;border-radius:5px;border:1px solid rgba(200,175,80,0.3);background:rgba(200,175,80,0.06);color:rgba(200,175,80,0.7);font-family:monospace;font-size:8px;cursor:pointer">📡 outages</button>';
+    '<button onclick="openOutageHistory();document.getElementById(\'debug-panel\').remove()" style="margin-top:4px;margin-left:4px;padding:3px 8px;border-radius:5px;border:1px solid rgba(200,175,80,0.3);background:rgba(200,175,80,0.06);color:rgba(200,175,80,0.7);font-family:monospace;font-size:8px;cursor:pointer">📡 outages</button>' +
+    '<button onclick="(async function(){var all=HISTORY_RAW.filter(function(h){return h.bg>0;});await syncPushReadings(all);var b=event.target;b.textContent=\'✓ pushed \'+all.length+\' readings\';setTimeout(function(){b.textContent=\'⬆ push all history to Supabase\';},3000);})()" style="margin-top:4px;margin-left:4px;padding:3px 8px;border-radius:5px;border:1px solid rgba(180,120,220,0.3);background:rgba(180,120,220,0.06);color:rgba(180,120,220,0.7);font-family:monospace;font-size:8px;cursor:pointer">⬆ push all history to Supabase</button>';
   el.appendChild(bpDiv);
   _renderBackfillBar(bpDiv.querySelector('#backfill-bar-canvas'), bpDiv.querySelector('#backfill-bar-stats'));
 
