@@ -11824,6 +11824,8 @@ let _cgmPolledOnce = false; // suppresses outage detection until first poll is d
 let _lastReadingT  = 0;
 let _sourceCfg     = null;
 let _sourceId      = null;
+let _pollIntervalMs = 60000; // keep in sync with setInterval below — drives the countdown ring
+let _nextPollDueT   = 0;     // timestamp of the next scheduled poll, for the CGM clock's countdown sweep
 
 async function startLivePolling(sourceId, cfg) {
   _sourceId  = sourceId;
@@ -11860,6 +11862,7 @@ async function startLivePolling(sourceId, cfg) {
 
   // Poll every 1 minute (matches Libre's update cadence)
   async function poll() {
+    _nextPollDueT = Date.now() + _pollIntervalMs; // reset countdown ring right as this poll starts
     try {
       const readings = await source.fetch(_sourceCfg, 2);
       if (readings.length > 0) {
@@ -12231,6 +12234,28 @@ function drawCGMClock() {
       var hb = parseInt(col.slice(5,7),16);
       cx.strokeStyle = 'rgba('+hr+','+hg+','+hb+','+(segAlpha*alpha)+')';
       cx.lineWidth = W*0.12;
+      cx.stroke();
+    }
+  }
+
+  // Countdown ring — thin sweep just outside the main ring, fills clockwise
+  // over each 1-min poll cycle and resets to empty right as the next poll fires.
+  if ((_cgmClockState === 'live' || _cgmClockState === 'stale') && _nextPollDueT > 0) {
+    var remainMs  = _nextPollDueT - Date.now();
+    var progress  = 1 - Math.max(0, Math.min(1, remainMs / _pollIntervalMs));
+    var pr = r + W*0.06;
+    // Faint track so the ring reads as a dial even at 0%
+    cx.beginPath();
+    cx.arc(cx2, cy2, pr, 0, Math.PI*2);
+    cx.strokeStyle = 'rgba(255,255,255,0.06)';
+    cx.lineWidth = W*0.03;
+    cx.stroke();
+    if (progress > 0.002) {
+      cx.beginPath();
+      cx.arc(cx2, cy2, pr, startAngle, startAngle + progress*Math.PI*2);
+      cx.strokeStyle = 'rgba(180,220,255,0.55)';
+      cx.lineWidth = W*0.03;
+      cx.lineCap = 'round';
       cx.stroke();
     }
   }
