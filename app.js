@@ -12235,56 +12235,28 @@ function drawCGMClock() {
   cx.lineWidth = W*0.12;
   cx.stroke();
 
-  // Filled segments: 12 segments = 5min intervals over 1 hour
-  // Each segment lights up when we have a reading within that window
-  var segments = 12;
-  var segAngle = (Math.PI*2) / segments;
-  var gap = 0.08; // radians gap between segments
   var startAngle = -Math.PI/2; // 12 o'clock
 
-  for (var i=0; i<segments; i++) {
-    var aStart = startAngle + i*segAngle + gap/2;
-    var aEnd   = startAngle + (i+1)*segAngle - gap/2;
-    // Segment 0 = most recent 5min, segment 11 = 55-60min ago
-    var ageMin = i * 5;
-    var hasData = _cgmClockState === 'live' && ageMin < _cgmLastReadingAge + 5;
-    var isRecent = ageMin === 0;
-
-    if (hasData || _cgmClockState === 'connecting') {
-      var segAlpha = isRecent ? 1.0 : Math.max(0.15, 1 - ageMin/65);
-      cx.beginPath();
-      cx.arc(cx2, cy2, r, aStart, aEnd);
-      cx.strokeStyle = col.replace(')', ',' + (segAlpha * alpha) + ')').replace('rgb', 'rgba').replace('#', '');
-      // Parse hex to rgba properly
-      var hr = parseInt(col.slice(1,3),16);
-      var hg = parseInt(col.slice(3,5),16);
-      var hb = parseInt(col.slice(5,7),16);
-      cx.strokeStyle = 'rgba('+hr+','+hg+','+hb+','+(segAlpha*alpha)+')';
-      cx.lineWidth = W*0.12;
-      cx.stroke();
-    }
-  }
-
-  // Countdown ring — thin sweep just outside the main ring, fills clockwise
-  // over each 1-min poll cycle and resets to empty right as the next poll fires.
-  if ((_cgmClockState === 'live' || _cgmClockState === 'stale') && _nextPollDueT > 0) {
-    var remainMs  = _nextPollDueT - Date.now();
-    var progress  = 1 - Math.max(0, Math.min(1, remainMs / _pollIntervalMs));
-    var pr = r + W*0.06;
-    // Faint track so the ring reads as a dial even at 0%
-    cx.beginPath();
-    cx.arc(cx2, cy2, pr, 0, Math.PI*2);
-    cx.strokeStyle = 'rgba(255,255,255,0.06)';
-    cx.lineWidth = W*0.03;
-    cx.stroke();
+  // Single sweep: fills clockwise over each 1-min poll cycle and resets to
+  // empty right as the next poll fires — colour tracks connection state.
+  if ((_cgmClockState === 'live' || _cgmClockState === 'stale' || _cgmClockState === 'connecting') && _nextPollDueT > 0) {
+    var remainMs = _nextPollDueT - Date.now();
+    var progress = 1 - Math.max(0, Math.min(1, remainMs / _pollIntervalMs));
     if (progress > 0.002) {
       cx.beginPath();
-      cx.arc(cx2, cy2, pr, startAngle, startAngle + progress*Math.PI*2);
-      cx.strokeStyle = 'rgba(180,220,255,0.55)';
-      cx.lineWidth = W*0.03;
+      cx.arc(cx2, cy2, r, startAngle, startAngle + progress*Math.PI*2);
+      cx.strokeStyle = 'rgba('+parseInt(col.slice(1,3),16)+','+parseInt(col.slice(3,5),16)+','+parseInt(col.slice(5,7),16)+','+alpha+')';
+      cx.lineWidth = W*0.12;
       cx.lineCap = 'round';
       cx.stroke();
     }
+  } else if (_cgmClockState === 'error') {
+    // No countdown while erroring — show the ring fully lit in the error colour instead
+    cx.beginPath();
+    cx.arc(cx2, cy2, r, 0, Math.PI*2);
+    cx.strokeStyle = 'rgba('+parseInt(col.slice(1,3),16)+','+parseInt(col.slice(3,5),16)+','+parseInt(col.slice(5,7),16)+','+(alpha*0.7)+')';
+    cx.lineWidth = W*0.12;
+    cx.stroke();
   }
 
   // Centre dot — pulses when live
