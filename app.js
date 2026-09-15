@@ -11826,6 +11826,8 @@ let _sourceCfg     = null;
 let _sourceId      = null;
 let _pollIntervalMs = 60000; // keep in sync with setInterval below — drives the countdown ring
 let _nextPollDueT   = 0;     // timestamp of the next scheduled poll, for the CGM clock's countdown sweep
+let _currentPollFn  = null;  // reference to the active poll(), so the watchdog can force it
+let _forcingReconnect = false;
 
 async function startLivePolling(sourceId, cfg) {
   _sourceId  = sourceId;
@@ -11884,6 +11886,7 @@ async function startLivePolling(sourceId, cfg) {
   }
 
   await poll(); // immediate
+  _currentPollFn = poll;
   _pollTimer = setInterval(poll, 60000);
 }
 
@@ -12186,8 +12189,32 @@ var _cgmClockState = 'idle'; // 'idle' | 'connecting' | 'live' | 'error' | 'stal
 var _cgmLastReadingAge = 0;  // minutes since last reading
 
 function drawCGMClock() {
+  // ── STALL WATCHDOG ────────────────────────────────────────────────────
+  // A desktop tab left open for hours can have its setInterval throttled
+  // or paused by the browser without throwing any error — the poll simply
+  // stops firing while everything still looks fine. This piggybacks on
+  // the rAF loop below (which keeps running as long as the dial is on
+  // screen ticking) to notice and self-heal instead of needing a manual
+  // page refresh.
+  if (_nextPollDueT > 0 && Date.now() - _nextPollDueT > 5000 && typeof _currentPollFn === 'function') {
+    _currentPollFn(); // scheduled poll is overdue — the interval likely stalled; force it now
+  }
+  if (_liveConnected && _lastReadingT > 0 && !_forcingReconnect &&
+      Date.now() - _lastReadingT > 6 * 60000) {
+    // Several cycles have passed with no new reading even though polling
+    // reports success — force a fresh login in case the LibreLinkUp
+    // session is stuck serving a cached value, then re-poll immediately.
+    _forcingReconnect = true;
+    try {
+      var srcW = CGM_SOURCES[_sourceId];
+      if (srcW && '_token' in srcW) srcW._token = null;
+    } catch(e) {}
+    if (typeof _currentPollFn === 'function') _currentPollFn();
+    setTimeout(function(){ _forcingReconnect = false; }, 90000); // don't hammer — retry again next minute if still stuck
+  }
+
   var cv = document.getElementById('cgm-clock');
-  if (!cv) return;
+  if (!cv) { requestAnimationFrame(drawCGMClock); return; }
   var cx = cv.getContext('2d');
   var W = cv.width, H = cv.height;
   var cx2 = W/2, cy2 = H/2, r = W*0.38;
