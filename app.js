@@ -451,7 +451,7 @@ function startSyncPolling() {
   if (!SUPABASE_READY) return;
   syncNow(true); // immediate on startup
   loadSensorOutages();    // load outage history
-  _syncTimer = setInterval(function(){ syncNow(true); }, 5 * 60000);
+  _syncTimer = setInterval(function(){ syncNow(true); }, 60000);
   // Check for duplicate events in Supabase (symptom of missing UNIQUE constraint on events.t)
   setTimeout(_checkForDuplicateEvents, 8000);
 }
@@ -478,7 +478,7 @@ function stopSyncPolling() {
 
 // ── RESUME / FOCUS HANDLERS — repoll immediately on return to app ─────
 // Covers: tab switch, phone unlock, Safari background/foreground.
-// Without this, there's a gap until the next 5-min interval fires.
+// Without this, there's a gap until the next 1-min interval fires.
 document.addEventListener('visibilitychange', function() {
   if (document.visibilityState !== 'visible') return;
   var stale = Date.now() - _lastReadingT > 60000;
@@ -11858,7 +11858,7 @@ async function startLivePolling(sourceId, cfg) {
     console.warn('CGM backfill failed:', e);
   }
 
-  // Poll every 5 minutes
+  // Poll every 1 minute (matches Libre's update cadence)
   async function poll() {
     try {
       const readings = await source.fetch(_sourceCfg, 2);
@@ -11881,7 +11881,7 @@ async function startLivePolling(sourceId, cfg) {
   }
 
   await poll(); // immediate
-  _pollTimer = setInterval(poll, 5 * 60000);
+  _pollTimer = setInterval(poll, 60000);
 }
 
 function stopLivePolling() {
